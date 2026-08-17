@@ -22,7 +22,7 @@ export default wrap(async (request) => {
         WHERE b.player_id=$1 AND pr.game_night_id=$2 AND b.status='ACTIVE'`,
       [playerId, gameId],
     );
-    if (Number(activeBets.rows[0].count) > 0) throw new HttpError(409, 'Settle or cancel this player's active bets before removing them');
+    if (Number(activeBets.rows[0].count) > 0) throw new HttpError(409, "Settle or cancel this player's active bets before removing them");
     await client.query('UPDATE players SET active=FALSE,updated_at=NOW() WHERE id=$1', [playerId]);
     await client.query('UPDATE player_sessions SET revoked_at=NOW() WHERE player_id=$1 AND revoked_at IS NULL', [playerId]);
     await client.query('UPDATE player_join_tokens SET revoked_at=NOW() WHERE player_id=$1 AND revoked_at IS NULL', [playerId]);
