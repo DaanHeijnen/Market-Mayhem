@@ -1,8 +1,23 @@
-import { getDatabase } from '@netlify/database';
+import { getConnectionString, getDatabase } from '@netlify/database';
+import pg from 'pg';
 import type { PoolClient } from 'pg';
 
+let pool: pg.Pool | undefined;
+
 export function database() {
-  return getDatabase();
+  const db = getDatabase();
+
+  if (!pool) {
+    pool = new pg.Pool({
+      connectionString: getConnectionString(),
+      max: 5,
+    });
+  }
+
+  return {
+    sql: db.sql,
+    pool,
+  };
 }
 
 export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
