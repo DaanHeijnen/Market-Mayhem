@@ -1,0 +1,1 @@
+import{test,expect}from'@playwright/test';test.skip(!process.env.E2E_BASE_URL,'requires deployed/local Netlify database');test('screen route loads',async({page})=>{await page.goto('/screen/1');await expect(page.locator('body')).toBeVisible()});

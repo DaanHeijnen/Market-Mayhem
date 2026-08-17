@@ -1,0 +1,1 @@
+import{getAdminState}from'../lib/queries';import{requireAdmin}from'../lib/auth';import{ok}from'../lib/http';import{wrap,gameIdFrom}from'./_wrap';export default wrap(async r=>{await requireAdmin(r);return ok(await getAdminState(gameIdFrom(r)))});

@@ -1,0 +1,10 @@
+import {useCallback,useEffect,useRef,useState} from 'react';
+import {LIVE_CONFIG} from '../config/live';
+import {api} from '../lib/api';
+type Kind='screen'|'admin'|'mobile';
+export function useGamePolling<T>(gameId:number, kind:Kind, endpoint:string, active=false){
+ const [data,setData]=useState<T|null>(null),[error,setError]=useState(''); const version=useRef<number|null>(null), busy=useRef(false), controller=useRef<AbortController|null>(null); const stats=useRef({polls:0,refreshes:0,lastPoll:0,lastRefresh:0});
+ const refresh=useCallback(async()=>{controller.current?.abort(); controller.current=new AbortController(); const d=await api<T>(endpoint,{signal:controller.current.signal}); setData(d); const v=(d as any)?.version; if(typeof v==='number')version.current=v; stats.current.refreshes++;stats.current.lastRefresh=Date.now();setError('')},[endpoint]);
+ useEffect(()=>{void refresh(); if(!LIVE_CONFIG.ENABLE_POLLING)return; let timer:number|undefined,stopped=false; const interval=()=>document.visibilityState==='hidden'?LIVE_CONFIG.HIDDEN_TAB_POLL_MS:kind==='screen'?LIVE_CONFIG.BIG_SCREEN_POLL_MS:kind==='admin'?LIVE_CONFIG.ADMIN_POLL_MS:active?LIVE_CONFIG.MOBILE_ACTIVE_POLL_MS:LIVE_CONFIG.MOBILE_IDLE_POLL_MS; const tick=async()=>{if(stopped||busy.current)return;busy.current=true;try{stats.current.polls++;stats.current.lastPoll=Date.now();const v=await api<{version:number}>(`/api/game-version?gameId=${gameId}`);if(version.current===null||v.version!==version.current)await refresh();setError('')}catch(e){setError(e instanceof Error?e.message:'LIVE CONNECTION INTERRUPTED')}finally{busy.current=false;if(!stopped)timer=window.setTimeout(tick,error?LIVE_CONFIG.ERROR_RETRY_MS:interval())}}; timer=window.setTimeout(tick,interval()); const vis=()=>{if(document.visibilityState==='visible')void refresh()};document.addEventListener('visibilitychange',vis);return()=>{stopped=true;if(timer)clearTimeout(timer);controller.current?.abort();document.removeEventListener('visibilitychange',vis)}} ,[gameId,kind,active,refresh,error]);
+ return {data,error,refresh,stats:stats.current};
+}

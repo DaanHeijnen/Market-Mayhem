@@ -1,0 +1,1 @@
+import {errorResponse} from '../lib/http';export const wrap=(fn:(r:Request)=>Promise<Response>)=>async(r:Request)=>{try{return await fn(r)}catch(e){return errorResponse(e)}};export const gameIdFrom=(r:Request)=>Number(new URL(r.url).searchParams.get('gameId')||0);

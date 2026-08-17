@@ -1,0 +1,1 @@
+import{getPlayerState}from'../lib/queries';import{requirePlayer}from'../lib/auth';import{ok}from'../lib/http';import{wrap,gameIdFrom}from'./_wrap';export default wrap(async r=>{const g=gameIdFrom(r),s=await requirePlayer(r,g);return ok(await getPlayerState(g,s.playerId))});
