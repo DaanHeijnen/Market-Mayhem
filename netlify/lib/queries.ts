@@ -39,12 +39,12 @@ export async function getScreenState(gameId: number) {
        JOIN players p ON p.id = l.player_id
        LEFT JOIN rounds r ON r.id = l.attributed_round_id
        LEFT JOIN predictions pr ON pr.id = l.prediction_id
-      WHERE l.game_night_id = $1
+      WHERE l.game_night_id = $1 AND p.active=TRUE
       ORDER BY l.created_at DESC, l.id DESC LIMIT 16`, [gameId]
   );
 
   const totalsResult = await pool.query(
-    `SELECT COALESCE((SELECT SUM(current_balance) FROM wallets WHERE game_night_id = $1),0)::int AS wallet_total,
+    `SELECT COALESCE((SELECT SUM(w.current_balance) FROM wallets w JOIN players pl ON pl.id=w.player_id WHERE w.game_night_id = $1 AND pl.active=TRUE),0)::int AS wallet_total,
             COALESCE((SELECT SUM(b.stake) FROM bets b JOIN predictions p ON p.id=b.prediction_id
                       WHERE p.game_night_id=$1 AND b.status='ACTIVE'),0)::int AS locked_stakes,
             COALESCE((SELECT COUNT(*) FROM predictions WHERE game_night_id=$1 AND status='BETTING'),0)::int AS markets_open`, [gameId]
@@ -53,7 +53,7 @@ export async function getScreenState(gameId: number) {
   const ledgerChronology = await pool.query(
     `SELECT l.player_id, p.display_name, p.public_color, l.amount, l.created_at, l.id
        FROM ledger_entries l JOIN players p ON p.id=l.player_id
-      WHERE l.game_night_id=$1
+      WHERE l.game_night_id=$1 AND p.active=TRUE
       ORDER BY l.created_at ASC, l.id ASC`, [gameId]
   );
   const series = new Map<number, { playerId:number; name:string; color:string; balance:number; points:{x:number;y:number;at:string}[] }>();
@@ -110,7 +110,8 @@ export async function getPlayerState(gameId: number, playerId: number) {
   const predictionResult = await pool.query(
     `SELECT id, display_number, question, status, crowd_yes_probability, crowd_no_probability, yes_odds, no_odds, result
        FROM predictions
-      WHERE game_night_id=$1 AND status IN ('VOTING','CALCULATING','BETTING','LOCKED','RESULT')
+      WHERE game_night_id=$1
+        AND visible_to_players=TRUE
       ORDER BY id DESC LIMIT 1`, [gameId]
   );
   const prediction = predictionResult.rows[0] || null;
@@ -141,42 +142,66 @@ export async function getAdminState(gameId: number) {
   const gameResult = await pool.query(`SELECT * FROM game_nights WHERE id=$1`, [gameId]);
   const game = gameResult.rows[0];
   if (!game) throw new HttpError(404, 'Game not found');
+
   const rounds = await pool.query(`SELECT * FROM rounds WHERE game_night_id=$1 ORDER BY round_number ASC`, [gameId]);
   const players = await pool.query(
     `SELECT p.id,p.display_name,p.public_color,p.admin_notes,p.active,t.name AS team_name,w.current_balance,
-            DENSE_RANK() OVER (ORDER BY w.current_balance DESC,p.display_name ASC) AS rank,
-            (SELECT codeword FROM player_codewords c WHERE c.player_id=p.id AND c.status='ACTIVE' ORDER BY assigned_at DESC LIMIT 1) AS codeword
+            DENSE_RANK() OVER (ORDER BY w.current_balance DESC,p.display_name ASC) AS rank
        FROM players p JOIN wallets w ON w.player_id=p.id LEFT JOIN teams t ON t.id=p.team_id
-      WHERE p.game_night_id=$1 ORDER BY p.display_name`, [gameId]
+      WHERE p.game_night_id=$1 AND p.active=TRUE ORDER BY p.display_name`, [gameId]
   );
-  const activePrediction = await pool.query(
+  const predictions = await pool.query(
     `SELECT p.*,
             (SELECT COUNT(*) FROM prediction_votes v WHERE v.prediction_id=p.id)::int AS vote_count,
             (SELECT COUNT(*) FROM bets b WHERE b.prediction_id=p.id)::int AS bet_count,
             (SELECT COALESCE(SUM(stake),0) FROM bets b WHERE b.prediction_id=p.id AND side='YES')::int AS yes_pool,
-            (SELECT COALESCE(SUM(stake),0) FROM bets b WHERE b.prediction_id=p.id AND side='NO')::int AS no_pool
-       FROM predictions p WHERE p.game_night_id=$1 AND p.status NOT IN ('SETTLED','CANCELLED')
-       ORDER BY p.id DESC LIMIT 1`, [gameId]
+            (SELECT COALESCE(SUM(stake),0) FROM bets b WHERE b.prediction_id=p.id AND side='NO')::int AS no_pool,
+            r.round_number, r.title AS round_title
+       FROM predictions p
+       LEFT JOIN rounds r ON r.id=p.round_id
+      WHERE p.game_night_id=$1
+      ORDER BY p.display_number ASC, p.id ASC`, [gameId]
   );
   const recent = await pool.query(
-    `SELECT l.id,l.amount,l.description,l.transaction_type,l.created_at,p.display_name
-       FROM ledger_entries l JOIN players p ON p.id=l.player_id WHERE l.game_night_id=$1
-       ORDER BY l.created_at DESC,l.id DESC LIMIT 12`, [gameId]
+    `SELECT l.id,l.amount,l.description,l.transaction_type,l.created_at,p.display_name,r.round_number
+       FROM ledger_entries l
+       JOIN players p ON p.id=l.player_id
+       LEFT JOIN rounds r ON r.id=l.attributed_round_id
+      WHERE l.game_night_id=$1
+      ORDER BY l.created_at DESC,l.id DESC LIMIT 30`, [gameId]
   );
   const screen = await pool.query(`SELECT * FROM screen_state WHERE game_night_id=$1`, [gameId]);
   const audit = await pool.query(`SELECT * FROM admin_audit_log WHERE game_night_id=$1 ORDER BY created_at DESC,id DESC LIMIT 20`, [gameId]);
+
+  const normalizedPredictions = predictions.rows.map((p:any) => ({
+    ...p,
+    id: Number(p.id),
+    round_id: p.round_id ? Number(p.round_id) : null,
+    visible_to_players: Boolean(p.visible_to_players),
+    crowd_yes_probability: p.crowd_yes_probability === null ? null : Number(p.crowd_yes_probability),
+    crowd_no_probability: p.crowd_no_probability === null ? null : Number(p.crowd_no_probability),
+    yes_odds: p.yes_odds === null ? null : Number(p.yes_odds),
+    no_odds: p.no_odds === null ? null : Number(p.no_odds),
+    vote_count: Number(p.vote_count),
+    bet_count: Number(p.bet_count),
+    yes_pool: Number(p.yes_pool),
+    no_pool: Number(p.no_pool),
+  }));
+
   return {
     version: Number(game.game_state_version),
-    game: { ...game, id: Number(game.id), current_round_id: game.current_round_id ? Number(game.current_round_id) : null, game_state_version: Number(game.game_state_version) },
-    rounds: rounds.rows.map((r:any) => ({ ...r, id: Number(r.id) })),
+    game: {
+      ...game,
+      id: Number(game.id),
+      starting_balance: Number(game.starting_balance),
+      current_round_id: game.current_round_id ? Number(game.current_round_id) : null,
+      game_state_version: Number(game.game_state_version),
+    },
+    rounds: rounds.rows.map((r:any) => ({ ...r, id: Number(r.id), round_number: Number(r.round_number) })),
     players: players.rows.map((r:any) => ({ ...r, id: Number(r.id), current_balance: Number(r.current_balance), rank: Number(r.rank) })),
-    prediction: activePrediction.rows[0] ? {
-      ...activePrediction.rows[0], id: Number(activePrediction.rows[0].id),
-      crowd_yes_probability: activePrediction.rows[0].crowd_yes_probability === null ? null : Number(activePrediction.rows[0].crowd_yes_probability),
-      crowd_no_probability: activePrediction.rows[0].crowd_no_probability === null ? null : Number(activePrediction.rows[0].crowd_no_probability),
-      yes_odds: activePrediction.rows[0].yes_odds === null ? null : Number(activePrediction.rows[0].yes_odds),
-      no_odds: activePrediction.rows[0].no_odds === null ? null : Number(activePrediction.rows[0].no_odds),
-    } : null,
+    predictions: normalizedPredictions,
+    prediction: normalizedPredictions.find((p:any) => !['SETTLED','CANCELLED'].includes(p.status)) || null,
+    visiblePrediction: normalizedPredictions.find((p:any) => p.visible_to_players) || null,
     recentTransactions: recent.rows.map((r:any) => ({ ...r, id: Number(r.id), amount: Number(r.amount) })),
     screen: screen.rows[0] || { mode: 'DASHBOARD' },
     audit: audit.rows.map((r:any) => ({ ...r, id: Number(r.id) })),
