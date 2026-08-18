@@ -67,6 +67,10 @@ export function PlayersPage({ state: s, gameId, run, setMsg }: { state: any; gam
     }
   };
 
+  const updateAdjustment = (playerId: number, changes: Partial<NonNullable<Adjustment>>) => {
+    setAdjustment(current => current?.playerId === playerId ? { ...current, ...changes } : current);
+  };
+
   return <div className="page-stack">
     <Card>
       <div className="label muted">ADD PLAYER</div>
@@ -109,15 +113,15 @@ export function PlayersPage({ state: s, gameId, run, setMsg }: { state: any; gam
         {adjustment?.playerId === player.id && <div className="inline-adjustment-panel">
           <div className="label muted">COIN ADJUSTMENT</div>
           <div className="form-grid compact admin-dense-form">
-            <input className="field" type="number" placeholder="25 or -10" value={adjustment.amount} onChange={e => setAdjustment({ ...adjustment, amount: e.target.value })} />
-            <input className="field" placeholder="Mandatory reason" value={adjustment.reason} onChange={e => setAdjustment({ ...adjustment, reason: e.target.value })} />
-            <select className="field" value={adjustment.roundId} onChange={e => setAdjustment({ ...adjustment, roundId: e.target.value })}>
+            <input className="field" type="number" placeholder="25 or -10" value={adjustment?.amount ?? ''} onChange={e => updateAdjustment(player.id, { amount: e.target.value })} />
+            <input className="field" placeholder="Mandatory reason" value={adjustment?.reason ?? ''} onChange={e => updateAdjustment(player.id, { reason: e.target.value })} />
+            <select className="field" value={adjustment?.roundId ?? ''} onChange={e => updateAdjustment(player.id, { roundId: e.target.value })}>
               <option value="">General / no round</option>
               {s.rounds.map((round: any) => <option key={round.id} value={round.id}>R{String(round.round_number).padStart(2, '0')} · {round.title}</option>)}
             </select>
           </div>
           <div className="actions actions-compact">
-            <button className="btn btn-primary btn-compact" disabled={savingAdjustment || !adjustment.amount || Number(adjustment.amount) === 0 || !adjustment.reason.trim()} onClick={saveAdjustment}>{savingAdjustment ? 'SAVING…' : 'SAVE'}</button>
+            <button className="btn btn-primary btn-compact" disabled={savingAdjustment || !adjustment?.amount || Number(adjustment?.amount) === 0 || !adjustment?.reason.trim()} onClick={saveAdjustment}>{savingAdjustment ? 'SAVING…' : 'SAVE'}</button>
             <button className="btn btn-secondary btn-compact" onClick={() => setAdjustment(null)}>CANCEL</button>
           </div>
         </div>}

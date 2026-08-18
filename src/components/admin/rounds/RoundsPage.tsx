@@ -54,14 +54,17 @@ function RoundDetail({ state: s, round, run, back }: { state: any; round: any; r
     };
     if (await run('/api/upsert-round-block', payload)) resetBlock();
   };
-  const beginEdit = (block: any) => setEdit(block) || setBlockForm({
-    type: block.type,
-    title: block.title || '',
-    body: block.payload?.body || '',
-    answers: block.payload?.answers || ['', '', '', ''],
-    correctAnswerIndex: block.payload?.correctAnswerIndex ?? 0,
-    rewardCoins: block.payload?.rewardCoins ?? 10,
-  });
+  const beginEdit = (block: any) => {
+    setEdit(block);
+    setBlockForm({
+      type: block.type,
+      title: block.title || '',
+      body: block.payload?.body || '',
+      answers: block.payload?.answers || ['', '', '', ''],
+      correctAnswerIndex: block.payload?.correctAnswerIndex ?? 0,
+      rewardCoins: block.payload?.rewardCoins ?? 10,
+    });
+  };
   const move = async (index: number, dir: -1 | 1) => {
     const next = [...blocks]; const target = index + dir; if (target < 0 || target >= next.length) return;
     [next[index], next[target]] = [next[target], next[index]];
