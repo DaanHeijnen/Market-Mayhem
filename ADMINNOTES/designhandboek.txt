@@ -1,209 +1,207 @@
-================================================================================
-COMPLETE AI DEVELOPER STYLING HANDBOOK & DESIGN SYSTEM
-================================================================================
 
---------------------------------------------------------------------------------
-1. TYPOGRAPHY
---------------------------------------------------------------------------------
-Font Family:
-  - Base: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif
-  - Monospace (Code/Data): 'JetBrains Mono', monospace
+GAME NIGHT EXCHANGE
+Design Handbook
+The complete visual and interaction reference for the Game Night Exchange product family — Big Screen displays, Admin console, and Mobile companion. Built for a developer to implement without guesswork: every token, state, and animation used in the shipped screens is documented here with its literal value.
 
-Type Scale & Hierarchy:
-  - Display (30px / 1.2 line-height / font-bold): Marketing heroes, big stats
-  - Heading 1 (24px / 1.3 line-height / font-bold): Top-level view headers
-  - Heading 2 (20px / 1.3 line-height / font-semibold): Card section titles, odds multipliers[cite: 17, 18]
-  - Heading 3 (18px / 1.4 line-height / font-semibold): Rank badge text, coin balance highlights[cite: 17, 18]
-  - Body Base (16px / 1.5 line-height / font-normal): Primary interface text, slider values[cite: 17]
-  - Body Small (14px / 1.4 line-height / font-normal): Secondary labels, feed details, returns info[cite: 17, 18]
-  - Micro / Caption (12px / 1.3 line-height / font-semibold): Status badges, phase pills, timestamps[cite: 17, 18]
+DESIGN PRINCIPLE
+"Bloomberg terminal meets game-show graphics." Playful, saturated, over-the-top — never a banking app. Coins are treated like a live tradable asset: charts, tickers, odds, and payouts all borrow trading-floor visual language, rendered in bold flat color rather than financial-app blues and greys.
 
+Screen family	Files
+Big Screen (TV display, 1920×1080)	Dashboard, Round Started, Prediction Voting, Crowd Reveal, Betting Open, Prediction Result
+Admin (desktop console)	Control Center, Rounds Management, Prediction Control, Player Ledger Detail
+Mobile (player companion)	Wallet Home, Prediction Voting & Betting
+01 — TYPOGRAPHY
+Type families
+Two families, strict roles. Never substitute one for the other's role — the contrast between the two IS the brand voice.
 
---------------------------------------------------------------------------------
-2. COLORS
---------------------------------------------------------------------------------
-Color Palette & Tailwind Tokens:
-  - Brand Primary:      #6366F1 (indigo-600) | Accent CTAs, slider track, focus highlights[cite: 17]
-  - Brand Hover:        #4F46E5 (indigo-700) | Interactive primary hover state
-  - Success / YES:      #10B981 (emerald-500)| YES odds selection, positive coin returns[cite: 17, 18]
-  - Success Surface:    rgba(16, 185, 129, 0.1) (emerald-500/10) | Active YES container background[cite: 17]
-  - Danger / NO:        #EF4444 (red-500)    | NO odds selection, warning alerts[cite: 17]
-  - Danger Surface:     rgba(239, 68, 68, 0.1) (red-500/10) | Active NO container background[cite: 17]
-  - Background Base:    #0F172A (slate-900)  | Dark mode application canvas
-  - Surface Level 1:    #1E293B (slate-800)  | Primary cards, dashboard containers[cite: 17, 18]
-  - Surface Level 2:    #334155 (slate-700)  | Sub-panels, hover cards, input field backgrounds[cite: 17]
-  - Border Neutral:     #334155 (slate-700)  | Divider lines, outline borders[cite: 17, 18]
-  - Text Primary:       #F8FAFC (slate-50)   | High-contrast titles, balances, main text[cite: 17, 18]
-  - Text Secondary:     #94A3B8 (slate-400)  | Muted labels, metadata, calculations[cite: 17, 18]
-  - Text Muted:         #64748B (slate-500)  | Placeholders, disabled button text[cite: 17]
+Role	Family	Weights used	Used for
+Display / numeric / headings	Space Grotesk	500, 700	Coin totals, odds multipliers, round numbers, screen titles, countdown timers — anything that should feel like a ticking scoreboard.
+Body / labels / UI chrome	Manrope	400, 600, 800	Body copy, eyebrow labels, buttons, badges, table text, nav.
+Data / monospace (Admin tables)	JetBrains Mono	500, 600	Ledger amounts, IDs, timestamps in dense admin tables where digits must align.
+Import: Space+Grotesk:wght@500;700&Manrope:wght@400;600;800 from Google Fonts, plus JetBrains Mono for admin density screens.
 
+Type scale
+Token	Size / line-height	Family / weight	Example usage
+Hero display	64px / 1.02	Space Grotesk 700	Screen-level hero title (Component Library title)
+Big Screen number	88px / 1.0	Space Grotesk 700	Type-scale "137 COINS" reference block
+Round number	54px / 1.0	Space Grotesk 700	"07" round-number card
+Countdown / timer	46–28px	Space Grotesk 700	Circular timer center digits (00:47)
+Coin balance (card)	34px	Space Grotesk 700	Player card coin total
+Heading 1	38px / 1.3	Space Grotesk 700	"MARKET OPEN" section heading
+Header pill text	34px	Space Grotesk 700	Big Screen round-name pill
+Heading 2	30px / 1.3	Space Grotesk 700	Rank badge, stat panel value
+Heading 3	26px / 1.4	Space Grotesk 700	Player name in card
+Ticker line	22px	Space Grotesk 700	Bottom LED ticker entries
+Prediction title	20px	Space Grotesk 700	Prediction card question text
+Body base	16–18px / 1.5	Manrope 400	Primary paragraph copy, slider values
+Body small	14–15px / 1.4	Manrope 400/600	Secondary labels, transaction line item
+Micro / eyebrow	11–13px / 1.3, tracking .08–.16em, uppercase	Manrope 800	Section eyebrows, status badges, phase pills
+02 — COLOR
+Base palette
+Flat, saturated, no gradients. Exactly two canvas colors across the whole product — everything else is accent.
 
---------------------------------------------------------------------------------
-3. SPACING
---------------------------------------------------------------------------------
-Base Scale (8pt System):
-  - space-1 : 4px   | Micro gaps, internal pill spacing
-  - space-2 : 8px   | Compact element gaps, badge padding
-  - space-3 : 12px  | Grid gaps for small cards, tight stack spacing[cite: 17, 18]
-  - space-4 : 16px  | Standard layout padding, default card spacing[cite: 17, 18]
-  - space-6 : 24px  | Section separation, desktop container padding
-  - space-8 : 32px  | Major layout margins, screen header offsets
+Swatch	Name	Hex	Usage
+Paper / Canvas Light	#F4F1E4	Default background — Component Library, light-mode screens (Admin, Mobile, most Big Screen states)
+Ink / Canvas Dark	#14120F	Big Screen dark zones (chart panel, ticker strip), primary text on light, black pill buttons
+Surface White	#FFFFFF	Cards on light canvas, control panels, prediction cards
+Accent palette
+Six saturated accents, each with a fixed semantic job. Don't reassign a color's job on a new screen — DAAN is never red, YES is never anything but green.
 
+Swatch	Name	Hex	Semantic role
+Lime	#DFF24C	Coins / currency accent, "live" positive highlight, primary CTA fill (chunky 3D button)
+Electric Blue	#3D5AFE	Brand mark, primary info stat (Markets Open), betting-open status
+Violet	#9B2FF2	Predictions module, crowd-odds slider fill, team-card accent
+Magenta	#FF3FC0	Round-active indicator, decorative star/flower shapes, live pulse dot
+Green	#2FAF5B	YES / positive odds, positive coin delta, settled status
+Red	#E8352F	NO / negative odds, negative coin delta, destructive action (Close Market)
+Orange	#FF7A1E	Round-number card fill, warm decorative accent
+Cyan	#1FD8E0	Secondary decorative accent, alt palette theme option
+Text colors
+Token	Hex	On	Usage
+Text Primary (light)	#14120F	Paper / White	Headings, body, primary labels on light surfaces
+Text Secondary (light)	#3a362a	Paper / White	Body paragraphs
+Text Muted (light)	#9a9584	Paper / White	Eyebrows, timestamps, placeholder
+Border Neutral (light)	#ECE8D8	Paper / White	Card dividers, table rules
+Text Primary (dark)	#FFFFFF	Ink #14120F	Headings/body on dark panels
+Text Secondary (dark)	#b8b4a3	Ink #14120F	Secondary labels on dark panels
+Text Muted (dark)	#7d7967	Ink #14120F	Axis labels, separators, timestamps on dark panels
+Chart gridline	#2a2820	Ink #14120F	SVG horizontal reference lines on dark chart panel
+Player color coding (Big Screen chart & ticker)
+Four players get a fixed color slot, driven by the paletteTheme tweak (array of 4 hex values in slot order Bas → Daan → Jorrit → Twan). Two curated palettes ship; both keep the same slot order so a player's line never jumps position in the legend.
 
---------------------------------------------------------------------------------
-4. PADDING
---------------------------------------------------------------------------------
-  - Action Buttons (Standard): px-4 py-3.5 (16px lateral, 14px vertical)[cite: 17]
-  - Compact Buttons / Steppers: p-2.5 or w-11 h-11 flex-center[cite: 17]
-  - Standard Cards: p-4 (16px all sides)[cite: 18]
-  - Modal Containers: p-6 (24px all sides)
-  - Inline Badges / Pills: px-2.5 py-0.5[cite: 17]
-  - Outline Rank Badges: px-3 py-1[cite: 18]
-  - Compact Admin Rows: px-3 py-2
+Slot	Player	Default palette	Alt palette
+color0	BAS	 #DFF24C	 #1FD8E0
+color1	DAAN	 #9B2FF2	 #FF3FC0
+color2	JORRIT	 #E8352F	 #FF7A1E
+color3	TWAN	 #3D5AFE	 #2FAF5B
+03 — SPACING
+Spacing scale
+A generous, non-8pt scale — this product reads as broadcast/large-format first, so gaps run bigger than a typical dashboard. Always implement with flex/grid gap, never margin on individual children.
 
+Token	Value	Usage
+space-1	4–8px	Icon-to-label gaps, tight badge internals
+space-2	10–14px	Pill internal gaps, chip rows
+space-3	18–22px	Card grid gaps, button rows
+space-4	28–32px	Section internal stacks, control-row gaps
+space-5	44–48px	Header padding (Big Screen top bar), card padding (library sections)
+space-6	64–72px	Page/canvas outer padding
+space-7	88px	Major section-to-section separation (Component Library)
+Canvas paddings by screen type
+Screen	Canvas	Outer padding
+Big Screen (TV, fixed)	1920×1080px, fixed	48–64px sides, header 48px top, ticker strip full-bleed at bottom (0 padding, 64px height)
+Component Library / long-form doc	fluid width	64px 72px 120px
+Admin console	fluid, desktop-first	32–48px page padding, 16px card padding, 8–10px compact table rows
+Mobile companion	390–430px viewport	16–20px page padding, 44px minimum tap target
+04 — SHAPE & RADIUS
+Border radius
+The signature shape move is asymmetric radius on cards — three corners round, one corner sharp (12px) — reading as a game-show plaque rather than a generic rounded rectangle. Reserve full symmetric rounding for pills, circles, and utility panels.
 
---------------------------------------------------------------------------------
-5. BORDERS
---------------------------------------------------------------------------------
-  - Standard Border: 1px solid rgba(51, 65, 85, 0.6) (border-slate-700/60)[cite: 17, 18]
-  - Active Selected State: 2px solid #10B981 (YES) or #EF4444 (NO)[cite: 17]
-  - Focus Ring: 2px solid #6366F1 with ring-offset-2 ring-offset-slate-900[cite: 17]
-  - Divider Lines: 1px solid #1E293B (divide-slate-800)[cite: 18]
+Token	Value	Usage
+radius-sm	12–16px	Transaction cards, input fields, small tiles
+radius-md	20–24px	Stat panels, header pills-with-corners, round-number card
+radius-lg	28–36px	Big Screen chart panel, library section cards, control panel
+radius-xl	44px	Player card (asymmetric: 44px 44px 44px 12px)
+radius-full	999px / 50%	All buttons, status badges, avatar circles, sliders, toggles, timer ring
+Asymmetric signature	e.g. 12px 44px 12px 44px	Prediction card (opposite-corner variant) — alternate the sharp corner between card types so the eye can tell card kinds apart at a glance
+05 — BUTTONS
+Button hierarchy
+Type	Fill	Text	Radius / padding	Hover
+Primary	#14120F	#F4F1E4, Manrope 800, 15px, tracking .04em, uppercase	999px / 18px 34px	background → #3D5AFE
+Secondary (outline)	transparent	#14120F	999px / 16px 32px, 2px solid #14120F border	fill #14120F, text → #F4F1E4
+Destructive	#E8352F	#fff	999px / 18px 34px	background → #c22b26
+Disabled	#e8e4d3	#b3ad99	999px / 18px 34px	cursor: not-allowed, no hover change
+Hero / game-show CTA	#DFF24C	#14120F, Space Grotesk 700, 22px	24px / 26px 46px, chunky 3D: box-shadow: 0 8px 0 #14120F	translateY(3px) + shadow compresses to 0 5px 0 — a physical button-press feel
+All button label text is uppercase Manrope 800 at 13–15px except the hero CTA, which uses Space Grotesk 700 for extra punch. Minimum tap target on Mobile is 44×44px regardless of visual padding.
 
+06 — CARDS
+Card types
+Card	Fill	Radius	Contents / notes
+Player card	Player's slot color (e.g. #3D5AFE)	44px 44px 44px 12px	Avatar circle, "PLAYER" eyebrow (light tint of fill), name (Space Grotesk 26px white), coin total (Space Grotesk 34px lime)
+Team card	#14120F	999px (full pill)	"TEAM" eyebrow in accent color, team name, member list (muted), rank + score in lime
+Prediction card	#FFFFFF	12px 44px 12px 44px	Prediction # eyebrow (violet) + small triangle glyph, question text (Space Grotesk 20px), YES/NO odds row (green/red, Space Grotesk 18px)
+Transaction row card	#FFFFFF	16px, 10px solid left border in accent	Round eyebrow, description + signed coin delta (green +/red −, Space Grotesk 22px)
+Round-number card	#FF7A1E	20px	"ROUND" eyebrow, big round number (54px), round name label
+Base card shadow: none by default — the flat-color system relies on color contrast, not elevation, to separate cards from canvas. Only the dark Big Screen chart/ticker panels use pure fill against the paper canvas.
 
---------------------------------------------------------------------------------
-6. BORDER RADIUS
---------------------------------------------------------------------------------
-  - Controls & Inputs: rounded-xl (12px) | Buttons, text fields, step adjusters[cite: 17]
-  - Surface Cards: rounded-2xl (16px) | Dashboard cards, odds cards, prediction cards[cite: 17, 18]
-  - Status Badges / Pills: rounded-full (9999px) | Phase indicators, rank tags[cite: 17, 18]
-  - Modal Views: rounded-3xl (24px) | Mobile action sheets, popup dialogs
+07 — STATUS & BADGES
+State	Fill	Text	Indicator
+Voting Open	#DFF24C	#14120F	pulsing dot, #14120F
+Betting Open	#3D5AFE	#fff	pulsing dot, #fff
+Locked	#14120F	#fff	none (static)
+Settled	#2FAF5B	#fff	none
+Round Active	#FF3FC0	#fff	none
+Badge shape: full pill, 999px, padding 12px 24px, Manrope 800 13px uppercase, tracking .08em. Live/pulsing states pair the badge with an 9px dot animated via the pulse keyframe (opacity 1 → .4–.45, 1.4s ease-in-out infinite) — reserve the pulse for states that are actively counting down or accepting input; static states (Locked, Settled) get no dot.
 
+08 — MOTION & ANIMATION
+Keyframe	Definition	Timing	Used for
+gne-pulse	opacity 1 → .4/.45 → 1	1.4s ease-in-out infinite	Live status dots, round-active header dot
+gne-spin	rotate 0 → 360deg	6s linear infinite	Conic-gradient spiral decorative graphic
+gne-draw	stroke-dashoffset → 0	1.6s ease-out, staggered .05–.5s per line	Chart line "drawing on" when the Dashboard mounts — each player's line draws in a fixed stagger order (Bas → Jorrit → Twan → Daan) so lines don't all snap in at once
+gne-dot	SVG circle r: 6 → 9 → 6	1.2s ease-in-out infinite, staggered .2s apart per player after the draw-in completes (delays 1.7–2.3s)	Chart end-point markers "breathing" to read as live/updating
+gne-ticker	translateX(0) → translateX(-50%)	linear infinite; duration is the tweakable variable	Bottom LED ticker marquee — content is duplicated once so the loop is seamless at -50%
+Ticker speed values
+Mood	Duration
+Calm	32s
+Live (default)	20s
+Frenzy	9s
+Micro-interactions elsewhere (buttons, cards): 150ms ease-in-out for hover/background transitions; toggle knob slides on a 150ms ease transition of its left position; hero-button press uses no duration on the shadow shrink — it should feel instant, not eased.
 
---------------------------------------------------------------------------------
-7. BUTTON HIERARCHY
---------------------------------------------------------------------------------
-  - Primary CTA:
-      Class: w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-xl shadow-lg shadow-indigo-600/25 active:scale-[0.98] transition-all[cite: 17]
-      Usage: Submit vote, confirm bet wager, main primary action[cite: 17].
+09 — BIG SCREEN PRESENTATION
+Canvas
+Fixed 1920×1080px canvas, not responsive — designed for a single TV/projector viewport. Background is paper #F4F1E4 with two oversized decorative blob shapes bleeding off-canvas (top-right circle #DFF24C, bottom-left rounded shape #9B2FF2) for visual texture without competing with data.
 
-  - Secondary / Utility Button:
-      Class: bg-slate-800 border border-slate-700 text-slate-200 font-bold hover:bg-slate-700 active:scale-95 transition-colors[cite: 17]
-      Usage: Step adjustment buttons (- / + 10%), wallet history links[cite: 17, 18].
+Dashboard anatomy
+Zone	Height / position	Fill	Content
+Header	top, ~48px padding, auto height	transparent (paper)	Round-name pill (dark, pulsing dot) left; Markets Open + Total Coins stat pills right
+Market chart panel	flex:1 (fills remaining height), 32px side margins	#14120F	"MARKET — COIN VALUE BY ROUND" eyebrow + trend badge, SVG multi-line chart (4 players), round axis labels (R01…NOW), color-coded legend row
+LED ticker	64px, full-bleed, pinned to bottom	#14120F	Infinite marquee of per-player coin deltas: name (player color) + signed coin change (green/red) + % swing (muted)
+Chart construction
+SVG viewBox 0 0 760 260, non-preserved aspect ratio (stretches to panel). Three faint horizontal gridlines at y=38/134/230 (#2a2820, 1px). Each player is a 4–5px rounded polyline plus a 7px circle marker pinned to the last data point (x=760) that pulses via gne-dot. Bas's line is 5px wide (vs 4px for others) as the slight visual lead indicator. X positions are fixed at 8 stops: 0, 109, 217, 326, 434, 543, 651, 760.
 
-  - Selection Cards (As Interactive Buttons):
-      Class (YES): border-2 border-emerald-500 bg-emerald-500/10 text-emerald-400 font-bold rounded-2xl p-4 transition-all[cite: 17]
-      Class (NO): border-2 border-red-500 bg-red-500/10 text-red-400 font-bold rounded-2xl p-4 transition-all[cite: 17]
+10 — TWEAKABLE CONTROLS (BIG SCREEN DASHBOARD)
+Tweak	Type	Options	Effect
+Market Mood	enum	Bull Run (default) / Choppy / Sell-Off	Swaps the full coin-value dataset for all 4 players (steady climb / volatile zig-zag / declining), and recolors the trend badge (green/violet/red) with matching label
+Ticker Speed	enum	Calm / Live (default) / Frenzy	Sets the marquee animation-duration (32s/20s/9s)
+Palette Theme	color (curated palette pairs)	Default [Lime/Violet/Red/Blue] or Alt [Cyan/Pink/Orange/Green]	Recolors all 4 player lines, dots, and ticker name text, keeping Bas→Daan→Jorrit→Twan slot order fixed
+11 — DECORATIVE GRAPHIC ELEMENTS
+A small vocabulary of flat decorative shapes used sparingly as texture — never as the primary carrier of information. Draw fresh per composition rather than importing an icon set; keep them geometric, not illustrative.
 
-  - Locked / Disabled State:
-      Class: w-full py-3.5 bg-slate-800/80 border border-slate-700 text-slate-400 font-semibold rounded-xl cursor-not-allowed[cite: 17]
-      Usage: Submitted bet state ("BET LOCKED ✓"), non-interactive states[cite: 17].
+Shape	Construction	Typical color
+Star / spark burst	10-point polygon clip-path	#FF3FC0
+Arrow	CSS border-triangle	#14120F
+Circle	50% radius block	#3D5AFE
+Flower (4-petal)	4 offset circles + center disc	#FF3FC0 petals / #14120F center
+Spiral	conic-gradient disc, gne-spin animation	#2FAF5B / #DFF24C alternating
+Blob	asymmetric border-radius (e.g. 60% 40% 55% 45% / 50% 55% 45% 50%)	#FF7A1E
+Confetti pattern	4×2 grid of 16px dots, mixed accent colors	Lime/Pink/Cyan/Blue on #14120F
+12 — FORM CONTROLS
+Control	Spec
+Slider (crowd odds)	Track: 14px height, 999px radius, #eee9d6 base with #9B2FF2 fill to current value; 26px circular knob #14120F
+Toggle	64×36px track, 999px radius; on = #9B2FF2 fill, off = #e8e4d3; 28px white knob, 4px inset, 150ms ease slide
+Stepper / numeric input	Pill or 2px-bordered-circle container; 34–38px circular −/+ buttons (− on #f0ecdb, + on #DFF24C), Space Grotesk 700 value between
+Countdown ring	130px circle, #14120F fill, 5px #DFF24C border-ring rotated to show progress (border-right-color: transparent segment), Space Grotesk 28px white time in center
+Text/number input (Admin/Mobile)	#fff or #F4F1E4 background, 1px #ECE8D8 border, 12px radius, focus: 2px #3D5AFE ring
+13 — LAYOUT BY SURFACE
+Surface	Grid	Notes
+Big Screen	Fixed 1920×1080, 3-zone vertical stack (header / main / ticker)	Never responsive; design and QA at the literal pixel size
+Admin	Desktop-first, sidebar + content, dense tables	Table cell padding 8–10px vertical / 12px horizontal; sticky header row; divider rows #ECE8D8; monospace for numeric columns
+Mobile	Single column stack, 2-col grid for quick-action tiles	390–430px design width, sticky bottom primary CTA, 44px minimum tap targets throughout
+14 — INTERACTION STATES
+State	Treatment
+Hover (buttons)	Fill/border color swap per button-hierarchy table above, 150ms ease-in-out
+Hover (interactive card)	Slight border darken; no shadow lift — this system stays flat
+Active / press	Hero CTA: physical press via box-shadow + translateY(3px); other buttons: no scale/transform effect used in current builds
+Disabled	#e8e4d3 fill, #b3ad99 text, cursor: not-allowed — never opacity-only, always a distinct disabled fill color
+Focus (keyboard)	2px solid #3D5AFE ring — apply to all interactive elements not otherwise covered above (inputs, admin table actions)
+15 — CONTENT & VOICE
+Player-facing copy (prediction questions, round names) is written in Dutch, in second/third person, short and specific — e.g. round names like "SPELLING BEE," prediction phrasing like "Kan Thomas binnen 30 seconden 10 hoofdsteden noemen?" UI chrome (labels, statuses, buttons) stays in English, uppercase, terse — "MARKETS OPEN," "VOTING OPEN," "CLOSE MARKET." Never mix the two within one string.
 
+Numbers are always the hero: coin values, odds multipliers, and countdowns get the largest, boldest treatment on any screen. Round labels always follow the pattern ROUND ## — NAME.
 
---------------------------------------------------------------------------------
-8. CARD STYLING
---------------------------------------------------------------------------------
-  - Container Base:
-      bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow-md shadow-black/20[cite: 17, 18]
-  - Interactive Card Hover/Active:
-      hover:border-slate-600 active:scale-[0.98] transition-transform duration-150 cursor-pointer[cite: 18]
-  - Card Inner Sections:
-      p-3 bg-slate-900/50 rounded-xl border border-slate-800
-
-
---------------------------------------------------------------------------------
-9. FORM STYLING
---------------------------------------------------------------------------------
-  - Secret Vote Range Slider:
-      Track: h-2 bg-slate-700 rounded-lg accent-indigo-500[cite: 17]
-      Thumb: 20px circle, accent-indigo-500, focus ring indigo-400
-  - Text & Number Inputs:
-      bg-slate-900 border border-slate-700 text-slate-50 placeholder-slate-500 rounded-xl px-3.5 py-2.5 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none
-  - Stepper Controls:
-      Flex inline layout with numeric central display flanked by w-11 h-11 step buttons[cite: 17].
-
-
---------------------------------------------------------------------------------
-10. LAYOUT / GRID BEHAVIOR
---------------------------------------------------------------------------------
-  - Mobile (Default <640px): Single column flex stack, 2-column quick grids (grid grid-cols-2 gap-3)[cite: 17, 18].
-  - Tablet (640px - 1024px): 2 to 3 column card layout, multi-column dashboard.
-  - Desktop (>1024px): 12-column grid system with fixed max-width container (max-w-7xl mx-auto px-6). Side-by-side feed and betting panels.
-
-
---------------------------------------------------------------------------------
-11. VISUAL HIERARCHY
---------------------------------------------------------------------------------
-  - Level 1 (High Focus): Active odds multipliers, coin totals, main action CTAs (bold colors, scale 18px-24px)[cite: 17, 18].
-  - Level 2 (Medium Focus): Card titles, selected outcomes, stepper values (slate-50 text, 14px-16px)[cite: 17, 18].
-  - Level 3 (Low Focus): Phase status labels, live calculation outputs, metadata timestamps (slate-400 text, 12px-14px)[cite: 17, 18].
-
-
---------------------------------------------------------------------------------
-12. STATUS BADGES
---------------------------------------------------------------------------------
-  - Phase Indicator Pill:
-      px-2.5 py-0.5 text-xs font-medium rounded-full bg-indigo-500/20 text-indigo-300[cite: 17]
-  - Player Rank Badge:
-      border border-indigo-500/30 bg-indigo-500/10 text-indigo-400 rounded-full px-3 py-1 text-xs font-semibold[cite: 18]
-  - Bet Lock Status Badge:
-      flex items-center gap-2 text-slate-400 font-semibold text-sm[cite: 17]
-  - Win/Return Positive Pill:
-      bg-emerald-500/20 text-emerald-400 text-xs font-semibold px-2 py-0.5 rounded-md[cite: 18]
-
-
---------------------------------------------------------------------------------
-13. RESPONSIVE BEHAVIOR
---------------------------------------------------------------------------------
-  - Breakpoints:
-      sm: 640px
-      md: 768px
-      lg: 1024px
-      xl: 1280px
-  - Adaptations:
-      Mobile: Sticky bottom CTAs, full-width tap areas, vertical feeds[cite: 17, 18].
-      Desktop: Permanent sidebar, multi-panel viewing, expanded table density.
-
-
---------------------------------------------------------------------------------
-14. INTERACTION STATES
---------------------------------------------------------------------------------
-  - Hover: Background brightness shift (e.g., hover:bg-indigo-500)[cite: 17].
-  - Active / Tap: Micro scaling feedback (active:scale-[0.98])[cite: 17, 18].
-  - Focus-Visible: Outlined indigo ring with 2px offset for keyboard navigation.
-  - Disabled / Locked: Opacity 60%, cursor-not-allowed, scale suppression[cite: 17].
-
-
---------------------------------------------------------------------------------
-15. ANIMATION STYLE
---------------------------------------------------------------------------------
-  - Timing: Micro-interactions = 150ms ease-in-out; Panel transitions = 250ms ease-out.
-  - Scaling: Button tap scale compression (active:scale-[0.98])[cite: 17, 18].
-  - Transitions: transition-all duration-150 ease-in-out for hover, borders, and background color shifts[cite: 17].
-
-
---------------------------------------------------------------------------------
-16. BIG SCREEN PRESENTATION
---------------------------------------------------------------------------------
-  - Container Constraint: max-w-7xl mx-auto px-8 py-6.
-  - Multi-Column Workspace: Left sticky user profile/wallet bar, center prediction feed, right side live bets and history ledger.
-  - High Contrast Visuals: Enhanced dark canvas (#0F172A) prevents glare on wide desktop displays.
-
-
---------------------------------------------------------------------------------
-17. MOBILE TOUCH TARGETS
---------------------------------------------------------------------------------
-  - Minimum Dimensions: 44px x 44px for all interactive buttons and tap items.
-  - Stepper Controls: Minimum 44px width/height (w-11 h-11) to eliminate miss-taps[cite: 17].
-  - Hit Slop: Add minimum 8px padding around inline text links and icons.
-
-
---------------------------------------------------------------------------------
-18. ADMIN DENSITY & USABILITY
---------------------------------------------------------------------------------
-  - High-Density Tables:
-      Cell Padding: px-3 py-2 text-xs or text-sm.
-      Borders: Tight horizontal grid separators (divide-y divide-slate-800)[cite: 18].
-  - Action Controls: Compact inline action buttons (e.g., Edit/Disable/Resolve) grouped in right-aligned utility columns.
-  - Data Usability: Sticky table headers, visible search filter bars, explicit status pills per user record.
-================================================================================
+16 — FILE MANIFEST
+File	Role
+Game Night Exchange - Component Library.dc.html	Source of truth for all tokens/components in isolation
+Big Screen - Dashboard.dc.html	Live market chart + LED ticker, fully tweakable (mood/speed/palette)
+Big Screen - Round Started / Prediction Voting / Crowd Reveal / Betting Open / Prediction Result.dc.html	Event-focused Big Screen states — not yet extended with chart/ticker vocabulary
+Admin - Control Center / Rounds Management / Prediction Control / Player Ledger Detail.dc.html	Desktop admin console screens
+Mobile - Wallet Home / Prediction Voting Betting.dc.html	Player companion screens
