@@ -55,6 +55,19 @@ export function intValue(value: unknown, field: string, options: { min?: number;
   return parsed;
 }
 
+export function numberValue(value: unknown, field: string, options: { min?: number; max?: number } = {}) {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : Number.NaN;
+  if (!Number.isFinite(parsed)) throw new HttpError(400, `${field} must be a number`);
+  if (options.min !== undefined && parsed < options.min) throw new HttpError(400, `${field} must be at least ${options.min}`);
+  if (options.max !== undefined && parsed > options.max) throw new HttpError(400, `${field} must be at most ${options.max}`);
+  return parsed;
+}
+
+export function booleanValue(value: unknown, field: string) {
+  if (typeof value !== 'boolean') throw new HttpError(400, `${field} must be a boolean`);
+  return value;
+}
+
 export function textValue(value: unknown, field: string, max = 500) {
   if (typeof value !== 'string' || !value.trim()) throw new HttpError(400, `${field} is required`);
   const trimmed = value.trim();

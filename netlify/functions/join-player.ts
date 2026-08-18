@@ -1,6 +1,7 @@
 import { withTransaction } from '../lib/db';
 import { body, HttpError, ok, textValue } from '../lib/http';
-import { PLAYER_COOKIE, randomToken, sessionCookie, sha256 } from '../lib/security';
+import { PLAYER_COOKIE, randomToken, sessionCookie, sessionDigest, sha256 } from '../lib/security';
+import { incrementGameVersion } from '../lib/game-state';
 import { wrap } from './_wrap';
 
 export default wrap(async (request) => {
@@ -10,9 +11,8 @@ export default wrap(async (request) => {
   const rawSession = randomToken();
 
   const joined = await withTransaction(async (client) => {
-    // Resolve the token first without taking a lock, then lock the player before
-    // the token. This matches the remove-player/join-link lock order and avoids
-    // a deadlock while still allowing a final locked token validity check.
+    // Resolve the token first without taking a lock. Once its game is known,
+    // serialize on game -> player -> token, matching player-management writes.
     const candidateResult = await client.query(
       `SELECT id, player_id, game_night_id
        FROM player_join_tokens
@@ -21,6 +21,9 @@ export default wrap(async (request) => {
     );
     const candidate = candidateResult.rows[0];
     if (!candidate) throw new HttpError(400, 'Join link is invalid or expired');
+
+    const gameResult = await client.query('SELECT id FROM game_nights WHERE id=$1 FOR UPDATE', [candidate.game_night_id]);
+    if (!gameResult.rows[0]) throw new HttpError(400, 'Join link is invalid or expired');
 
     const playerResult = await client.query(
       `SELECT active
@@ -51,8 +54,9 @@ export default wrap(async (request) => {
     await client.query(
       `INSERT INTO player_sessions(player_id, game_night_id, session_hash, expires_at)
        VALUES($1, $2, $3, NOW() + INTERVAL '30 days')`,
-      [row.player_id, row.game_night_id, sha256(rawSession)],
+      [row.player_id, row.game_night_id, sessionDigest(rawSession)],
     );
+    await incrementGameVersion(client, Number(row.game_night_id));
 
     return row;
   });

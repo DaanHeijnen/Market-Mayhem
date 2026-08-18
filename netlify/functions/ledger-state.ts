@@ -1,0 +1,2 @@
+import{requireAdmin}from'../lib/auth';import{getLedgerState}from'../lib/queries';import{ok,HttpError,intValue}from'../lib/http';import{wrap,gameIdFrom}from'./_wrap';
+export default wrap(async request=>{await requireAdmin(request);const gameId=gameIdFrom(request),raw=new URL(request.url).searchParams.get('round')||'all';let filter:'all'|'general'|number;if(raw==='all'||raw==='general')filter=raw;else filter=intValue(raw,'round',{min:1});return ok(await getLedgerState(gameId,filter));},'GET');

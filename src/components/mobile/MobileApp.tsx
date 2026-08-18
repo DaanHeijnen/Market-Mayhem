@@ -1,105 +1,13 @@
-import { useEffect, useState } from 'react';
-import { useGamePolling } from '../../hooks/useGamePolling';
-import { mutation } from '../../lib/api';
-
-export function MobileApp({ gameId }: { gameId: number }) {
-  const { data: s, error, refresh } = useGamePolling<any>(gameId, 'mobile', `/api/player-state?gameId=${gameId}`);
-  const [vote, setVote] = useState(50);
-  const [side, setSide] = useState<'YES'|'NO'>('YES');
-  const [stake, setStake] = useState(20);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState('');
-  const p = s?.prediction;
-  const balance = Number(s?.player?.balance || 0);
-  const maxStake = Math.min(500, balance);
-
-  useEffect(() => {
-    if (p?.ownVote !== null && p?.ownVote !== undefined) setVote(Number(p.ownVote));
-  }, [p?.id, p?.ownVote]);
-
-  useEffect(() => {
-    if (p?.ownBet) {
-      setSide(p.ownBet.side);
-      setStake(Number(p.ownBet.stake));
-      return;
-    }
-    if (balance >= 5) setStake((current) => Math.min(Math.max(5, current), Math.min(500, balance)));
-  }, [balance, p?.id, p?.ownBet]);
-
-  if (!s) return <Shell><div className="display">Open your player join link first.</div></Shell>;
-  const act = async (fn: () => Promise<any>) => {
-    setBusy(true); setMsg('');
-    try { await fn(); await refresh(); }
-    catch (e) { setMsg(e instanceof Error ? e.message : 'Failed'); }
-    finally { setBusy(false); }
-  };
-
-  return (
-    <Shell>
-      <div style={{ textAlign: 'center', padding: '20px 0' }}>
-        <div className="label muted">{s.player.name}</div>
-        <div className="display" style={{ fontSize: 96 }}>{s.player.balance}</div>
-        <div className="label muted">COINS</div>
-        <span className="pill" style={{ display: 'inline-block', background: '#14120F', color: 'white', padding: '7px 16px', marginTop: 10 }}>#{s.player.rank} OVERALL</span>
-      </div>
-
-      {p?.status === 'VOTING' ? (
-        <Card>
-          <div className="label">PREDICTION #{p.number} · VOTING OPEN</div>
-          <h2 className="display">{p.question}</h2>
-          <p>Your vote is secret. How likely is a YES?</p>
-          <input aria-label="vote" type="range" min="0" max="100" step="5" value={vote} onChange={(e) => setVote(Number(e.target.value))} style={{ width: '100%' }} />
-          <div className="display" style={{ fontSize: 36, color: '#9B2FF2', textAlign: 'center' }}>{vote}%</div>
-          <button disabled={busy} className="btn btn-dark" onClick={() => act(() => mutation('/api/submit-vote', { gameId, predictionId: p.id, yesProbability: vote }))}>SUBMIT VOTE</button>
-        </Card>
-      ) : p?.status === 'BETTING' ? (
-        <Card>
-          <div className="label">PREDICTION #{p.number} · MARKET OPEN</div>
-          <h2 className="display">{p.question}</h2>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button disabled={!!p.ownBet} onClick={() => setSide('YES')} style={{ flex: 1, border: side === 'YES' ? '3px solid #14120F' : '0', background: '#2FAF5B', color: 'white', padding: 20, borderRadius: 22 }}><b>YES</b><div className="display" style={{ fontSize: 28 }}>{p.yesOdds?.toFixed(2)}×</div></button>
-            <button disabled={!!p.ownBet} onClick={() => setSide('NO')} style={{ flex: 1, border: side === 'NO' ? '3px solid #14120F' : '0', background: '#E8352F', color: 'white', padding: 20, borderRadius: 22 }}><b>NO</b><div className="display" style={{ fontSize: 28 }}>{p.noOdds?.toFixed(2)}×</div></button>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <button className="btn" disabled={!!p.ownBet || maxStake < 5} onClick={() => setStake(Math.max(5, stake - 5))}>−</button>
-            <div className="display" style={{ fontSize: 32, flex: 1, textAlign: 'center' }}>{stake}</div>
-            <button className="btn btn-lime" disabled={!!p.ownBet || maxStake < 5} onClick={() => setStake(Math.min(maxStake, stake + 5))}>+</button>
-          </div>
-          <div>Potential return: <b>{Math.round(stake * (side === 'YES' ? p.yesOdds : p.noOdds))} coins</b></div>
-          <button disabled={busy || !!p.ownBet || stake > balance || stake < 5 || stake > 500} className="btn btn-dark" onClick={() => act(() => mutation('/api/place-bet', { gameId, predictionId: p.id, side, stake }, true))}>{p.ownBet ? 'BET PLACED' : `PLACE ${stake} COINS ON ${side}`}</button>
-        </Card>
-      ) : p ? (
-        <Card>
-          <div className="label">PREDICTION #{p.number}</div>
-          <h2 className="display">{p.question}</h2>
-          {p.status === 'DRAFT' && <><div className="display" style={{ fontSize: 22 }}>COMING UP</div><p className="muted">The admin has made this prediction visible. Voting has not opened yet.</p></>}
-          {p.status === 'CALCULATING' && <><div className="display" style={{ fontSize: 22 }}>VOTING CLOSED</div><p className="muted">The crowd result is being prepared.</p></>}
-          {p.status === 'LOCKED' && <><div className="display" style={{ fontSize: 22 }}>MARKET LOCKED</div><p className="muted">Bets are closed. Waiting for the result.</p></>}
-          {p.status === 'SETTLED' && <><div className="display" style={{ fontSize: 30, color: p.result === 'YES' ? '#2FAF5B' : '#E8352F' }}>{p.result} WON</div><p className="muted">The market has been settled.</p></>}
-          {p.status === 'CANCELLED' && <><div className="display" style={{ fontSize: 24 }}>MARKET CANCELLED</div><p className="muted">Any stakes have been refunded.</p></>}
-        </Card>
-      ) : (
-        <Card><div className="display" style={{ fontSize: 22 }}>NO PREDICTION VISIBLE</div><p className="muted">Your wallet stays available. The admin decides when a prediction appears here.</p></Card>
-      )}
-
-      <Card>
-        <div className="label muted">RECENT LEDGER</div>
-        {s.recentLedger.length === 0 && <p className="muted">No transactions yet.</p>}
-        {s.recentLedger.slice(0, 8).map((x: any) => (
-          <div key={x.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '9px 0', borderBottom: '1px solid #F0ECDB' }}>
-            <span>{x.description}</span>
-            <b style={{ color: x.amount >= 0 ? '#2FAF5B' : '#E8352F', whiteSpace: 'nowrap' }}>{x.amount > 0 ? '+' : ''}{x.amount}</b>
-          </div>
-        ))}
-      </Card>
-      {(msg || error) && <p>{msg || 'LIVE CONNECTION INTERRUPTED'}</p>}
-    </Shell>
-  );
-}
-
-function Shell({ children }: { children: any }) {
-  return <div style={{ minHeight: '100vh', background: '#E8E4D2', padding: '24px 0' }}><main style={{ width: 'min(100% - 20px,440px)', minHeight: 'calc(100vh - 48px)', margin: 'auto', background: '#F4F1E4', borderRadius: 36, padding: 22 }}>{children}</main></div>;
-}
-function Card({ children }: { children: any }) {
-  return <div className="card" style={{ padding: 22, marginBottom: 14, display: 'flex', flexDirection: 'column', gap: 14 }}>{children}</div>;
-}
+import{useEffect,useMemo,useState}from'react';import{useLocation,useNavigate}from'react-router-dom';import{useGamePolling}from'../../hooks/useGamePolling';import{mutation}from'../../lib/api';
+export function MobileApp({gameId}:{gameId:number}){const{data:s,error,refresh}=useGamePolling<any>(gameId,'mobile',`/api/player-state?gameId=${gameId}`);const[busy,setBusy]=useState(false),[msg,setMsg]=useState('');const loc=useLocation(),nav=useNavigate();if(!s)return <Shell><Card><div className="display" style={{fontSize:24}}>{error?'SESSION REQUIRED':'CONNECTING…'}</div>{error&&<p className="muted">Open your personal join link to enter this game.</p>}</Card></Shell>;const parts=loc.pathname.split('/').filter(Boolean);const view=parts[2]||'home';const predictionId=parts[3]?Number(parts[3]):null;const act=async(fn:()=>Promise<unknown>)=>{setBusy(true);setMsg('');try{await fn();await refresh()}catch(e){setMsg((e as Error).message)}finally{setBusy(false)}};const go=(path='')=>nav(`/play/${gameId}${path}`);const currentPrediction=s.predictions.find((p:any)=>p.id===predictionId);return <Shell>{view==='predictions'?<PredictionList state={s} go={go}/>:view==='prediction'&&currentPrediction?<PredictionDetail state={s} prediction={currentPrediction} busy={busy} act={act} go={go} gameId={gameId}/>:view==='roulette'?<RouletteView state={s} busy={busy} act={act} go={go} gameId={gameId}/>:<Home state={s} go={go}/>} {(msg||error)&&<div className="mobile-alert">{msg||error}</div>}</Shell>}
+function Home({state:s,go}:{state:any;go:(x?:string)=>void}){return <><div className="mobile-top"><div><div className="label muted">MARKET MAYHEM</div><h1 className="display" style={{margin:'2px 0'}}>{s.player.name}</h1></div><div className="rank-chip">#{s.player.rank}</div></div><Card><div className="label muted">WALLET</div><div className="display" style={{fontSize:54}}>{s.player.balance}</div><div className="muted">coins available</div></Card><div className="mobile-actions"><button className="btn btn-dark big-mobile-btn" disabled={!s.predictionAvailable} onClick={()=>go('/predictions')}>PREDICTIONS <span>{s.predictions.filter((p:any)=>p.status==='OPEN').length}</span></button><button className="btn big-mobile-btn" style={{background:'#9B2FF2',color:'white'}} disabled={!s.roulette} onClick={()=>go('/roulette')}>ROULETTE</button></div>{!s.actionable&&<Card><div className="display" style={{fontSize:21}}>No markets open</div><p className="muted">Your wallet stays ready. You can simply abstain from any market by doing nothing.</p></Card>}<Ledger state={s}/></>}
+function PredictionList({state:s,go}:{state:any;go:(x?:string)=>void}){return <><Back go={go}/><div className="label muted">PREDICTIONS</div><h1 className="display">Markets</h1>{s.predictions.length===0?<Card><b>No prediction markets are available.</b></Card>:s.predictions.map((p:any)=><button key={p.id} className="mobile-market-card card" onClick={()=>go(`/prediction/${p.id}`)}><div className="row-between"><span className="label">#{p.number}{p.roundNumber?` · R${String(p.roundNumber).padStart(2,'0')}`:''}</span><span className="pill status-pill">{p.status}</span></div><h2 className="display">{p.question}</h2><div className="mobile-odds"><b>YES {p.yesOdds.toFixed(2)}×</b><b>NO {p.noOdds.toFixed(2)}×</b></div>{p.status==='OPEN'&&<div>Time remaining: <strong><LiveCountdown closesAt={p.closesAt}/></strong></div>}{p.ownBet&&<div className="muted">Your bet: {p.ownBet.stake} on {p.ownBet.side} · {p.ownBet.status}</div>}</button>)}</>}
+function PredictionDetail({state:s,prediction:p,busy,act,go,gameId}:{state:any;prediction:any;busy:boolean;act:(x:()=>Promise<unknown>)=>void;go:(x?:string)=>void;gameId:number}){const[side,setSide]=useState<'YES'|'NO'>('YES'),[stake,setStake]=useState<number>(s.settings.minimumStake);const remaining=useRemaining(p.closesAt);const percent=s.settings.maximumWalletPercentage;const cap=Math.min(s.player.balance,s.settings.maximumStake,percent==null?s.player.balance:Math.floor(s.player.balance*percent/100));const maxStake=cap>=s.settings.minimumStake?cap:0;useEffect(()=>{setStake(x=>Math.max(s.settings.minimumStake,Math.min(x,maxStake||s.settings.minimumStake)))},[maxStake,s.settings.minimumStake]);const odds=side==='YES'?p.yesOdds:p.noOdds;return <><Back go={()=>go('/predictions')}/><Card><div className="row-between"><span className="label">PREDICTION #{p.number}</span><span className="pill status-pill">{p.status}</span></div><h1 className="display" style={{fontSize:29}}>{p.question}</h1>{p.status==='OPEN'&&<div className="countdown-box"><div className="label">TIME REMAINING</div><div className="display" style={{fontSize:38}}><LiveCountdown closesAt={p.closesAt}/></div></div>}<div className="mobile-odds-buttons"><button disabled={!!p.ownBet||p.status!=='OPEN'} className={side==='YES'?'selected':''} onClick={()=>setSide('YES')}><span>YES</span><b>{p.yesOdds.toFixed(2)}×</b></button><button disabled={!!p.ownBet||p.status!=='OPEN'} className={side==='NO'?'selected':''} onClick={()=>setSide('NO')}><span>NO</span><b>{p.noOdds.toFixed(2)}×</b></button></div>{p.ownBet?<div className="bet-receipt"><b>BET PLACED</b><span>{p.ownBet.stake} coins on {p.ownBet.side}</span><span>Potential return: {p.ownBet.potentialReturn}</span></div>:p.status==='OPEN'?<><div className="row-between"><span>Wallet balance</span><b>{s.player.balance}</b></div><label>Stake<input className="field" type="number" min={s.settings.minimumStake} max={maxStake} value={stake} onChange={e=>setStake(Number(e.target.value)||0)}/></label><input type="range" min={s.settings.minimumStake} max={Math.max(s.settings.minimumStake,maxStake)} value={Math.min(stake,Math.max(s.settings.minimumStake,maxStake))} onChange={e=>setStake(Number(e.target.value))}/><div className="row-between"><span>Potential return</span><b>{Math.round(stake*odds)} coins</b></div><button className="btn btn-dark" disabled={busy||remaining<=0||maxStake===0||stake<s.settings.minimumStake||stake>maxStake} onClick={()=>act(()=>mutation('/api/place-bet',{gameId,predictionId:p.id,side,stake},true))}>CONFIRM {stake} ON {side}</button><p className="muted" style={{margin:0}}>No bet is required. If you do nothing before the timer expires, your wallet is unchanged.</p></>:<PredictionStatus prediction={p}/>}</Card></>}
+function PredictionStatus({prediction:p}:{prediction:any}){if(p.status==='LOCKED')return <p><b>Market locked.</b> Waiting for the result.</p>;if(p.status==='RESULT')return <p><b>Result: {p.result}</b> · payouts are being confirmed.</p>;if(p.status==='SETTLED')return <p><b>{p.result} won.</b> This market is settled.</p>;if(p.status==='CANCELLED')return <p><b>Market cancelled.</b> Any stake was refunded.</p>;return <p className="muted">This market is not open.</p>}
+function RouletteView({state:s,busy,act,go,gameId}:{state:any;busy:boolean;act:(x:()=>Promise<unknown>)=>void;go:(x?:string)=>void;gameId:number}){const rg=s.roulette;const[type,setType]=useState('COLOR'),[selection,setSelection]=useState('RED'),[stake,setStake]=useState(5);useEffect(()=>{if(type==='NUMBER')setSelection('0');if(type==='COLOR')setSelection('RED');if(type==='PARITY')setSelection('ODD');if(type==='RANGE')setSelection('LOW')},[type]);if(!rg)return <><Back go={go}/><Card>No roulette game is active.</Card></>;const potential=stake*(type==='NUMBER'?36:2);return <><Back go={go}/><Card><div className="row-between"><div><div className="label">ROULETTE #{rg.id}</div><h1 className="display">{rg.block_title||'Roulette'}</h1></div><span className="pill status-pill">{rg.status}</span></div>{rg.result_number!=null&&<div className="roulette-result">{rg.result_number}</div>}{rg.status==='OPEN'?<><label>Bet type<select className="field" value={type} onChange={e=>setType(e.target.value)}><option value="NUMBER">Straight number</option><option value="COLOR">Red / black</option><option value="PARITY">Odd / even</option><option value="RANGE">Low / high</option></select></label>{type==='NUMBER'?<label>Number<input className="field" type="number" min="0" max="36" value={selection} onChange={e=>setSelection(e.target.value)}/></label>:<label>Selection<select className="field" value={selection} onChange={e=>setSelection(e.target.value)}>{type==='COLOR'&&<><option>RED</option><option>BLACK</option></>}{type==='PARITY'&&<><option>ODD</option><option>EVEN</option></>}{type==='RANGE'&&<><option>LOW</option><option>HIGH</option></>}</select></label>}<label>Stake<input className="field" type="number" min="1" max={s.player.balance} value={stake} onChange={e=>setStake(Number(e.target.value)||0)}/></label><div className="row-between"><span>Potential return</span><b>{potential} coins</b></div><button className="btn btn-dark" disabled={busy||stake<1||stake>s.player.balance} onClick={()=>act(()=>mutation('/api/place-roulette-bet',{gameId,rouletteGameId:rg.id,betType:type,selection,stake},true))}>PLACE ROULETTE BET</button></>:<p className="muted">{rg.status==='LOCKED'?'Betting is closed. Waiting for the spin.':rg.status==='RESULT'?'Result selected. Waiting for settlement.':rg.status==='SETTLED'?'Spin settled.':'Roulette is closed.'}</p>}{rg.own_bets?.length>0&&<div><div className="label muted">YOUR BETS</div>{rg.own_bets.map((b:any)=><div className="ledger-line" key={b.id}><span>{b.bet_type} · {b.selection} · {b.stake}</span><b>{b.status}</b></div>)}</div>}</Card></>}
+function Ledger({state:s}:{state:any}){return <Card><div className="label muted">RECENT LEDGER</div>{s.recentLedger.length===0?<p className="muted">No transactions yet.</p>:s.recentLedger.map((x:any)=><div className="ledger-line" key={x.id}><span>{x.description}</span><b className={x.amount>=0?'pos':'neg'}>{x.amount>0?'+':''}{x.amount}</b></div>)}</Card>}
+function Back({go}:{go:(x?:string)=>void}){return <button className="btn" style={{marginBottom:14}} onClick={()=>go()}>← HOME</button>}
+function useRemaining(closesAt?:string|null){const[now,setNow]=useState(Date.now());useEffect(()=>{const id=window.setInterval(()=>setNow(Date.now()),250);return()=>clearInterval(id)},[]);return closesAt?Math.max(0,new Date(closesAt).getTime()-now):0}
+function LiveCountdown({closesAt}:{closesAt?:string|null}){const ms=useRemaining(closesAt),sec=Math.ceil(ms/1000);return <>{Math.floor(sec/60)}:{String(sec%60).padStart(2,'0')}</>}
+function Shell({children}:{children:any}){return <div className="mobile-shell"><main className="mobile-phone">{children}</main></div>}
+function Card({children}:{children:any}){return <section className="card mobile-card">{children}</section>}

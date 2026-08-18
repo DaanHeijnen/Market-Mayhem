@@ -9,7 +9,8 @@ export default wrap(async (request) => {
   const payload = await body<any>(request);
   const gameId = intValue(payload.gameId, 'gameId', { min: 1 });
   const displayName = textValue(payload.displayName, 'displayName', 80);
-  const color = typeof payload.color === 'string' && /^#[0-9A-Fa-f]{6}$/.test(payload.color) ? payload.color : '#3D5AFE';
+  const color = typeof payload.color === 'string' && /^#[0-9A-Fa-f]{6}$/.test(payload.color) ? payload.color : null;
+  if (!color) throw new HttpError(400, 'color must be a hex color');
 
   return created(await withTransaction(async (client) => {
     const game = await client.query('SELECT starting_balance FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);

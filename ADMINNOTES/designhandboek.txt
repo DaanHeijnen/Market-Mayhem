@@ -1,0 +1,209 @@
+================================================================================
+COMPLETE AI DEVELOPER STYLING HANDBOOK & DESIGN SYSTEM
+================================================================================
+
+--------------------------------------------------------------------------------
+1. TYPOGRAPHY
+--------------------------------------------------------------------------------
+Font Family:
+  - Base: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif
+  - Monospace (Code/Data): 'JetBrains Mono', monospace
+
+Type Scale & Hierarchy:
+  - Display (30px / 1.2 line-height / font-bold): Marketing heroes, big stats
+  - Heading 1 (24px / 1.3 line-height / font-bold): Top-level view headers
+  - Heading 2 (20px / 1.3 line-height / font-semibold): Card section titles, odds multipliers[cite: 17, 18]
+  - Heading 3 (18px / 1.4 line-height / font-semibold): Rank badge text, coin balance highlights[cite: 17, 18]
+  - Body Base (16px / 1.5 line-height / font-normal): Primary interface text, slider values[cite: 17]
+  - Body Small (14px / 1.4 line-height / font-normal): Secondary labels, feed details, returns info[cite: 17, 18]
+  - Micro / Caption (12px / 1.3 line-height / font-semibold): Status badges, phase pills, timestamps[cite: 17, 18]
+
+
+--------------------------------------------------------------------------------
+2. COLORS
+--------------------------------------------------------------------------------
+Color Palette & Tailwind Tokens:
+  - Brand Primary:      #6366F1 (indigo-600) | Accent CTAs, slider track, focus highlights[cite: 17]
+  - Brand Hover:        #4F46E5 (indigo-700) | Interactive primary hover state
+  - Success / YES:      #10B981 (emerald-500)| YES odds selection, positive coin returns[cite: 17, 18]
+  - Success Surface:    rgba(16, 185, 129, 0.1) (emerald-500/10) | Active YES container background[cite: 17]
+  - Danger / NO:        #EF4444 (red-500)    | NO odds selection, warning alerts[cite: 17]
+  - Danger Surface:     rgba(239, 68, 68, 0.1) (red-500/10) | Active NO container background[cite: 17]
+  - Background Base:    #0F172A (slate-900)  | Dark mode application canvas
+  - Surface Level 1:    #1E293B (slate-800)  | Primary cards, dashboard containers[cite: 17, 18]
+  - Surface Level 2:    #334155 (slate-700)  | Sub-panels, hover cards, input field backgrounds[cite: 17]
+  - Border Neutral:     #334155 (slate-700)  | Divider lines, outline borders[cite: 17, 18]
+  - Text Primary:       #F8FAFC (slate-50)   | High-contrast titles, balances, main text[cite: 17, 18]
+  - Text Secondary:     #94A3B8 (slate-400)  | Muted labels, metadata, calculations[cite: 17, 18]
+  - Text Muted:         #64748B (slate-500)  | Placeholders, disabled button text[cite: 17]
+
+
+--------------------------------------------------------------------------------
+3. SPACING
+--------------------------------------------------------------------------------
+Base Scale (8pt System):
+  - space-1 : 4px   | Micro gaps, internal pill spacing
+  - space-2 : 8px   | Compact element gaps, badge padding
+  - space-3 : 12px  | Grid gaps for small cards, tight stack spacing[cite: 17, 18]
+  - space-4 : 16px  | Standard layout padding, default card spacing[cite: 17, 18]
+  - space-6 : 24px  | Section separation, desktop container padding
+  - space-8 : 32px  | Major layout margins, screen header offsets
+
+
+--------------------------------------------------------------------------------
+4. PADDING
+--------------------------------------------------------------------------------
+  - Action Buttons (Standard): px-4 py-3.5 (16px lateral, 14px vertical)[cite: 17]
+  - Compact Buttons / Steppers: p-2.5 or w-11 h-11 flex-center[cite: 17]
+  - Standard Cards: p-4 (16px all sides)[cite: 18]
+  - Modal Containers: p-6 (24px all sides)
+  - Inline Badges / Pills: px-2.5 py-0.5[cite: 17]
+  - Outline Rank Badges: px-3 py-1[cite: 18]
+  - Compact Admin Rows: px-3 py-2
+
+
+--------------------------------------------------------------------------------
+5. BORDERS
+--------------------------------------------------------------------------------
+  - Standard Border: 1px solid rgba(51, 65, 85, 0.6) (border-slate-700/60)[cite: 17, 18]
+  - Active Selected State: 2px solid #10B981 (YES) or #EF4444 (NO)[cite: 17]
+  - Focus Ring: 2px solid #6366F1 with ring-offset-2 ring-offset-slate-900[cite: 17]
+  - Divider Lines: 1px solid #1E293B (divide-slate-800)[cite: 18]
+
+
+--------------------------------------------------------------------------------
+6. BORDER RADIUS
+--------------------------------------------------------------------------------
+  - Controls & Inputs: rounded-xl (12px) | Buttons, text fields, step adjusters[cite: 17]
+  - Surface Cards: rounded-2xl (16px) | Dashboard cards, odds cards, prediction cards[cite: 17, 18]
+  - Status Badges / Pills: rounded-full (9999px) | Phase indicators, rank tags[cite: 17, 18]
+  - Modal Views: rounded-3xl (24px) | Mobile action sheets, popup dialogs
+
+
+--------------------------------------------------------------------------------
+7. BUTTON HIERARCHY
+--------------------------------------------------------------------------------
+  - Primary CTA:
+      Class: w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-xl shadow-lg shadow-indigo-600/25 active:scale-[0.98] transition-all[cite: 17]
+      Usage: Submit vote, confirm bet wager, main primary action[cite: 17].
+
+  - Secondary / Utility Button:
+      Class: bg-slate-800 border border-slate-700 text-slate-200 font-bold hover:bg-slate-700 active:scale-95 transition-colors[cite: 17]
+      Usage: Step adjustment buttons (- / + 10%), wallet history links[cite: 17, 18].
+
+  - Selection Cards (As Interactive Buttons):
+      Class (YES): border-2 border-emerald-500 bg-emerald-500/10 text-emerald-400 font-bold rounded-2xl p-4 transition-all[cite: 17]
+      Class (NO): border-2 border-red-500 bg-red-500/10 text-red-400 font-bold rounded-2xl p-4 transition-all[cite: 17]
+
+  - Locked / Disabled State:
+      Class: w-full py-3.5 bg-slate-800/80 border border-slate-700 text-slate-400 font-semibold rounded-xl cursor-not-allowed[cite: 17]
+      Usage: Submitted bet state ("BET LOCKED ✓"), non-interactive states[cite: 17].
+
+
+--------------------------------------------------------------------------------
+8. CARD STYLING
+--------------------------------------------------------------------------------
+  - Container Base:
+      bg-slate-800 border border-slate-700 rounded-2xl p-4 shadow-md shadow-black/20[cite: 17, 18]
+  - Interactive Card Hover/Active:
+      hover:border-slate-600 active:scale-[0.98] transition-transform duration-150 cursor-pointer[cite: 18]
+  - Card Inner Sections:
+      p-3 bg-slate-900/50 rounded-xl border border-slate-800
+
+
+--------------------------------------------------------------------------------
+9. FORM STYLING
+--------------------------------------------------------------------------------
+  - Secret Vote Range Slider:
+      Track: h-2 bg-slate-700 rounded-lg accent-indigo-500[cite: 17]
+      Thumb: 20px circle, accent-indigo-500, focus ring indigo-400
+  - Text & Number Inputs:
+      bg-slate-900 border border-slate-700 text-slate-50 placeholder-slate-500 rounded-xl px-3.5 py-2.5 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none
+  - Stepper Controls:
+      Flex inline layout with numeric central display flanked by w-11 h-11 step buttons[cite: 17].
+
+
+--------------------------------------------------------------------------------
+10. LAYOUT / GRID BEHAVIOR
+--------------------------------------------------------------------------------
+  - Mobile (Default <640px): Single column flex stack, 2-column quick grids (grid grid-cols-2 gap-3)[cite: 17, 18].
+  - Tablet (640px - 1024px): 2 to 3 column card layout, multi-column dashboard.
+  - Desktop (>1024px): 12-column grid system with fixed max-width container (max-w-7xl mx-auto px-6). Side-by-side feed and betting panels.
+
+
+--------------------------------------------------------------------------------
+11. VISUAL HIERARCHY
+--------------------------------------------------------------------------------
+  - Level 1 (High Focus): Active odds multipliers, coin totals, main action CTAs (bold colors, scale 18px-24px)[cite: 17, 18].
+  - Level 2 (Medium Focus): Card titles, selected outcomes, stepper values (slate-50 text, 14px-16px)[cite: 17, 18].
+  - Level 3 (Low Focus): Phase status labels, live calculation outputs, metadata timestamps (slate-400 text, 12px-14px)[cite: 17, 18].
+
+
+--------------------------------------------------------------------------------
+12. STATUS BADGES
+--------------------------------------------------------------------------------
+  - Phase Indicator Pill:
+      px-2.5 py-0.5 text-xs font-medium rounded-full bg-indigo-500/20 text-indigo-300[cite: 17]
+  - Player Rank Badge:
+      border border-indigo-500/30 bg-indigo-500/10 text-indigo-400 rounded-full px-3 py-1 text-xs font-semibold[cite: 18]
+  - Bet Lock Status Badge:
+      flex items-center gap-2 text-slate-400 font-semibold text-sm[cite: 17]
+  - Win/Return Positive Pill:
+      bg-emerald-500/20 text-emerald-400 text-xs font-semibold px-2 py-0.5 rounded-md[cite: 18]
+
+
+--------------------------------------------------------------------------------
+13. RESPONSIVE BEHAVIOR
+--------------------------------------------------------------------------------
+  - Breakpoints:
+      sm: 640px
+      md: 768px
+      lg: 1024px
+      xl: 1280px
+  - Adaptations:
+      Mobile: Sticky bottom CTAs, full-width tap areas, vertical feeds[cite: 17, 18].
+      Desktop: Permanent sidebar, multi-panel viewing, expanded table density.
+
+
+--------------------------------------------------------------------------------
+14. INTERACTION STATES
+--------------------------------------------------------------------------------
+  - Hover: Background brightness shift (e.g., hover:bg-indigo-500)[cite: 17].
+  - Active / Tap: Micro scaling feedback (active:scale-[0.98])[cite: 17, 18].
+  - Focus-Visible: Outlined indigo ring with 2px offset for keyboard navigation.
+  - Disabled / Locked: Opacity 60%, cursor-not-allowed, scale suppression[cite: 17].
+
+
+--------------------------------------------------------------------------------
+15. ANIMATION STYLE
+--------------------------------------------------------------------------------
+  - Timing: Micro-interactions = 150ms ease-in-out; Panel transitions = 250ms ease-out.
+  - Scaling: Button tap scale compression (active:scale-[0.98])[cite: 17, 18].
+  - Transitions: transition-all duration-150 ease-in-out for hover, borders, and background color shifts[cite: 17].
+
+
+--------------------------------------------------------------------------------
+16. BIG SCREEN PRESENTATION
+--------------------------------------------------------------------------------
+  - Container Constraint: max-w-7xl mx-auto px-8 py-6.
+  - Multi-Column Workspace: Left sticky user profile/wallet bar, center prediction feed, right side live bets and history ledger.
+  - High Contrast Visuals: Enhanced dark canvas (#0F172A) prevents glare on wide desktop displays.
+
+
+--------------------------------------------------------------------------------
+17. MOBILE TOUCH TARGETS
+--------------------------------------------------------------------------------
+  - Minimum Dimensions: 44px x 44px for all interactive buttons and tap items.
+  - Stepper Controls: Minimum 44px width/height (w-11 h-11) to eliminate miss-taps[cite: 17].
+  - Hit Slop: Add minimum 8px padding around inline text links and icons.
+
+
+--------------------------------------------------------------------------------
+18. ADMIN DENSITY & USABILITY
+--------------------------------------------------------------------------------
+  - High-Density Tables:
+      Cell Padding: px-3 py-2 text-xs or text-sm.
+      Borders: Tight horizontal grid separators (divide-y divide-slate-800)[cite: 18].
+  - Action Controls: Compact inline action buttons (e.g., Edit/Disable/Resolve) grouped in right-aligned utility columns.
+  - Data Usability: Sticky table headers, visible search filter bars, explicit status pills per user record.
+================================================================================

@@ -1,34 +1,97 @@
 # Market Mayhem
 
-Market Mayhem is a private game-night economy, prediction market, player wallet, and broadcast-control app. The supplied Game Night Exchange prototypes are translated into a production React/TypeScript application while the product brand is **Market Mayhem**.
+Market Mayhem is a private game-night economy, prediction market, roulette, player-wallet and projector-control app.
 
-## Architecture
-- React + TypeScript + Vite
+## Stack
+
+- React 19 + TypeScript + Vite
 - Netlify Functions
-- Netlify Database / PostgreSQL via `@netlify/database`
-- Version-controlled SQL migrations in `netlify/database/migrations/`
-- Secure HttpOnly player/admin sessions
-- Atomic wallet, bet and settlement transactions
-- Big Screen `/screen/:gameId`, Admin `/admin/:gameId`, Mobile `/play/:gameId`
+- Netlify Database / PostgreSQL
+- Versioned SQL migrations in `netlify/database/migrations/`
+- HttpOnly Admin/player sessions
+- Transactional wallets with an immutable ledger
+- Lightweight version polling with targeted snapshots
 
+## Routes
 
-## Clean first-run setup
+- `/admin/:gameId` — Control Center
+- `/admin/:gameId/settings` — game defaults and game reset
+- `/admin/:gameId/players` — player management and join links
+- `/admin/:gameId/rounds` — rounds
+- `/admin/:gameId/rounds/:roundId` — ordered round content builder
+- `/admin/:gameId/predictions` — fixed-odds prediction markets
+- `/admin/:gameId/ledger` — filtered ledger and round economy summary
+- `/play/:gameId` — authenticated player wallet and market home
+- `/screen/:gameId` — public-safe Big Screen
 
-Market Mayhem now starts with an empty game night at `/admin/1`: no players, no rounds, no predictions, and no demo ledger entries. Configure the default starting coins in **Admin → Settings**, then add players, rounds, and predictions from their dedicated admin pages. Prediction visibility is explicitly controlled from **Admin → Predictions** and is independent of the voting/betting phase.
+## First-run workflow
 
-Manual coin changes from **Admin → Control** require a written reason. That reason is stored on the immutable ledger entry. The Control page also includes an embedded live preview of `/screen/1`.
+A fresh game contains no players, rounds, predictions or transactions. Configure it in this order:
 
-## Option A — deploy from GitHub
-1. Unzip this project and push all files to a new GitHub repository.
-2. Import the repository into Netlify.
-3. Netlify detects `@netlify/database`; create/enable Netlify Database if prompted.
-4. Set `ADMIN_USERNAME` and either `ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH` in Netlify environment variables.
-5. Deploy. Migrations in `netlify/database/migrations/` are applied automatically by Netlify Database.
-6. Open `/admin/1`, `/screen/1`, and generate player join links through the `player-join-link` API/admin extension as needed.
+1. **Settings** — name, starting coins, prediction timer and prediction stake limits.
+2. **Players** — add players and generate single-use join links.
+3. **Rounds** — create rounds. Round number is a label; Admin may start any upcoming round.
+4. **Round Content** — add ordered `TEXT`, `QUESTION` and `ROULETTE` blocks.
+5. **Predictions** — create fixed YES/NO odds and optionally schedule a prediction on a round.
+6. **Control** — run the active round, move through content, operate roulette, adjust coins and watch the live projector preview.
 
-A plain `ADMIN_PASSWORD` works. For a hashed secret instead, run `npm run admin:hash -- "your password"`, leave `ADMIN_PASSWORD` unset, and set the generated value as `ADMIN_PASSWORD_HASH`.
+## Predictions
 
-## Option B — local development
+Prediction odds are entered by Admin. There is no crowd-probability vote and wager volume never changes odds.
+
+State machine:
+
+`DRAFT → SCHEDULED → OPEN → LOCKED → RESULT → SETTLED`
+
+A draft may also open manually. Any unresolved prediction may be cancelled; active stakes are refunded transactionally.
+
+When a round starts, its `SCHEDULED` predictions automatically become `OPEN`. `opened_at` and `closes_at` are generated server-side from the per-game prediction duration. A stale player UI cannot place a late bet: the bet endpoint verifies `closes_at` again inside the transaction.
+
+Players may simply abstain. No zero-value bet or wallet transaction is created.
+
+## Roulette
+
+A `ROULETTE` round block creates the current roulette spin when activated. Admin controls:
+
+`DRAFT → OPEN → LOCKED → RESULT → SETTLED`
+
+The initial mobile bet types are straight number, red/black, odd/even and low/high. Payouts are calculated server-side from stored bet snapshots. Cancelled spins refund active stakes.
+
+## Ledger and wallets
+
+`wallets.current_balance` is the transactional current balance. `ledger_entries` is immutable financial history. Starting balances, signed Admin adjustments, prediction stakes/payouts/refunds and roulette stakes/payouts/refunds update wallet + ledger in the same PostgreSQL transaction.
+
+Manual adjustments require an exact written reason and can optionally be attributed to any round. Corrections are new compensating entries; old ledger rows are never edited.
+
+The Ledger page filters in SQL by all rounds, a specific round, or General/no-round and includes per-player earned/lost/net totals.
+
+## Big Screen
+
+The dashboard is driven only by real economy data:
+
+- chronological wallet-value graph from ledger entries
+- player current value and change vs that player's starting-balance ledger entry
+- current round
+- open prediction + roulette market count
+- total coins in play = active wallet balances + stakes locked in unresolved prediction/roulette markets
+- public ledger ticker
+
+Round content, prediction open/locked/result states and roulette have dedicated projector compositions. The Control Center embeds the exact `/screen/:gameId` output in an iframe.
+
+## Authentication
+
+Configure all three variables:
+
+```env
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=replace-me
+SESSION_SECRET=replace-with-at-least-32-random-characters
+```
+
+`SESSION_SECRET` HMAC-protects the server-side digest of opaque Admin/player session tokens. Changing this secret invalidates existing Admin/player sessions, so users must sign in/join again. Player identity always comes from an HttpOnly cookie backed by `player_sessions`; localStorage and URL player IDs are never trusted.
+
+## Local development
+
 ```bash
 npm install
 cp .env.example .env
@@ -36,38 +99,38 @@ npx netlify database init --yes
 npx netlify database migrations apply
 npm run dev
 ```
-Then open `http://localhost:8888/admin/1` and `http://localhost:8888/screen/1`.
 
-The repository intentionally does not ship the previously incomplete `package-lock.json`. The first successful `npm install` generates a complete lockfile; commit that generated file if you want reproducible `npm ci` deployments.
+Then open `http://localhost:8888/admin/1`.
 
-## Live Update Speed / Netlify Credit Usage
-All polling numbers live in exactly one file: `src/config/live.ts`.
+## Deploy to Netlify
 
-Faster projector:
-```ts
-BIG_SCREEN_POLL_MS: 1000
-```
-Lower usage:
-```ts
-BIG_SCREEN_POLL_MS: 5000
-MOBILE_IDLE_POLL_MS: 30000
-```
-Big Screen uses `BIG_SCREEN_POLL_MS`; Admin uses `ADMIN_POLL_MS`; idle mobile uses `MOBILE_IDLE_POLL_MS`; voting/betting mobile uses `MOBILE_ACTIVE_POLL_MS`; hidden tabs use `HIDDEN_TAB_POLL_MS`.
+1. Push the repository to GitHub.
+2. Import it into Netlify.
+3. Enable Netlify Database.
+4. Configure `ADMIN_USERNAME`, `ADMIN_PASSWORD` and `SESSION_SECRET`.
+5. Deploy. New schema work is added as numbered migrations; previously deployed migrations are not rewritten.
 
-**Lower milliseconds = faster updates = potentially higher platform usage. Higher milliseconds = slower updates = lower platform usage.**
+## Delete Game Save
 
-Polling only requests the tiny game version. A targeted interface snapshot is fetched only when that version changes. Local successful mutations trigger an immediate refresh. No overlapping polls are allowed; hidden tabs are throttled. Mobile clients automatically use the faster interval only while voting or betting is active.
+Settings → Danger Zone → **DELETE GAME SAVE** requires the exact phrase `yes delete` in both the browser and backend. The transaction resets only the requested game ID: players/sessions/tokens and legacy teams, wallets/ledger, rounds/blocks, predictions/bets, roulette, screen state and game settings. Admin sessions remain usable. A `GAME_RESET` audit event is written before cleanup.
 
-## Security and economy
-The PostgreSQL database is the source of truth. Wallet changes, bet placement, and settlement happen server-side in PostgreSQL transactions. Ledger history is immutable. Retried financial requests use idempotency keys. Player sessions are opaque HttpOnly cookies and never trust a browser-supplied player id.
+## Live updates
+
+Clients poll only `/api/game-version` until the version changes, then refresh their targeted state endpoint. Polls do not overlap, stale snapshot refreshes use `AbortController`, hidden tabs are throttled, and a successful local mutation refreshes immediately.
+
+Mobile uses the backend `actionable` flag to select active vs idle polling cadence.
 
 ## Tests
+
 ```bash
 npm test
-npm run test:e2e
 npm run build
 ```
-See `docs/ARCHITECTURE.md` and `docs/DATABASE.md` for the state machine, ERD, wallet invariants, polling design and deployment model.
 
-## Database initialization
-The migration history includes the original prototype seed followed by a guarded cleanup migration. On a fresh database, the untouched prototype seed is removed and game `1` starts empty. On an upgrade, game `1` is preserved whenever it no longer matches the untouched demo fingerprint, so real game data is never deleted merely because it uses ID `1`.
+The Playwright full-flow test requires a real Netlify/PostgreSQL environment:
+
+```bash
+E2E_BASE_URL=http://localhost:8888 E2E_ADMIN_USERNAME=admin E2E_ADMIN_PASSWORD=... npm run test:e2e
+```
+
+See `docs/ARCHITECTURE.md` and `docs/DATABASE.md` for the detailed state/data model.

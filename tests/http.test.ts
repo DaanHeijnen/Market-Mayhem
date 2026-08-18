@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { body, HttpError, intValue, requestIdempotencyKey } from '../netlify/lib/http';
+import { body, booleanValue, HttpError, intValue, requestIdempotencyKey } from '../netlify/lib/http';
 
 function expectHttpError(fn: () => unknown, status: number) {
   try {
@@ -37,5 +37,12 @@ describe('request validation', () => {
     const request = new Request('https://example.test', { headers: { 'idempotency-key': '  abc-123  ' } });
     expect(requestIdempotencyKey(request)).toBe('abc-123');
     expectHttpError(() => requestIdempotencyKey(new Request('https://example.test')), 400);
+  });
+
+  it('accepts only real JSON booleans', () => {
+    expect(booleanValue(true, 'flag')).toBe(true);
+    expect(booleanValue(false, 'flag')).toBe(false);
+    expect(() => booleanValue('false', 'flag')).toThrow(HttpError);
+    expect(() => booleanValue(0, 'flag')).toThrow(HttpError);
   });
 });

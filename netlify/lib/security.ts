@@ -1,4 +1,4 @@
-import { createHash, pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 
 export const PLAYER_COOKIE = 'mm_player_session';
 export const ADMIN_COOKIE = 'mm_admin_session';
@@ -9,6 +9,14 @@ export function randomToken(bytes = 32) {
 
 export function sha256(value: string) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+export function sessionDigest(value: string) {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error('SESSION_SECRET must be configured with at least 32 characters');
+  }
+  return createHmac('sha256', secret).update(value).digest('hex');
 }
 
 export function parseCookies(request: Request) {
@@ -25,14 +33,4 @@ export function sessionCookie(name: string, value: string, maxAgeSeconds: number
   const isLocalDevelopment = process.env.CONTEXT === 'dev' || process.env.NODE_ENV === 'development';
   const secure = isLocalDevelopment ? '' : '; Secure';
   return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure}`;
-}
-
-export function verifyPassword(password: string, encoded: string) {
-  const [scheme, algorithm, iterationRaw, salt, expectedHex] = encoded.split('$');
-  if (scheme !== 'pbkdf2' || algorithm !== 'sha256' || !iterationRaw || !salt || !expectedHex) return false;
-  const iterations = Number(iterationRaw);
-  if (!Number.isInteger(iterations) || iterations < 100_000) return false;
-  const actual = pbkdf2Sync(password, salt, iterations, 32, 'sha256');
-  const expected = Buffer.from(expectedHex, 'hex');
-  return expected.length === actual.length && timingSafeEqual(expected, actual);
 }

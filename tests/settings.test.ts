@@ -1,0 +1,2 @@
+import{describe,expect,it}from'vitest';import{GAME_RESET_PHRASE,predictionCloseTime,requireGameResetPhrase}from'../netlify/lib/settings';
+describe('settings rules',()=>{it('uses configured prediction duration for closing time',()=>expect(predictionCloseTime(1_000,90)).toBe(91_000));it('only accepts the exact destructive reset phrase',()=>{expect(requireGameResetPhrase(GAME_RESET_PHRASE)).toBe(true);expect(()=>requireGameResetPhrase('YES DELETE')).toThrow();expect(()=>requireGameResetPhrase('yes delete ')).toThrow()})});

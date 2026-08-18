@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg';
 import { database } from './db';
 import { HttpError } from './http';
-import { ADMIN_COOKIE, PLAYER_COOKIE, parseCookies, sha256 } from './security';
+import { ADMIN_COOKIE, PLAYER_COOKIE, parseCookies, sessionDigest } from './security';
 
 export interface PlayerSession {
   playerId: number;
@@ -16,7 +16,7 @@ export interface AdminSession {
 export async function requirePlayer(request: Request, gameId?: number): Promise<PlayerSession> {
   const raw = parseCookies(request)[PLAYER_COOKIE];
   if (!raw) throw new HttpError(401, 'Player session required');
-  const hash = sha256(raw);
+  const hash = sessionDigest(raw);
   const rows = await database().sql<{ player_id: number; game_night_id: number; display_name: string }>`
     SELECT s.player_id, s.game_night_id, p.display_name
     FROM player_sessions s
@@ -36,7 +36,7 @@ export async function requirePlayer(request: Request, gameId?: number): Promise<
 export async function requireAdmin(request: Request): Promise<AdminSession> {
   const raw = parseCookies(request)[ADMIN_COOKIE];
   if (!raw) throw new HttpError(401, 'Admin session required');
-  const hash = sha256(raw);
+  const hash = sessionDigest(raw);
   const rows = await database().sql<{ username: string }>`
     SELECT username
     FROM admin_sessions

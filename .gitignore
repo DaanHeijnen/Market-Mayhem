@@ -1,2 +1,8 @@
-# Local Netlify folder
-.netlify
+node_modules/
+dist/
+.netlify/
+.env
+.env.local
+.env.*.local
+*.tsbuildinfo
+.DS_Store

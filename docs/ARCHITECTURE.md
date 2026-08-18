@@ -1,120 +1,105 @@
 # Market Mayhem Architecture
 
-Market Mayhem is a private game-night economy and prediction market. The physical games happen outside the app; the app maintains the money, markets, rounds, and broadcast state.
+## Boundaries
 
-## System overview
+React is presentation/cache only. PostgreSQL is authoritative for game state and every financially meaningful operation. Netlify Functions authenticate, validate state transitions and perform transactional mutations.
 
 ```mermaid
 flowchart LR
-  A[Admin /admin/:gameId] -->|HTTPS| F[Netlify Functions]
-  P[Player /play/:gameId] -->|HTTPS| F
-  S[Big Screen /screen/:gameId] -->|public read-only HTTPS| F
-  F --> D[(Netlify Database / PostgreSQL)]
-  D --> F
+  A[Admin] --> F[Netlify Functions]
+  P[Player] --> F
+  S[Big Screen] --> F
+  F --> D[(PostgreSQL)]
 ```
 
-All financially meaningful state lives in PostgreSQL. React state is presentation/cache only.
+## Live-state model
 
-## Live-state architecture
+`game_nights.game_state_version` is monotonic. Admin, Player and Big Screen clients poll the lightweight version endpoint. A changed version triggers exactly one targeted snapshot. Hidden tabs use a slower cadence; requests are deduplicated and stale snapshot fetches are aborted. Mobile active cadence is driven by the server-provided `actionable` flag.
 
-Each client uses the shared `useGamePolling` live-state pattern:
+Expired `OPEN` predictions are synchronized to `LOCKED` by the server when live state/version is read. Bet placement independently verifies `closes_at`, so polling latency cannot permit a late wager.
 
-1. poll the tiny `game-version` endpoint;
-2. compare the returned version with the last local version;
-3. if unchanged, do nothing;
-4. if changed, fetch one targeted snapshot for that interface;
-5. after a successful local mutation, refresh immediately instead of waiting for the next poll.
+## Settings
 
-Polling intervals live in **one file**: `src/config/live.ts`.
+Per-game settings live on `game_nights`:
 
-The browser Page Visibility API moves hidden tabs to a much slower interval. Polls are deduplicated: a second poll never starts while the previous poll is in flight. Stale requests are cancelled with `AbortController`.
+- `name`
+- `starting_balance`
+- `prediction_duration_seconds`
+- `minimum_prediction_stake`
+- `maximum_prediction_stake`
+- optional `maximum_wallet_percentage`
 
-This design is intentionally polling-based for v1 because it keeps Netlify Functions short-lived and avoids a separately hosted realtime server. The UI depends on a small live-state abstraction so it can be swapped later.
+Changing starting balance does not rewrite existing wallets. New-player creation reads the current value inside the same transaction that creates the player and wallet, plus a starting-balance ledger entry when the configured starting balance is non-zero.
 
-## Database and economy invariants
+## Rounds and content
 
-- `wallets.current_balance` is a cached balance.
-- `ledger_entries` is the immutable audit history.
-- Old financial rows are never edited to make history look different.
-- Corrections are compensating ledger entries.
-- Wallet-affecting writes execute inside a PostgreSQL transaction and lock the relevant wallet row.
-- A wallet may never become negative.
-- `wallet.current_balance` must equal `SUM(ledger_entries.amount)` for the player.
-- Bet stakes are deducted at placement; successful settlement credits the complete return.
-- Bet placement is one bet per player per prediction.
-- Bet settlement is idempotent and protected by state locks plus unique ledger constraints.
+Rounds are independent of their numeric label. One partial unique index enforces at most one `ACTIVE` round per game. State is `UPCOMING → ACTIVE → COMPLETED`.
+
+Each round owns ordered `round_blocks` of type `TEXT`, `QUESTION` or `ROULETTE`. `game_nights.current_round_block_id` is the operational cursor. Admin may jump to any block in the active round; previous/next are UI conveniences over `sort_order`, not round-number progression.
+
+Starting a round also opens every prediction in `SCHEDULED` state linked to that round and assigns timestamps from Settings.
 
 ## Prediction state machine
 
 ```mermaid
 stateDiagram-v2
   [*] --> DRAFT
-  DRAFT --> VOTING
-  VOTING --> CALCULATING
-  CALCULATING --> BETTING
-  BETTING --> LOCKED
-  LOCKED --> SETTLED
+  DRAFT --> SCHEDULED
+  SCHEDULED --> DRAFT
+  DRAFT --> OPEN
+  SCHEDULED --> OPEN
+  OPEN --> LOCKED
+  LOCKED --> RESULT
+  RESULT --> SETTLED
+  DRAFT --> CANCELLED
+  SCHEDULED --> CANCELLED
+  OPEN --> CANCELLED
   LOCKED --> CANCELLED
+  RESULT --> CANCELLED
 ```
 
-The browser never supplies an arbitrary next status. Each mutation endpoint validates the expected server-side current phase.
+YES/NO odds are Admin-authored and immutable once a prediction opens. One player may place one bet per prediction. `bets.odds_snapshot` is the payout authority.
 
-Voting stores a 0-100 YES probability per player. Closing voting calculates the arithmetic mean, derives NO as `1 - YES`, applies configurable probability clamps, and stores fixed decimal odds. Wager volume never changes those odds.
+Bet transaction: lock game → player → wallet → prediction, verify status/deadline/settings/duplicate, insert bet, append `BET_STAKE`, debit wallet, increment version, commit. Ledger and wallet writes are in the same PostgreSQL transaction.
 
-## Round architecture
+Settlement locks the game/prediction/bets and winner wallets. Winners receive `round(stake × odds_snapshot)` as total return; losers receive zero. Cancellation refunds the stake. Unique ledger constraints and idempotency keys prevent duplicate money movement.
 
-Round number is a label and intended running order, not an execution dependency. Admin may start R07 while R04/R05 remain upcoming, but only one round may be active at a time. A round follows `UPCOMING → ACTIVE → COMPLETED`; completed rounds cannot be restarted. Execution chronology is represented by timestamps, not `round_number + 1` logic.
+## Roulette
 
-Historical corrections can be attributed to any round without changing the currently active round.
+A roulette block owns one or more historical `roulette_games`. The active spin uses:
+
+`DRAFT → OPEN → LOCKED → RESULT → SETTLED`
+
+It may be cancelled before settlement. Mobile selections are normalized server-side. Straight-number return is 36× total return; red/black, odd/even and low/high are 2×. Zero loses all even-money bets.
+
+Roulette stakes, payouts and refunds are immutable ledger entries and transactional wallet updates. While a roulette market is financially live (`OPEN`, `LOCKED` or `RESULT`), the projector cannot be switched away from that roulette composition until the market is settled or cancelled.
+
+## Wallet/ledger invariants
+
+- Wallet balance never goes negative.
+- Old ledger rows are never edited.
+- Wallet-affecting actions create a ledger row in the same transaction.
+- Prediction/roulette stake is removed immediately and remains represented as locked stake while unresolved.
+- Total coins in play = active wallets + unresolved prediction stakes + unresolved roulette stakes.
+- High-impact manual changes, prediction placement/settlement and roulette placement/settlement use idempotency keys.
+
+## Big Screen
+
+`screen_state` explicitly selects one composition:
+
+- `DASHBOARD`
+- `ROUND_BLOCK`
+- `PREDICTIONS_OPEN`
+- `PREDICTION_LOCKED`
+- `PREDICTION_RESULT`
+- `ROULETTE`
+
+The dashboard snapshot is public-safe and derives graph/ticker values from real ledger history. No private Admin notes or per-player private bet selections are exposed.
+
+## Delete/reset
+
+`reset-game` requires Admin auth, game ID and exact server-side phrase `yes delete`. It locks the requested game, writes `GAME_RESET`, clears game-owned operational/financial content transactionally, restores default settings and recreates Dashboard screen state. It does not delete another game or revoke the current Admin session.
 
 ## Authentication
 
-### Players
-
-Players do not create accounts. Admin generates a cryptographically random single-use join token. `/join/:token` exchanges it for an opaque session cookie backed by `player_sessions`. Raw session IDs are never stored; only SHA-256 hashes are stored in the database.
-
-### Admin
-
-Admin login is controlled by environment variables. Deployments may use a plain `ADMIN_PASSWORD` or a PBKDF2 `ADMIN_PASSWORD_HASH` generated by `npm run admin:hash`; if both are present, the plain password takes precedence. Successful login creates a cryptographically random opaque server-side session in `admin_sessions` and sets an HttpOnly cookie. No separate session-signing secret is required because raw session tokens are never stored server-side.
-
-## Public/private boundary
-
-Big Screen reads only public-safe fields. Player state includes only the authenticated player's wallet, ledger, vote, and bets plus public market data. Admin state contains the operational game, player, prediction, ledger-summary, and screen-control data required by the current admin UI; audit history remains stored server-side but is not currently rendered in the UI.
-
-## Big Screen state
-
-`screen_state` is explicit broadcast state. Admin actions set the mode and associated round/prediction. The screen never guesses which composition to show.
-
-Supported modes:
-
-- `DASHBOARD`
-- `ROUND_STARTED`
-- `PREDICTION_VOTING`
-- `CROWD_REVEAL`
-- `BETTING_OPEN`
-- `PREDICTION_RESULT`
-
-## Concurrency protection
-
-Critical player, wallet, prediction, round, game, and join-token rows are locked with `SELECT ... FOR UPDATE` where state can race. Lock ordering is kept consistent across competing operations. A partial unique index guarantees at most one active round per game, and unique constraints prevent duplicate bets and duplicate bet ledger actions. Financial mutations accept idempotency keys where duplicate money movement is otherwise possible.
-
-## Settlement algorithm
-
-1. lock prediction;
-2. return safely if already settled/cancelled;
-3. verify prediction is `LOCKED`;
-4. lock all bets;
-5. for each winner: `round(stake * odds_snapshot)` and credit `BET_PAYOUT`;
-6. for losers: no wallet credit;
-7. for cancel: credit `BET_REFUND` equal to stake;
-8. mark bets final;
-9. mark prediction settled/cancelled;
-10. for YES/NO, set the Big Screen result state; for cancellation, clear the screen only if it is showing that prediction;
-11. increment global game version;
-12. commit.
-
-Any error rolls the whole operation back.
-
-## Deployment
-
-The repository is designed for GitHub continuous deployment to Netlify. `@netlify/database` is installed, and schema migrations live under `netlify/database/migrations/`. Netlify applies those migrations as part of deploys. No external Supabase/Firebase/VPS project is required.
+Admin credentials are environment-configured using `ADMIN_USERNAME` and `ADMIN_PASSWORD`. `SESSION_SECRET` is required and used to HMAC the digest stored for opaque session tokens. Player join tokens are random, single-use and hashed separately. Player identity is resolved only from HttpOnly session cookies.
