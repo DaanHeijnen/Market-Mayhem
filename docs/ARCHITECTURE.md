@@ -1,45 +1,63 @@
 # Market Mayhem Architecture
 
-## Boundaries
+## System boundary
 
-React is presentation/cache only. PostgreSQL is authoritative for game state and every financially meaningful operation. Netlify Functions authenticate, validate state transitions and perform transactional mutations.
+React renders cached snapshots and submits commands. PostgreSQL is the source of truth. Netlify Functions authenticate requests, validate state, acquire locks and commit all state/financial mutations.
 
 ```mermaid
 flowchart LR
-  A[Admin] --> F[Netlify Functions]
-  P[Player] --> F
+  A[Admin UI] --> F[Netlify Functions]
+  P[Player UI] --> F
   S[Big Screen] --> F
   F --> D[(PostgreSQL)]
 ```
 
-## Live-state model
+## Live update model
 
-`game_nights.game_state_version` is monotonic. Admin, Player and Big Screen clients poll the lightweight version endpoint. A changed version triggers exactly one targeted snapshot. Hidden tabs use a slower cadence; requests are deduplicated and stale snapshot fetches are aborted. Mobile active cadence is driven by the server-provided `actionable` flag.
+`game_nights.game_state_version` is monotonic. Admin, Player and Big Screen poll the lightweight version endpoint. A changed version triggers one targeted snapshot. The hook deduplicates snapshot work, aborts stale refreshes and version polls when appropriate, and throttles hidden tabs. Mobile cadence is selected from the backend `actionable` flag.
 
-Expired `OPEN` predictions are synchronized to `LOCKED` by the server when live state/version is read. Bet placement independently verifies `closes_at`, so polling latency cannot permit a late wager.
+Server reads also synchronize timed state:
+
+- expired `OPEN` predictions become `LOCKED`;
+- a stored roulette `SPINNING` result becomes `RESULT` after the presentation interval.
+
+Bet endpoints independently re-check market state/deadline inside their transaction, so a stale client cannot place a late wager.
 
 ## Settings
 
-Per-game settings live on `game_nights`:
+Production per-game settings on `game_nights` are:
 
 - `name`
 - `starting_balance`
-- `prediction_duration_seconds`
-- `minimum_prediction_stake`
-- `maximum_prediction_stake`
 - optional `maximum_wallet_percentage`
 
-Changing starting balance does not rewrite existing wallets. New-player creation reads the current value inside the same transaction that creates the player and wallet, plus a starting-balance ledger entry when the configured starting balance is non-zero.
+Legacy game-level prediction duration/min/max columns remain only for migration compatibility. Production prediction timing and stake validation use the fields stored on each `predictions` row.
 
-## Rounds and content
+New-player creation reads `starting_balance` inside the same transaction that creates the player, wallet and initial ledger entry. It also stores that value as the player's immutable `starting_balance_snapshot`, which is the baseline for first-join animation and exchange-value comparisons even when the configured starting balance is zero. Existing wallets and snapshots are never rewritten when Settings changes.
 
-Rounds are independent of their numeric label. One partial unique index enforces at most one `ACTIVE` round per game. State is `UPCOMING → ACTIVE → COMPLETED`.
+## Round execution and content
 
-Each round owns ordered `round_blocks` of type `TEXT`, `QUESTION` or `ROULETTE`. `game_nights.current_round_block_id` is the operational cursor. Admin may jump to any block in the active round; previous/next are UI conveniences over `sort_order`, not round-number progression.
+Round numbers are labels, not execution pointers. A partial unique database index allows at most one `ACTIVE` round per game. Normal lifecycle is `UPCOMING → ACTIVE → COMPLETED`.
 
-Starting a round also opens every prediction in `SCHEDULED` state linked to that round and assigns timestamps from Settings.
+`round_blocks` are ordered by `sort_order` and support:
 
-## Prediction state machine
+- `TEXT`
+- `QUESTION`
+- `DUOLINGO_QUESTION`
+- `ROULETTE`
+
+`game_nights.current_round_block_id` is the operational content cursor. Previous/next controls are conveniences over block order; they never imply `round_number + 1`.
+
+Starting a round opens all linked `SCHEDULED` predictions with each prediction's own duration. The start action does not select a round block or change `screen_state`: the projector remains on its current presentation until Admin explicitly shows a block, prediction, roulette scene, or the dashboard.
+
+## Predictions
+
+Admin authors `probability_yes` from 1–99%. The server derives and persists:
+
+- `yes_odds = 1 / probability_yes`
+- `no_odds = 1 / (1 - probability_yes)`
+
+Each market owns `prediction_time_seconds`, `minimum_stake` and `maximum_stake`. Financially important fields are frozen once the market opens. Accepted bets preserve `odds_snapshot` and `potential_return`.
 
 ```mermaid
 stateDiagram-v2
@@ -55,37 +73,65 @@ stateDiagram-v2
   SCHEDULED --> CANCELLED
   OPEN --> CANCELLED
   LOCKED --> CANCELLED
-  RESULT --> CANCELLED
 ```
 
-YES/NO odds are Admin-authored and immutable once a prediction opens. One player may place one bet per prediction. `bets.odds_snapshot` is the payout authority.
+Public status maps `OPEN` directly and completed outcomes to `RESOLVED_YES`, `RESOLVED_NO` or `CANCELLED`. No crowd-voting stages exist.
 
-Bet transaction: lock game → player → wallet → prediction, verify status/deadline/settings/duplicate, insert bet, append `BET_STAKE`, debit wallet, increment version, commit. Ledger and wallet writes are in the same PostgreSQL transaction.
+### Prediction deposit transaction
 
-Settlement locks the game/prediction/bets and winner wallets. Winners receive `round(stake × odds_snapshot)` as total return; losers receive zero. Cancellation refunds the stake. Unique ledger constraints and idempotency keys prevent duplicate money movement.
+Lock order is game → player → prediction → wallet. The server validates active player, market state, `closes_at`, per-market min/max, optional wallet percentage and one-bet rule. It then inserts the bet and `PREDICTION_DEPOSIT` ledger entry, debits available wallet and increments game version before commit.
+
+The active bet is the locked-value record. While unresolved:
+
+`total player value = wallet.current_balance + prediction locked + roulette locked`.
+
+Settlement locks game → prediction → bets → relevant wallets. Winner credit is `round(stake × odds_snapshot)` (full return), loser credit is zero, and cancellation through `LOCKED` returns stake. After a YES/NO result is selected, settlement is mandatory rather than allowing a result-aware cancellation. Unique ledger keys plus endpoint idempotency prevent duplicate money movement.
+
+## Round groups
+
+`round_groups` and `round_group_members` are explicitly round-scoped. A player can belong to at most one group in a round. Structural group editing is blocked once the round is completed. Financial group adjustments become available once the round is ACTIVE and intentionally remain available retroactively after it is COMPLETED.
+
+A group adjustment locks game → group → member players/wallets and creates one immutable `GROUP_ADJUSTMENT` ledger entry per member with the same amount/reason plus round/group attribution. There is no group wallet.
+
+## Live Duolingo question
+
+A `DUOLINGO_QUESTION` stores Admin-only configuration in the block payload: four answer texts, `correctAnswerIndex` and reward coins.
+
+```mermaid
+stateDiagram-v2
+  READY --> OPEN
+  OPEN --> CLOSED
+  CLOSED --> REVEALED
+  REVEALED --> SETTLED
+```
+
+When the block is current, Player snapshots include only block identity, status, reward, the player's selected emoji index and post-reveal correctness. They never contain answer texts or correct index. Big Screen snapshots contain answer texts, but the correct index is stripped until `REVEALED`/`SETTLED`.
+
+`round_question_answers` is unique by block/player. Reveal locks the question and winner wallets, appends idempotent `QUESTION_REWARD` entries and credits winners once. The reward is attributed to both round and block.
 
 ## Roulette
 
-A roulette block owns one or more historical `roulette_games`. The active spin uses:
+The canonical backend bet types are `NUMBER`, `COLOR`, `PARITY` and `RANGE`; visual table coordinates never define bets.
 
-`DRAFT → OPEN → LOCKED → RESULT → SETTLED`
+```mermaid
+stateDiagram-v2
+  DRAFT --> OPEN
+  OPEN --> LOCKED
+  LOCKED --> SPINNING
+  SPINNING --> RESULT
+  RESULT --> SETTLED
+  DRAFT --> CANCELLED
+  OPEN --> CANCELLED
+  LOCKED --> CANCELLED
+```
 
-It may be cancelled before settlement. Mobile selections are normalized server-side. Straight-number return is 36× total return; red/black, odd/even and low/high are 2×. Zero loses all even-money bets.
+The SPIN command chooses `result_number` with server-side cryptographic randomness and stores it before animation starts. Big Screen may read that stored result to animate the wheel; Player and Admin state intentionally hide it while `SPINNING`. Cancellation is only permitted in `DRAFT`, `OPEN` or `LOCKED`, so a known/spinning outcome cannot be selectively cancelled.
 
-Roulette stakes, payouts and refunds are immutable ledger entries and transactional wallet updates. While a roulette market is financially live (`OPEN`, `LOCKED` or `RESULT`), the projector cannot be switched away from that roulette composition until the market is settled or cancelled.
+Batch chip placement is canonical and transactional. Public Big Screen roulette data contains only display name, public color, normalized bet type/selection and stake.
 
-## Wallet/ledger invariants
+## Projector state
 
-- Wallet balance never goes negative.
-- Old ledger rows are never edited.
-- Wallet-affecting actions create a ledger row in the same transaction.
-- Prediction/roulette stake is removed immediately and remains represented as locked stake while unresolved.
-- Total coins in play = active wallets + unresolved prediction stakes + unresolved roulette stakes.
-- High-impact manual changes, prediction placement/settlement and roulette placement/settlement use idempotency keys.
-
-## Big Screen
-
-`screen_state` explicitly selects one composition:
+`screen_state` explicitly selects:
 
 - `DASHBOARD`
 - `ROUND_BLOCK`
@@ -94,12 +140,12 @@ Roulette stakes, payouts and refunds are immutable ledger entries and transactio
 - `PREDICTION_RESULT`
 - `ROULETTE`
 
-The dashboard snapshot is public-safe and derives graph/ticker values from real ledger history. No private Admin notes or per-player private bet selections are exposed.
+Opening a prediction does not touch `screen_state`; only explicit SHOW PREDICTION does. SHOW MAIN DASHBOARD is always available and changes presentation without changing underlying market state.
 
-## Delete/reset
+The exchange dashboard is derived from real financial chronology. Prediction/roulette deposits are represented as locked value until resolution, so graph value does not falsely fall merely because coins moved from available to locked.
 
-`reset-game` requires Admin auth, game ID and exact server-side phrase `yes delete`. It locks the requested game, writes `GAME_RESET`, clears game-owned operational/financial content transactionally, restores default settings and recreates Dashboard screen state. It does not delete another game or revoke the current Admin session.
+## Security and reset
 
-## Authentication
+Admin sessions require `ADMIN_USERNAME`, `ADMIN_PASSWORD` and `SESSION_SECRET`. Player join tokens are single-use and raw values are never stored in the database. Raw session tokens live only in HttpOnly cookies; stored session digests are HMAC-protected.
 
-Admin credentials are environment-configured using `ADMIN_USERNAME` and `ADMIN_PASSWORD`. `SESSION_SECRET` is required and used to HMAC the digest stored for opaque session tokens. Player join tokens are random, single-use and hashed separately. Player identity is resolved only from HttpOnly session cookies.
+Game reset requires Admin authentication, game ID and exact server-side phrase `yes delete`. It is transactional, game-scoped, writes `GAME_RESET`, deletes game-owned operational/financial data and recreates dashboard state while leaving Admin sessions/audit history available.

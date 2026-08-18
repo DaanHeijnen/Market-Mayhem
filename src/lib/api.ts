@@ -7,7 +7,7 @@ export async function api<T>(path:string, init:RequestInit={}){
   if(!res.ok) throw new ApiError(data.error||`Request failed (${res.status})`,res.status);
   return data as T;
 }
-export function mutation<T>(path:string, data:unknown, idempotent=false){
-  const headers:Record<string,string>={}; if(idempotent) headers['Idempotency-Key']=crypto.randomUUID();
+export function mutation<T>(path:string, data:unknown, idempotent=false, idempotencyKey?:string){
+  const headers:Record<string,string>={}; if(idempotent) headers['Idempotency-Key']=idempotencyKey || crypto.randomUUID();
   return api<T>(path,{method:'POST',body:JSON.stringify(data),headers});
 }

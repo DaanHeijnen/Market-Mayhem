@@ -1,9 +1,19 @@
-export function payoutForStake(stake: number, odds: number) {
-  return Math.round(stake * odds);
+export function payoutForStake(stake: number, multiplier: number) {
+  return Math.round(stake * multiplier);
 }
 
-export function predictionSettlementCredit(stake: number, odds: number, won: boolean) {
-  return won ? payoutForStake(stake, odds) : 0;
+export function predictionSettlementCredit(stake: number, multiplier: number, won: boolean) {
+  return won ? payoutForStake(stake, multiplier) : 0;
+}
+
+export function probabilityToMultipliers(probabilityYes: number) {
+  if (!Number.isFinite(probabilityYes) || probabilityYes < 0.01 || probabilityYes > 0.99) {
+    throw new Error('Probability must be between 1% and 99%');
+  }
+  return {
+    yes: Number((1 / probabilityYes).toFixed(3)),
+    no: Number((1 / (1 - probabilityYes)).toFixed(3)),
+  };
 }
 
 export function ledgerBalance(amounts: number[]) {
@@ -17,13 +27,24 @@ const allowedTransitions: Record<PredictionStatus, PredictionStatus[]> = {
   SCHEDULED: ['DRAFT','OPEN','CANCELLED'],
   OPEN: ['LOCKED','CANCELLED'],
   LOCKED: ['RESULT','CANCELLED'],
-  RESULT: ['SETTLED','CANCELLED'],
+  RESULT: ['SETTLED'],
   SETTLED: [],
   CANCELLED: [],
 };
 
 export function canTransition(from: PredictionStatus, to: PredictionStatus) {
   return allowedTransitions[from].includes(to);
+}
+
+export function publicPredictionStatus(status: PredictionStatus, result?: string | null) {
+  if (status === 'CANCELLED') return 'CANCELLED';
+  if (status === 'SETTLED' || status === 'RESULT') {
+    if (result === 'YES') return 'RESOLVED_YES';
+    if (result === 'NO') return 'RESOLVED_NO';
+  }
+  if (status === 'OPEN') return 'OPEN';
+  if (status === 'LOCKED') return 'LOCKED';
+  return status;
 }
 
 export function maxPredictionStake(balance: number, minimumStake: number, maximumStake: number, walletPercentage: number | null) {
@@ -61,3 +82,5 @@ export function rouletteBetWins(type: RouletteBetType, selection: string, result
   if (type === 'RANGE') return selection === (result <= 18 ? 'LOW' : 'HIGH');
   return false;
 }
+
+export const QUESTION_EMOJIS = ['🍆','🌽','🍑','😳'] as const;

@@ -23,8 +23,11 @@ export function JoinPage() {
   }, [navigate, token]);
 
   return (
-    <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#DFF24C' }}>
-      <h1 className="display">{message}</h1>
-    </div>
+    <main className="join-screen">
+      <section className="card join-card">
+        <div className="label muted">MARKET MAYHEM</div>
+        <h1 className="display">{message}</h1>
+      </section>
+    </main>
   );
 }

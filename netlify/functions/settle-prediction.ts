@@ -41,8 +41,16 @@ export default wrap(async request => {
         if (ledger.rows[0]) {
           await client.query('UPDATE wallets SET current_balance=current_balance+$1,updated_at=NOW() WHERE player_id=$2', [credit, bet.player_id]);
         } else {
-          const existing = await client.query("SELECT id FROM ledger_entries WHERE bet_id=$1 AND transaction_type='BET_PAYOUT'", [bet.id]);
-          if (!existing.rows[0]) throw new HttpError(409, 'Settlement idempotency key conflicts with another transaction');
+          const existing = await client.query(
+            "SELECT player_id,amount,prediction_id FROM ledger_entries WHERE bet_id=$1 AND transaction_type='BET_PAYOUT'",
+            [bet.id],
+          );
+          if (!existing.rows[0]
+            || Number(existing.rows[0].player_id) !== Number(bet.player_id)
+            || Number(existing.rows[0].amount) !== credit
+            || Number(existing.rows[0].prediction_id) !== predictionId) {
+            throw new HttpError(409, 'Settlement idempotency key conflicts with another transaction');
+          }
         }
       }
       await client.query('UPDATE bets SET status=$2,settled_at=NOW() WHERE id=$1', [bet.id, win ? 'WON' : 'LOST']);

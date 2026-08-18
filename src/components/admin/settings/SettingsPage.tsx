@@ -1,2 +1,59 @@
-import{useEffect,useState}from'react';import type{RunMutation}from'../types';import{Card}from'../ui';
-export function SettingsPage({state:s,run,onReset}:{state:any;run:RunMutation;onReset:()=>void}){const g=s.game;const[form,setForm]=useState<any>({});const[danger,setDanger]=useState(false);const[phrase,setPhrase]=useState('');useEffect(()=>setForm({name:g.name,startingBalance:g.starting_balance,predictionDurationSeconds:g.prediction_duration_seconds,minimumPredictionStake:g.minimum_prediction_stake,maximumPredictionStake:g.maximum_prediction_stake,maximumWalletPercentage:g.maximum_wallet_percentage??''}),[g.name,g.starting_balance,g.prediction_duration_seconds,g.minimum_prediction_stake,g.maximum_prediction_stake,g.maximum_wallet_percentage]);const field=(k:string)=>(e:any)=>setForm({...form,[k]:e.target.value});return <div className="page-stack"><Card><div className="label muted">GAME SETTINGS</div><h2 className="display">Game defaults</h2><div className="form-grid"><label>Game name<input className="field" value={form.name||''} onChange={field('name')}/></label><label>Starting coins<input className="field" type="number" min="0" value={form.startingBalance??''} onChange={field('startingBalance')}/></label><label>Prediction time (seconds)<input className="field" type="number" min="5" value={form.predictionDurationSeconds??''} onChange={field('predictionDurationSeconds')}/></label><label>Minimum prediction stake<input className="field" type="number" min="1" value={form.minimumPredictionStake??''} onChange={field('minimumPredictionStake')}/></label><label>Maximum prediction stake<input className="field" type="number" min="1" value={form.maximumPredictionStake??''} onChange={field('maximumPredictionStake')}/></label><label>Max wallet % per prediction <span className="muted">(optional)</span><input className="field" type="number" min="1" max="100" placeholder="No percentage cap" value={form.maximumWalletPercentage??''} onChange={field('maximumWalletPercentage')}/></label></div><p className="muted">Starting coins only apply to players created after the change. Prediction duration is used when a market opens.</p><button className="btn btn-dark" onClick={()=>run('/api/update-settings',{...form,maximumWalletPercentage:form.maximumWalletPercentage===''?null:Number(form.maximumWalletPercentage)})}>SAVE SETTINGS</button></Card><Card style={{border:'2px solid #E8352F'}}><div className="label" style={{color:'#E8352F'}}>DANGER ZONE</div><h2 className="display">Delete Game Save</h2><p>This resets only this game night. Your Admin login remains available.</p><button className="btn btn-red" style={{fontSize:16,padding:'16px 24px'}} onClick={()=>{setPhrase('');setDanger(true)}}>DELETE GAME SAVE</button></Card>{danger&&<div className="modal-backdrop"><div className="modal card"><div className="label" style={{color:'#E8352F'}}>PERMANENT RESET</div><h2 className="display">Delete this game save?</h2><p>The following data will be removed/reset for game #{g.id}:</p><ul><li>players, join tokens and player sessions</li><li>wallets and immutable ledger entries</li><li>rounds and round content blocks</li><li>predictions and prediction bets</li><li>roulette games and bets</li><li>screen state and game-specific settings</li></ul><p>Type exactly <b>yes delete</b> to continue.</p><input autoFocus className="field" value={phrase} onChange={e=>setPhrase(e.target.value)} placeholder="yes delete"/><div style={{display:'flex',gap:10,marginTop:18}}><button className="btn" onClick={()=>setDanger(false)}>CANCEL</button><button className="btn btn-red" disabled={phrase!=='yes delete'} onClick={async()=>{if(await run('/api/reset-game',{confirmation:phrase})){setDanger(false);onReset()}}}>DELETE EVERYTHING</button></div></div></div>}</div>}
+import { useEffect, useState } from 'react';
+import type { RunMutation } from '../types';
+import { Card } from '../ui';
+
+export function SettingsPage({ state: s, run, onReset }: { state: any; run: RunMutation; onReset: () => void }) {
+  const g = s.game;
+  const [form, setForm] = useState<any>({});
+  const [danger, setDanger] = useState(false);
+  const [phrase, setPhrase] = useState('');
+
+  useEffect(() => setForm({
+    name: g.name,
+    startingBalance: g.starting_balance,
+    maximumWalletPercentage: g.maximum_wallet_percentage ?? '',
+  }), [g.name, g.starting_balance, g.maximum_wallet_percentage]);
+
+  const field = (key: string) => (event: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [key]: event.target.value });
+
+  return <div className="page-stack">
+    <Card>
+      <div className="section-heading"><div><div className="label muted">GAME SETTINGS</div><h2 className="display">Core game defaults</h2></div></div>
+      <div className="form-grid">
+        <label>Game name<input className="field" value={form.name || ''} onChange={field('name')} /></label>
+        <label>Starting coins for new players<input className="field" type="number" min="0" value={form.startingBalance ?? ''} onChange={field('startingBalance')} /></label>
+        <label>Max wallet % per prediction <span className="muted">(optional)</span><input className="field" type="number" min="1" max="100" placeholder="No percentage cap" value={form.maximumWalletPercentage ?? ''} onChange={field('maximumWalletPercentage')} /></label>
+      </div>
+      <p className="muted">Starting coins only affect players created after you save. Prediction duration and min/max deposits are configured per prediction market.</p>
+      <button className="btn btn-primary" onClick={() => run('/api/update-settings', { ...form, maximumWalletPercentage: form.maximumWalletPercentage === '' ? null : Number(form.maximumWalletPercentage) })}>SAVE SETTINGS</button>
+    </Card>
+
+    <Card className="danger-card">
+      <div className="label danger-text">DANGER ZONE</div>
+      <h2 className="display">Delete Game Save</h2>
+      <p className="muted">Permanently reset only this game night. Your Admin login remains available.</p>
+      <button className="btn btn-danger btn-danger-large" onClick={() => { setPhrase(''); setDanger(true); }}>DELETE GAME SAVE</button>
+    </Card>
+
+    {danger && <div className="modal-backdrop"><div className="modal card">
+      <div className="label danger-text">PERMANENT RESET</div>
+      <h2 className="display">Delete this game save?</h2>
+      <p>The following game-specific data will be removed:</p>
+      <ul className="danger-list">
+        <li>players, join tokens and player sessions</li>
+        <li>wallets and immutable ledger entries</li>
+        <li>rounds, groups, memberships and round content</li>
+        <li>live-question answers and reward state</li>
+        <li>predictions, deposits and payouts</li>
+        <li>roulette games and bets</li>
+        <li>screen state and game settings</li>
+      </ul>
+      <p>Type exactly <b>yes delete</b> to continue.</p>
+      <input autoFocus className="field" value={phrase} onChange={e => setPhrase(e.target.value)} placeholder="yes delete" />
+      <div className="modal-actions">
+        <button className="btn btn-secondary" onClick={() => setDanger(false)}>CANCEL</button>
+        <button className="btn btn-danger" disabled={phrase !== 'yes delete'} onClick={async () => { if (await run('/api/reset-game', { confirmation: phrase })) { setDanger(false); onReset(); } }}>DELETE EVERYTHING</button>
+      </div>
+    </div></div>}
+  </div>;
+}
