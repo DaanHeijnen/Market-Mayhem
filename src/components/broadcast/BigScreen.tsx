@@ -55,7 +55,7 @@ function PlayerGraph({ players }: { players: any[] }) {
     <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-label="Player value history relative to starting balance">
       <g className="grid-lines">{[0, 1, 2, 3, 4].map(i => <line key={i} x1={pad} x2={w - pad} y1={pad + i * (h - pad * 2) / 4} y2={pad + i * (h - pad * 2) / 4} />)}</g>
       <line className="graph-baseline" x1={pad} x2={w - pad} y1={mid} y2={mid} />
-      {players.map(p => <polyline key={p.id} points={(p.series || []).map((x: any) => point(Number(x.x), Number(x.balance) - Number(p.starting_balance))).join(' ')} fill="none" stroke={p.public_color} strokeWidth="6" vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" />)}
+      {players.map((p, index) => { const series = p.series || []; const last = series[series.length - 1]; const [cx, cy] = last ? point(Number(last.x), Number(last.balance) - Number(p.starting_balance)).split(',').map(Number) : [pad, mid]; return <g key={p.id}><polyline className="graph-line" style={{ animationDelay: `${0.05 + index * 0.15}s` }} points={series.map((x: any) => point(Number(x.x), Number(x.balance) - Number(p.starting_balance))).join(' ')} fill="none" stroke={p.public_color} strokeWidth={index === 0 ? "7" : "6"} vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" /><circle className="graph-end-dot" style={{ animationDelay: `${1.7 + index * 0.2}s` }} cx={cx} cy={cy} r="7" fill={p.public_color} /></g>; })}
     </svg>
     <div className="graph-axis-label positive">GAIN</div><div className="graph-axis-label baseline">START</div><div className="graph-axis-label negative">LOSS</div>
     <div className="graph-legend">{players.map(p => <div key={p.id}><span className="legend-dot" style={{ background: p.public_color }} /><b>{p.display_name}</b><strong>{p.current_balance}</strong></div>)}</div>
@@ -85,7 +85,7 @@ function Ticker({ items }: { items: any[] }) {
 function BlockScene({ block, round }: { block: any; round: any }) {
   if (block.type === 'DUOLINGO_QUESTION') return <DuolingoScene block={block} round={round} />;
   const question = block.type === 'QUESTION';
-  return <Scene><div className="scene-eyebrow">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'ROUND CONTENT'}</div><div className="scene-kicker">{question ? 'QUESTION' : 'ROUND NOTE'}</div>{block.title && <h1>{block.title}</h1>}{block.payload?.body && <p className="scene-body">{block.payload.body}</p>}</Scene>;
+  return <Scene className={question ? 'question-scene' : 'text-scene'}><div className="scene-eyebrow">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'ROUND CONTENT'}</div><div className="scene-kicker">{question ? 'QUESTION' : 'ROUND NOTE'}</div>{block.title && <h1>{block.title}</h1>}{block.payload?.body && <p className="scene-body">{block.payload.body}</p>}</Scene>;
 }
 
 function DuolingoScene({ block, round }: { block: any; round: any }) {
@@ -101,7 +101,7 @@ function DuolingoScene({ block, round }: { block: any; round: any }) {
 
 function PredictionScene({ p, phase }: { p: any; phase: 'OPEN' | 'LOCKED' | 'RESULT' }) {
   if (phase === 'RESULT') return <div className={`prediction-screen result-${String(p.result).toLowerCase()}`}><div className="scene-eyebrow">PREDICTION #{p.number} · RESOLVED</div><h1>{p.result} WINS</h1><p>{p.question}</p><div className="big-odds"><div className="yes"><span>YES</span><b>@ {p.yesOdds.toFixed(2)}x</b></div><div className="no"><span>NO</span><b>@ {p.noOdds.toFixed(2)}x</b></div></div></div>;
-  return <div className="prediction-screen"><div className="scene-eyebrow">PREDICTION #{p.number}</div><h1>{phase === 'OPEN' ? 'PREDICTION OPEN' : 'MARKET LOCKED'}</h1><p>{p.question}</p><div className="big-odds"><div className="yes"><span>YES</span><b>@ {p.yesOdds.toFixed(2)}x</b></div><div className="no"><span>NO</span><b>@ {p.noOdds.toFixed(2)}x</b></div></div><div className="scene-footer">{phase === 'OPEN' ? 'PLACE YOUR BET ON YOUR PHONE' : 'NO MORE BETS · WAITING FOR RESULT'}</div></div>;
+  return <div className={`prediction-screen prediction-${phase.toLowerCase()}`}><div className="scene-eyebrow">PREDICTION #{p.number}</div><h1>{phase === 'OPEN' ? 'PREDICTION OPEN' : 'MARKET LOCKED'}</h1><p>{p.question}</p><div className="big-odds"><div className="yes"><span>YES</span><b>@ {p.yesOdds.toFixed(2)}x</b></div><div className="no"><span>NO</span><b>@ {p.noOdds.toFixed(2)}x</b></div></div><div className="scene-footer">{phase === 'OPEN' ? 'PLACE YOUR BET ON YOUR PHONE' : 'NO MORE BETS · WAITING FOR RESULT'}</div></div>;
 }
 
 function RouletteScene({ roulette: r, round, block }: { roulette: any; round: any; block: any }) {
@@ -112,5 +112,5 @@ function RouletteScene({ roulette: r, round, block }: { roulette: any; round: an
   </div>;
 }
 
-function Scene({ children }: { children: any }) { return <div className="screen-scene">{children}</div>; }
+function Scene({ children, className = '' }: { children: any; className?: string }) { return <div className={`screen-scene ${className}`}>{children}</div>; }
 function Stat({ label, value, coin = false }: { label: string; value: any; coin?: boolean }) { return <div className="screen-stat"><div className="label muted">{label}</div><div className="display">{coin && <CoinIcon size={24} />}{value}</div></div>; }

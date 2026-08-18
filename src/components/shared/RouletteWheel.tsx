@@ -16,7 +16,7 @@ export function RouletteWheel({ status, resultNumber }: { status?: string; resul
   const wheelBackground = useMemo(() => {
     const step = 360 / ORDER.length;
     return `conic-gradient(${ORDER.map((n, index) => {
-      const color = n === 0 ? '#064E3B' : RED.has(n) ? '#7F1D1D' : '#111827';
+      const color = n === 0 ? '#2FAF5B' : RED.has(n) ? '#E8352F' : '#14120F';
       return `${color} ${(index * step).toFixed(4)}deg ${((index + 1) * step).toFixed(4)}deg`;
     }).join(',')})`;
   }, []);

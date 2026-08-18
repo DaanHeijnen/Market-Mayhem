@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { RunMutation } from '../types';
 import { Card, CoinAmount, Empty, Status } from '../ui';
 
-const defaultColor = '#6366F1';
+const defaultColor = '#3D5AFE';
 
 type Adjustment = { playerId: number; amount: string; reason: string; roundId: string; idempotencyKey: string } | null;
 
@@ -77,8 +77,8 @@ export function PlayersPage({ state: s, gameId, run, setMsg }: { state: any; gam
       </div>
     </Card>
 
-    {s.players.length === 0 ? <Empty title="No players yet — Add your first player" /> : <div className="card-list">
-      {s.players.map((player: any) => <Card key={player.id} className={!player.active ? 'is-muted-card' : ''}>
+    {s.players.length === 0 ? <Empty title="No players yet — Add your first player" /> : <div className="card-list player-list">
+      {s.players.map((player: any) => <Card key={player.id} className={`player-card ${!player.active ? 'is-muted-card' : ''}`}>
         <div className="player-row">
           <div className="player-identity">
             <span className="player-dot" style={{ background: player.public_color }} />

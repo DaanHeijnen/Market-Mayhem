@@ -83,8 +83,8 @@ export function PredictionsPage({ state: s, run }: { state: any; run: RunMutatio
       </div>
     </Card>
 
-    {s.predictions.length === 0 ? <Empty title="No predictions yet — Create a market" /> : <div className="card-list">
-      {s.predictions.map((prediction: any) => <Card key={prediction.id} className={['SETTLED','CANCELLED'].includes(prediction.status) ? 'settled-admin-card' : ''}>
+    {s.predictions.length === 0 ? <Empty title="No predictions yet — Create a market" /> : <div className="card-list prediction-list">
+      {s.predictions.map((prediction: any) => <Card key={prediction.id} className={`prediction-card prediction-${String(prediction.status).toLowerCase()} ${['SETTLED','CANCELLED'].includes(prediction.status) ? 'settled-admin-card' : ''}`}>
         <div className="row-between">
           <div><div className="label muted">PREDICTION #{prediction.display_number}{prediction.round_number ? ` · R${String(prediction.round_number).padStart(2, '0')}` : ''}</div><div className="display row-title">{prediction.question}</div></div>
           <Status tone={prediction.status === 'OPEN' ? 'open' : prediction.status === 'CANCELLED' ? 'danger' : prediction.status === 'SETTLED' ? 'success' : 'neutral'}>{visibleStatus(prediction)}</Status>
