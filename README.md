@@ -22,11 +22,11 @@ Manual coin changes from **Admin → Control** require a written reason. That re
 1. Unzip this project and push all files to a new GitHub repository.
 2. Import the repository into Netlify.
 3. Netlify detects `@netlify/database`; create/enable Netlify Database if prompted.
-4. Set `ADMIN_USERNAME`, `ADMIN_PASSWORD`, and `SESSION_SECRET` in Netlify environment variables.
+4. Set `ADMIN_USERNAME` and either `ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH` in Netlify environment variables.
 5. Deploy. Migrations in `netlify/database/migrations/` are applied automatically by Netlify Database.
 6. Open `/admin/1`, `/screen/1`, and generate player join links through the `player-join-link` API/admin extension as needed.
 
-Use a plain `ADMIN_PASSWORD` value in Netlify. No local hashing command is required.
+A plain `ADMIN_PASSWORD` works. For a hashed secret instead, run `npm run admin:hash -- "your password"`, leave `ADMIN_PASSWORD` unset, and set the generated value as `ADMIN_PASSWORD_HASH`.
 
 ## Option B — local development
 ```bash
@@ -37,6 +37,8 @@ npx netlify database migrations apply
 npm run dev
 ```
 Then open `http://localhost:8888/admin/1` and `http://localhost:8888/screen/1`.
+
+The repository intentionally does not ship the previously incomplete `package-lock.json`. The first successful `npm install` generates a complete lockfile; commit that generated file if you want reproducible `npm ci` deployments.
 
 ## Live Update Speed / Netlify Credit Usage
 All polling numbers live in exactly one file: `src/config/live.ts`.
@@ -54,7 +56,7 @@ Big Screen uses `BIG_SCREEN_POLL_MS`; Admin uses `ADMIN_POLL_MS`; idle mobile us
 
 **Lower milliseconds = faster updates = potentially higher platform usage. Higher milliseconds = slower updates = lower platform usage.**
 
-Polling only requests the tiny game version. A targeted interface snapshot is fetched only when that version changes. Local successful mutations trigger an immediate refresh. No overlapping polls are allowed; hidden tabs are throttled.
+Polling only requests the tiny game version. A targeted interface snapshot is fetched only when that version changes. Local successful mutations trigger an immediate refresh. No overlapping polls are allowed; hidden tabs are throttled. Mobile clients automatically use the faster interval only while voting or betting is active.
 
 ## Security and economy
 The PostgreSQL database is the source of truth. Wallet changes, bet placement, and settlement happen server-side in PostgreSQL transactions. Ledger history is immutable. Retried financial requests use idempotency keys. Player sessions are opaque HttpOnly cookies and never trust a browser-supplied player id.
@@ -68,4 +70,4 @@ npm run build
 See `docs/ARCHITECTURE.md` and `docs/DATABASE.md` for the state machine, ERD, wallet invariants, polling design and deployment model.
 
 ## Database initialization
-The migration history includes the original prototype seed followed by a cleanup migration that leaves game `1` empty for real use. On both fresh deployments and upgrades from the demo build, the resulting Market Mayhem game starts with no players, rounds, predictions, bets, or ledger entries.
+The migration history includes the original prototype seed followed by a guarded cleanup migration. On a fresh database, the untouched prototype seed is removed and game `1` starts empty. On an upgrade, game `1` is preserved whenever it no longer matches the untouched demo fingerprint, so real game data is never deleted merely because it uses ID `1`.

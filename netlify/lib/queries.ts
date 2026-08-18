@@ -12,12 +12,15 @@ export async function getScreenState(gameId: number) {
   const gameResult = await pool.query(
     `SELECT g.id, g.name, g.game_state_version, g.current_screen_mode,
             r.id AS round_id, r.round_number, r.title AS round_title, r.status AS round_status,
-            s.mode, s.payload, s.updated_at,
+            s.mode,
             p.id AS prediction_id, p.display_number, p.question, p.status AS prediction_status,
             p.crowd_yes_probability, p.crowd_no_probability, p.yes_odds, p.no_odds, p.result
        FROM game_nights g
-       LEFT JOIN rounds r ON r.id = g.current_round_id
        LEFT JOIN screen_state s ON s.game_night_id = g.id
+       LEFT JOIN rounds r ON r.id = CASE
+         WHEN COALESCE(s.mode, g.current_screen_mode) = 'DASHBOARD' THEN g.current_round_id
+         ELSE s.round_id
+       END
        LEFT JOIN predictions p ON p.id = s.prediction_id
       WHERE g.id = $1`, [gameId]
   );
@@ -26,7 +29,7 @@ export async function getScreenState(gameId: number) {
 
   const leaderboardResult = await pool.query(
     `SELECT p.id, p.display_name, p.public_color, w.current_balance,
-            DENSE_RANK() OVER (ORDER BY w.current_balance DESC, p.display_name ASC) AS rank
+            DENSE_RANK() OVER (ORDER BY w.current_balance DESC) AS rank
        FROM players p JOIN wallets w ON w.player_id = p.id
       WHERE p.game_night_id = $1 AND p.active = TRUE
       ORDER BY w.current_balance DESC, p.display_name ASC`, [gameId]
@@ -40,7 +43,7 @@ export async function getScreenState(gameId: number) {
        LEFT JOIN rounds r ON r.id = l.attributed_round_id
        LEFT JOIN predictions pr ON pr.id = l.prediction_id
       WHERE l.game_night_id = $1 AND p.active=TRUE
-      ORDER BY l.created_at DESC, l.id DESC LIMIT 16`, [gameId]
+      ORDER BY l.created_at DESC, l.id DESC LIMIT 6`, [gameId]
   );
 
   const totalsResult = await pool.query(
@@ -49,23 +52,6 @@ export async function getScreenState(gameId: number) {
                       WHERE p.game_night_id=$1 AND b.status='ACTIVE'),0)::int AS locked_stakes,
             COALESCE((SELECT COUNT(*) FROM predictions WHERE game_night_id=$1 AND status='BETTING'),0)::int AS markets_open`, [gameId]
   );
-
-  const ledgerChronology = await pool.query(
-    `SELECT l.player_id, p.display_name, p.public_color, l.amount, l.created_at, l.id
-       FROM ledger_entries l JOIN players p ON p.id=l.player_id
-      WHERE l.game_night_id=$1 AND p.active=TRUE
-      ORDER BY l.created_at ASC, l.id ASC`, [gameId]
-  );
-  const series = new Map<number, { playerId:number; name:string; color:string; balance:number; points:{x:number;y:number;at:string}[] }>();
-  let x = 0;
-  for (const row of ledgerChronology.rows) {
-    x += 1;
-    const playerId = Number(row.player_id);
-    const current = series.get(playerId) || { playerId, name: row.display_name, color: row.public_color, balance: 0, points: [] as {x:number;y:number;at:string}[] };
-    current.balance += Number(row.amount);
-    current.points.push({ x, y: current.balance, at: row.created_at });
-    series.set(playerId, current);
-  }
 
   const total = totalsResult.rows[0];
   return {
@@ -84,7 +70,6 @@ export async function getScreenState(gameId: number) {
     ticker: tickerResult.rows.map((r:any) => ({ ...r, id: Number(r.id), amount: Number(r.amount) })),
     marketsOpen: Number(total.markets_open),
     totalCoinsInPlay: Number(total.wallet_total) + Number(total.locked_stakes),
-    graphSeries: [...series.values()].map(({ balance: _balance, ...rest }) => rest),
   };
 }
 
@@ -92,12 +77,14 @@ export async function getPlayerState(gameId: number, playerId: number) {
   const pool = database().pool;
   const playerResult = await pool.query(
     `WITH ranked AS (
-       SELECT p.id, p.display_name, p.public_color, p.team_id, w.current_balance,
-              DENSE_RANK() OVER (ORDER BY w.current_balance DESC, p.display_name ASC) AS rank
-       FROM players p JOIN wallets w ON w.player_id=p.id
+       SELECT p.id, p.display_name, p.public_color, w.current_balance, g.game_state_version,
+              DENSE_RANK() OVER (ORDER BY w.current_balance DESC) AS rank
+       FROM players p
+       JOIN wallets w ON w.player_id=p.id
+       JOIN game_nights g ON g.id=p.game_night_id
        WHERE p.game_night_id=$1 AND p.active=TRUE
      )
-     SELECT r.*, t.name AS team_name FROM ranked r LEFT JOIN teams t ON t.id=r.team_id WHERE r.id=$2`, [gameId, playerId]
+     SELECT r.* FROM ranked r WHERE r.id=$2`, [gameId, playerId]
   );
   const player = playerResult.rows[0];
   if (!player) throw new HttpError(404, 'Player not found');
@@ -105,7 +92,7 @@ export async function getPlayerState(gameId: number, playerId: number) {
     `SELECT id, amount, transaction_type, description, created_at,
             attributed_round_id, prediction_id
        FROM ledger_entries WHERE game_night_id=$1 AND player_id=$2
-       ORDER BY created_at DESC, id DESC LIMIT 25`, [gameId, playerId]
+       ORDER BY created_at DESC, id DESC LIMIT 8`, [gameId, playerId]
   );
   const predictionResult = await pool.query(
     `SELECT id, display_number, question, status, crowd_yes_probability, crowd_no_probability, yes_odds, no_odds, result
@@ -124,7 +111,8 @@ export async function getPlayerState(gameId: number, playerId: number) {
     ownBet = bet.rows[0] ? { ...bet.rows[0], id: Number(bet.rows[0].id), stake: Number(bet.rows[0].stake), odds_snapshot: Number(bet.rows[0].odds_snapshot), potential_return: Number(bet.rows[0].potential_return) } : null;
   }
   return {
-    player: { id: Number(player.id), name: player.display_name, color: player.public_color, team: player.team_name, balance: Number(player.current_balance), rank: Number(player.rank) },
+    version: Number(player.game_state_version),
+    player: { id: Number(player.id), name: player.display_name, color: player.public_color, balance: Number(player.current_balance), rank: Number(player.rank) },
     recentLedger: ledger.rows.map((r:any) => ({ ...r, id: Number(r.id), amount: Number(r.amount) })),
     prediction: prediction ? {
       id: Number(prediction.id), number: prediction.display_number, question: prediction.question, status: prediction.status,
@@ -145,14 +133,14 @@ export async function getAdminState(gameId: number) {
 
   const rounds = await pool.query(`SELECT * FROM rounds WHERE game_night_id=$1 ORDER BY round_number ASC`, [gameId]);
   const players = await pool.query(
-    `SELECT p.id,p.display_name,p.public_color,p.admin_notes,p.active,t.name AS team_name,w.current_balance,
-            DENSE_RANK() OVER (ORDER BY w.current_balance DESC,p.display_name ASC) AS rank
-       FROM players p JOIN wallets w ON w.player_id=p.id LEFT JOIN teams t ON t.id=p.team_id
+    `SELECT p.id,p.display_name,p.public_color,w.current_balance,
+            DENSE_RANK() OVER (ORDER BY w.current_balance DESC) AS rank
+       FROM players p JOIN wallets w ON w.player_id=p.id
       WHERE p.game_night_id=$1 AND p.active=TRUE ORDER BY p.display_name`, [gameId]
   );
   const predictions = await pool.query(
     `SELECT p.*,
-            (SELECT COUNT(*) FROM prediction_votes v WHERE v.prediction_id=p.id)::int AS vote_count,
+            (SELECT COUNT(*) FROM prediction_votes v JOIN players vp ON vp.id=v.player_id WHERE v.prediction_id=p.id AND vp.active=TRUE)::int AS vote_count,
             (SELECT COUNT(*) FROM bets b WHERE b.prediction_id=p.id)::int AS bet_count,
             (SELECT COALESCE(SUM(stake),0) FROM bets b WHERE b.prediction_id=p.id AND side='YES')::int AS yes_pool,
             (SELECT COALESCE(SUM(stake),0) FROM bets b WHERE b.prediction_id=p.id AND side='NO')::int AS no_pool,
@@ -171,7 +159,6 @@ export async function getAdminState(gameId: number) {
       ORDER BY l.created_at DESC,l.id DESC LIMIT 30`, [gameId]
   );
   const screen = await pool.query(`SELECT * FROM screen_state WHERE game_night_id=$1`, [gameId]);
-  const audit = await pool.query(`SELECT * FROM admin_audit_log WHERE game_night_id=$1 ORDER BY created_at DESC,id DESC LIMIT 20`, [gameId]);
 
   const normalizedPredictions = predictions.rows.map((p:any) => ({
     ...p,
@@ -200,10 +187,8 @@ export async function getAdminState(gameId: number) {
     rounds: rounds.rows.map((r:any) => ({ ...r, id: Number(r.id), round_number: Number(r.round_number) })),
     players: players.rows.map((r:any) => ({ ...r, id: Number(r.id), current_balance: Number(r.current_balance), rank: Number(r.rank) })),
     predictions: normalizedPredictions,
-    prediction: normalizedPredictions.find((p:any) => !['SETTLED','CANCELLED'].includes(p.status)) || null,
     visiblePrediction: normalizedPredictions.find((p:any) => p.visible_to_players) || null,
     recentTransactions: recent.rows.map((r:any) => ({ ...r, id: Number(r.id), amount: Number(r.amount) })),
     screen: screen.rows[0] || { mode: 'DASHBOARD' },
-    audit: audit.rows.map((r:any) => ({ ...r, id: Number(r.id) })),
   };
 }

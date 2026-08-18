@@ -1,6 +1,6 @@
 import { requireAdmin, audit } from '../lib/auth';
 import { withTransaction } from '../lib/db';
-import { body, ok, intValue, textValue } from '../lib/http';
+import { body, ok, intValue, textValue, HttpError } from '../lib/http';
 import { incrementGameVersion } from '../lib/game-state';
 import { wrap } from './_wrap';
 
@@ -19,7 +19,7 @@ export default wrap(async (request) => {
         RETURNING id`,
       [gameId, name, startingBalance],
     );
-    if (!result.rows[0]) throw new Error('Game not found');
+    if (!result.rows[0]) throw new HttpError(404, 'Game not found');
     await audit(client, gameId, admin.username, 'updated game settings', 'game', gameId, { name, startingBalance });
     return { version: await incrementGameVersion(client, gameId) };
   }));

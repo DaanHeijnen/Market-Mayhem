@@ -28,22 +28,28 @@ export function errorResponse(error: unknown) {
 }
 
 export async function body<T extends Record<string, unknown>>(request: Request): Promise<T> {
+  let parsed: unknown;
   try {
-    return await request.json() as T;
+    parsed = await request.json();
   } catch {
     throw new HttpError(400, 'Invalid JSON body');
   }
-}
-
-export function requireMethod(request: Request, ...allowed: string[]) {
-  if (!allowed.includes(request.method.toUpperCase())) {
-    throw new HttpError(405, `Method ${request.method} not allowed`);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new HttpError(400, 'JSON body must be an object');
   }
+  return parsed as T;
 }
 
 export function intValue(value: unknown, field: string, options: { min?: number; max?: number } = {}) {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  if (!Number.isInteger(parsed)) throw new HttpError(400, `${field} must be an integer`);
+  let parsed: number;
+  if (typeof value === 'number') {
+    parsed = value;
+  } else if (typeof value === 'string' && /^-?\d+$/.test(value.trim())) {
+    parsed = Number(value.trim());
+  } else {
+    throw new HttpError(400, `${field} must be an integer`);
+  }
+  if (!Number.isSafeInteger(parsed)) throw new HttpError(400, `${field} must be an integer`);
   if (options.min !== undefined && parsed < options.min) throw new HttpError(400, `${field} must be at least ${options.min}`);
   if (options.max !== undefined && parsed > options.max) throw new HttpError(400, `${field} must be at most ${options.max}`);
   return parsed;
@@ -57,7 +63,8 @@ export function textValue(value: unknown, field: string, max = 500) {
 }
 
 export function requestIdempotencyKey(request: Request, fallback?: unknown) {
-  const key = request.headers.get('idempotency-key') || (typeof fallback === 'string' ? fallback : '');
+  const raw = request.headers.get('idempotency-key') || (typeof fallback === 'string' ? fallback : '');
+  const key = raw.trim();
   if (!key || key.length > 160) throw new HttpError(400, 'A valid Idempotency-Key header is required');
   return key;
 }

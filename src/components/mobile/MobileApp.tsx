@@ -1,17 +1,32 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useGamePolling } from '../../hooks/useGamePolling';
 import { mutation } from '../../lib/api';
 
 export function MobileApp({ gameId }: { gameId: number }) {
-  const { data: s, error, refresh } = useGamePolling<any>(gameId, 'mobile', `/api/player-state?gameId=${gameId}`, true);
+  const { data: s, error, refresh } = useGamePolling<any>(gameId, 'mobile', `/api/player-state?gameId=${gameId}`);
   const [vote, setVote] = useState(50);
   const [side, setSide] = useState<'YES'|'NO'>('YES');
   const [stake, setStake] = useState(20);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  const p = s?.prediction;
+  const balance = Number(s?.player?.balance || 0);
+  const maxStake = Math.min(500, balance);
+
+  useEffect(() => {
+    if (p?.ownVote !== null && p?.ownVote !== undefined) setVote(Number(p.ownVote));
+  }, [p?.id, p?.ownVote]);
+
+  useEffect(() => {
+    if (p?.ownBet) {
+      setSide(p.ownBet.side);
+      setStake(Number(p.ownBet.stake));
+      return;
+    }
+    if (balance >= 5) setStake((current) => Math.min(Math.max(5, current), Math.min(500, balance)));
+  }, [balance, p?.id, p?.ownBet]);
 
   if (!s) return <Shell><div className="display">Open your player join link first.</div></Shell>;
-  const p = s.prediction;
   const act = async (fn: () => Promise<any>) => {
     setBusy(true); setMsg('');
     try { await fn(); await refresh(); }
@@ -42,16 +57,16 @@ export function MobileApp({ gameId }: { gameId: number }) {
           <div className="label">PREDICTION #{p.number} · MARKET OPEN</div>
           <h2 className="display">{p.question}</h2>
           <div style={{ display: 'flex', gap: 10 }}>
-            <button onClick={() => setSide('YES')} style={{ flex: 1, border: side === 'YES' ? '3px solid #14120F' : '0', background: '#2FAF5B', color: 'white', padding: 20, borderRadius: 22 }}><b>YES</b><div className="display" style={{ fontSize: 28 }}>{p.yesOdds?.toFixed(2)}×</div></button>
-            <button onClick={() => setSide('NO')} style={{ flex: 1, border: side === 'NO' ? '3px solid #14120F' : '0', background: '#E8352F', color: 'white', padding: 20, borderRadius: 22 }}><b>NO</b><div className="display" style={{ fontSize: 28 }}>{p.noOdds?.toFixed(2)}×</div></button>
+            <button disabled={!!p.ownBet} onClick={() => setSide('YES')} style={{ flex: 1, border: side === 'YES' ? '3px solid #14120F' : '0', background: '#2FAF5B', color: 'white', padding: 20, borderRadius: 22 }}><b>YES</b><div className="display" style={{ fontSize: 28 }}>{p.yesOdds?.toFixed(2)}×</div></button>
+            <button disabled={!!p.ownBet} onClick={() => setSide('NO')} style={{ flex: 1, border: side === 'NO' ? '3px solid #14120F' : '0', background: '#E8352F', color: 'white', padding: 20, borderRadius: 22 }}><b>NO</b><div className="display" style={{ fontSize: 28 }}>{p.noOdds?.toFixed(2)}×</div></button>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <button className="btn" onClick={() => setStake(Math.max(5, stake - 5))}>−</button>
+            <button className="btn" disabled={!!p.ownBet || maxStake < 5} onClick={() => setStake(Math.max(5, stake - 5))}>−</button>
             <div className="display" style={{ fontSize: 32, flex: 1, textAlign: 'center' }}>{stake}</div>
-            <button className="btn btn-lime" onClick={() => setStake(Math.min(s.player.balance, stake + 5))}>+</button>
+            <button className="btn btn-lime" disabled={!!p.ownBet || maxStake < 5} onClick={() => setStake(Math.min(maxStake, stake + 5))}>+</button>
           </div>
           <div>Potential return: <b>{Math.round(stake * (side === 'YES' ? p.yesOdds : p.noOdds))} coins</b></div>
-          <button disabled={busy || !!p.ownBet} className="btn btn-dark" onClick={() => act(() => mutation('/api/place-bet', { gameId, predictionId: p.id, side, stake }, true))}>{p.ownBet ? 'BET PLACED' : `PLACE ${stake} COINS ON ${side}`}</button>
+          <button disabled={busy || !!p.ownBet || stake > balance || stake < 5 || stake > 500} className="btn btn-dark" onClick={() => act(() => mutation('/api/place-bet', { gameId, predictionId: p.id, side, stake }, true))}>{p.ownBet ? 'BET PLACED' : `PLACE ${stake} COINS ON ${side}`}</button>
         </Card>
       ) : p ? (
         <Card>

@@ -12,11 +12,18 @@ export default wrap(async (request) => {
   const session = await requirePlayer(request, gameId);
 
   return ok(await withTransaction(async (client) => {
+    const player = await client.query(
+      'SELECT active FROM players WHERE id=$1 AND game_night_id=$2 FOR UPDATE',
+      [session.playerId, gameId],
+    );
+    if (!player.rows[0]?.active) throw new HttpError(403, 'Player is no longer active');
+
     const p = await client.query(
       'SELECT status,visible_to_players FROM predictions WHERE id=$1 AND game_night_id=$2 FOR UPDATE',
       [predictionId, gameId],
     );
-    if (p.rows[0]?.status !== 'VOTING') throw new HttpError(409, 'Voting is closed');
+    if (!p.rows[0]) throw new HttpError(404, 'Prediction not found');
+    if (p.rows[0].status !== 'VOTING') throw new HttpError(409, 'Voting is closed');
     if (!p.rows[0].visible_to_players) throw new HttpError(409, 'This prediction is hidden from players');
     await client.query(
       `INSERT INTO prediction_votes(prediction_id,player_id,yes_probability)

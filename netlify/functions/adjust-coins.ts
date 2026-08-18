@@ -11,21 +11,24 @@ export default wrap(async (request) => {
   const playerId = intValue(payload.playerId, 'playerId', { min: 1 });
   const amount = intValue(payload.amount, 'amount');
   if (amount === 0) throw new HttpError(400, 'amount cannot be zero');
+  if (Math.abs(amount) > 1_000_000) throw new HttpError(400, 'amount is too large');
   const reason = textValue(payload.reason, 'reason', 300);
-  const roundId = payload.roundId ? intValue(payload.roundId, 'roundId', { min: 1 }) : null;
+  const roundId = payload.roundId == null ? null : intValue(payload.roundId, 'roundId', { min: 1 });
   const key = requestIdempotencyKey(request);
 
   const result = await withTransaction(async (client) => {
     const existing = await client.query('SELECT id FROM ledger_entries WHERE game_night_id=$1 AND idempotency_key=$2', [gameId, key]);
     if (existing.rows[0]) return { duplicate: true };
+    const player = await client.query(
+      'SELECT active FROM players WHERE id=$1 AND game_night_id=$2 FOR UPDATE',
+      [playerId, gameId],
+    );
+    if (!player.rows[0]?.active) throw new HttpError(404, 'Active player not found');
     const wallet = await client.query(
-      `SELECT w.current_balance
-         FROM wallets w JOIN players p ON p.id=w.player_id
-        WHERE w.game_night_id=$1 AND w.player_id=$2 AND p.active=TRUE
-        FOR UPDATE`,
+      'SELECT current_balance FROM wallets WHERE game_night_id=$1 AND player_id=$2 FOR UPDATE',
       [gameId, playerId],
     );
-    if (!wallet.rows[0]) throw new HttpError(404, 'Active player wallet not found');
+    if (!wallet.rows[0]) throw new HttpError(404, 'Player wallet not found');
     if (Number(wallet.rows[0].current_balance) + amount < 0) throw new HttpError(409, 'Adjustment would make wallet negative');
     if (roundId) {
       const round = await client.query('SELECT id FROM rounds WHERE id=$1 AND game_night_id=$2', [roundId, gameId]);

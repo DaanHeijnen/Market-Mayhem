@@ -28,7 +28,11 @@ export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>)
     await client.query('COMMIT');
     return result;
   } catch (error) {
-    await client.query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // Preserve the original transaction error if the connection is already broken.
+    }
     throw error;
   } finally {
     client.release();
