@@ -13,6 +13,8 @@ export default wrap(async (request) => {
   const description = typeof payload.description === 'string' ? payload.description.trim().slice(0, 1000) : '';
 
   return created(await withTransaction(async (client) => {
+    const game = await client.query('SELECT id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
+    if (!game.rows[0]) throw new HttpError(404, 'Game not found');
     const dup = await client.query('SELECT id FROM rounds WHERE game_night_id=$1 AND round_number=$2', [gameId, roundNumber]);
     if (dup.rows[0]) throw new HttpError(409, `Round ${roundNumber} already exists`);
     const row = await client.query(

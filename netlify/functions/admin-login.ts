@@ -7,7 +7,6 @@ import {
   sha256,
   verifyPassword,
   ADMIN_COOKIE,
-  assertSessionSecret,
 } from '../lib/security';
 import { wrap } from './_wrap';
 
@@ -20,11 +19,13 @@ function safeTextEqual(a: string, b: string) {
 }
 
 export default wrap(async (request) => {
-  assertSessionSecret();
-
   const payload = await body<any>(request);
-  const username = String(payload.username || '');
-  const password = String(payload.password || '');
+  if (typeof payload.username !== 'string' || typeof payload.password !== 'string') {
+    throw new HttpError(400, 'username and password must be strings');
+  }
+  const username = payload.username;
+  const password = payload.password;
+  if (username.length > 100 || password.length > 1024) throw new HttpError(400, 'Credentials are too long');
 
   const expectedUsername = process.env.ADMIN_USERNAME || 'admin';
   const plainPassword = process.env.ADMIN_PASSWORD || '';

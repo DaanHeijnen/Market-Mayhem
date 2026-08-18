@@ -9,10 +9,12 @@ export default wrap(async (request) => {
   const payload = await body<any>(request);
   const gameId = intValue(payload.gameId, 'gameId', { min: 1 });
   const question = textValue(payload.question, 'question', 300);
-  const roundId = payload.roundId ? intValue(payload.roundId, 'roundId', { min: 1 }) : null;
-  const requestedNumber = payload.displayNumber ? intValue(payload.displayNumber, 'displayNumber', { min: 1, max: 9999 }) : null;
+  const roundId = payload.roundId == null ? null : intValue(payload.roundId, 'roundId', { min: 1 });
+  const requestedNumber = payload.displayNumber == null ? null : intValue(payload.displayNumber, 'displayNumber', { min: 1, max: 9999 });
 
   return created(await withTransaction(async (client) => {
+    const game = await client.query('SELECT id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
+    if (!game.rows[0]) throw new HttpError(404, 'Game not found');
     if (roundId) {
       const round = await client.query('SELECT id FROM rounds WHERE id=$1 AND game_night_id=$2', [roundId, gameId]);
       if (!round.rows[0]) throw new HttpError(404, 'Round not found');

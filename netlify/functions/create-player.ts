@@ -35,11 +35,6 @@ export default wrap(async (request) => {
         [gameId, playerId, startingBalance, admin.username],
       );
     }
-    await client.query(
-      `INSERT INTO player_timers(player_id,timer_duration_seconds,timer_status)
-       VALUES($1,180,'RESET') ON CONFLICT DO NOTHING`,
-      [playerId],
-    );
     await audit(client, gameId, admin.username, `created player ${displayName}`, 'player', playerId, { startingBalance });
     return { playerId, version: await incrementGameVersion(client, gameId) };
   }));

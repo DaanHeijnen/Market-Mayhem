@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useGamePolling } from '../../hooks/useGamePolling';
 import { api, mutation } from '../../lib/api';
 
@@ -12,15 +12,21 @@ export function AdminApp({ gameId }: AdminAppProps) {
   const [page, setPage] = useState<Page>('CONTROL');
   const [msg, setMsg] = useState('');
 
-  const run = async (path: string, body: any, idempotent = false) => {
+  const run = async (path: string, body: any, idempotent = false): Promise<boolean> => {
     setMsg('');
     try {
       await mutation(path, { gameId, ...body }, idempotent);
-      await refresh();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'Failed');
-      throw e;
+      return false;
     }
+
+    try {
+      await refresh();
+    } catch (e) {
+      setMsg(`Change saved, but live refresh failed: ${e instanceof Error ? e.message : 'connection error'}`);
+    }
+    return true;
   };
 
   if (!s) {
@@ -108,8 +114,9 @@ function ControlPage({ state: s, gameId, run }: { state: any; gameId: number; ru
 
   const adjust = async (sign: 1 | -1) => {
     if (!playerId || !reason.trim()) return;
-    await run('/api/adjust-coins', { playerId, amount: sign * amount, reason: reason.trim(), roundId: roundId || null }, true);
-    setReason('');
+    if (await run('/api/adjust-coins', { playerId, amount: sign * amount, reason: reason.trim(), roundId: roundId || null }, true)) {
+      setReason('');
+    }
   };
 
   return (
@@ -229,8 +236,9 @@ function RoundsPage({ state: s, run }: { state: any; run: any }) {
           <input className="field" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Round title" />
           <textarea className="field" rows={4} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Description (optional)" />
           <button className="btn btn-dark" disabled={!form.title.trim() || !form.roundNumber} onClick={async () => {
-            await run('/api/create-round', form);
-            setForm({ roundNumber: form.roundNumber + 1, title: '', description: '' });
+            if (await run('/api/create-round', form)) {
+              setForm({ roundNumber: form.roundNumber + 1, title: '', description: '' });
+            }
           }}>+ CREATE ROUND</button>
         </div>
       </div>
@@ -245,7 +253,7 @@ function RoundsPage({ state: s, run }: { state: any; run: any }) {
               {r.description && <div className="muted" style={{ marginTop: 3 }}>{r.description}</div>}
             </div>
             <span className="pill" style={{ padding: '8px 12px', background: r.status === 'ACTIVE' ? '#DFF24C' : '#F0ECDB', fontWeight: 800 }}>{r.status}</span>
-            {r.status !== 'ACTIVE' && <button className="btn btn-dark" onClick={() => run('/api/start-round', { roundId: r.id })}>START</button>}
+            {r.status === 'UPCOMING' && <button className="btn btn-dark" onClick={() => run('/api/start-round', { roundId: r.id })}>START</button>}
             {r.status === 'ACTIVE' && <button className="btn btn-lime" onClick={() => run('/api/complete-round', { roundId: r.id })}>COMPLETE</button>}
             {r.status === 'UPCOMING' && <button className="btn btn-red" onClick={() => confirm(`Delete R${r.round_number} ${r.title}?`) && run('/api/delete-round', { roundId: r.id })}>DELETE</button>}
           </div>
@@ -279,7 +287,7 @@ function PlayersPage({ state: s, gameId, run, setMsg }: { state: any; gameId: nu
         <div style={{ display: 'grid', gap: 10 }}>
           <input className="field" placeholder="Player name" value={name} onChange={(e) => setName(e.target.value)} />
           <label className="field" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>Player color <input type="color" value={color} onChange={(e) => setColor(e.target.value)} /></label>
-          <button className="btn btn-dark" disabled={!name.trim()} onClick={async () => { await run('/api/create-player', { displayName: name.trim(), color }); setName(''); }}>+ ADD PLAYER</button>
+          <button className="btn btn-dark" disabled={!name.trim()} onClick={async () => { if (await run('/api/create-player', { displayName: name.trim(), color })) setName(''); }}>+ ADD PLAYER</button>
         </div>
       </div>
 
@@ -318,13 +326,14 @@ function PredictionsPage({ state: s, run }: { state: any; run: any }) {
             {s.rounds.map((r: any) => <option key={r.id} value={r.id}>R{String(r.round_number).padStart(2, '0')} · {r.title}</option>)}
           </select>
           <button className="btn btn-dark" disabled={!form.question.trim()} onClick={async () => {
-            await run('/api/create-prediction', { displayNumber: form.displayNumber, question: form.question.trim(), roundId: form.roundId || null });
-            setForm({ displayNumber: form.displayNumber + 1, question: '', roundId: '' });
+            if (await run('/api/create-prediction', { displayNumber: form.displayNumber, question: form.question.trim(), roundId: form.roundId || null })) {
+              setForm({ displayNumber: form.displayNumber + 1, question: '', roundId: '' });
+            }
           }}>+ CREATE PREDICTION</button>
         </div>
         <div style={{ marginTop: 18, padding: 16, borderRadius: 18, background: '#F0ECDB' }}>
           <b>Visibility is independent from phase.</b>
-          <p className="muted" style={{ marginBottom: 0 }}>You can open voting or betting while keeping a prediction hidden. Players only see the one prediction you explicitly mark visible.</p>
+          <p className="muted" style={{ marginBottom: 0 }}>You can open voting or betting while keeping a prediction hidden. Hidden phase changes stay backstage; when you show a live prediction, the Big Screen is cued to that phase and players can act on their phones.</p>
         </div>
       </div>
 
