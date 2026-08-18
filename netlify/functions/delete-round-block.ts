@@ -19,24 +19,20 @@ export default wrap(async request => {
     );
     if (!b.rows[0]) throw new HttpError(404, 'Round block not found');
     if (b.rows[0].status === 'COMPLETED') throw new HttpError(409, 'Completed round content is read-only');
-
-    const rouletteHistory = await client.query(
-      `SELECT rg.id,rg.status FROM roulette_games rg
-       WHERE rg.round_block_id=$1
-         AND (rg.status<>'CANCELLED' OR EXISTS(SELECT 1 FROM roulette_bets rb WHERE rb.roulette_game_id=rg.id))
-         AND rg.status<>'DRAFT'
-       LIMIT 1 FOR UPDATE`, [blockId]);
-    if (rouletteHistory.rows[0]) throw new HttpError(409, 'A block with roulette history cannot be deleted');
+    const questionHistory = await client.query('SELECT 1 FROM round_question_answers WHERE round_block_id=$1 LIMIT 1', [blockId]);
+    if (questionHistory.rows[0]) throw new HttpError(409, 'Live-question history must be preserved; keep this block');
     await client.query(
       `DELETE FROM roulette_games rg WHERE rg.round_block_id=$1
-       AND (rg.status='DRAFT' OR (rg.status='CANCELLED' AND NOT EXISTS(SELECT 1 FROM roulette_bets rb WHERE rb.roulette_game_id=rg.id)))`, [blockId]);
+       AND (rg.status='DRAFT' OR (rg.status='CANCELLED' AND NOT EXISTS(SELECT 1 FROM roulette_bets rb WHERE rb.roulette_game_id=rg.id)))`, [blockId],
+    );
+    const rouletteHistory = await client.query('SELECT 1 FROM roulette_games WHERE round_block_id=$1 LIMIT 1', [blockId]);
+    if (rouletteHistory.rows[0]) throw new HttpError(409, 'Roulette history must be preserved; keep this block');
     await clearScreenIfReferences(client, gameId, admin.username, { blockId });
     await client.query('UPDATE game_nights SET current_round_block_id=NULL WHERE id=$1 AND current_round_block_id=$2', [gameId, blockId]);
     await client.query('DELETE FROM round_blocks WHERE id=$1', [blockId]);
     await client.query(
-      `WITH ordered AS (
-         SELECT id,ROW_NUMBER() OVER(ORDER BY sort_order,id)-1 AS n FROM round_blocks WHERE round_id=$1
-       ) UPDATE round_blocks b SET sort_order=o.n,updated_at=NOW() FROM ordered o WHERE b.id=o.id`,
+      `WITH ordered AS (SELECT id,ROW_NUMBER() OVER(ORDER BY sort_order,id)-1 AS n FROM round_blocks WHERE round_id=$1)
+       UPDATE round_blocks b SET sort_order=o.n,updated_at=NOW() FROM ordered o WHERE b.id=o.id`,
       [b.rows[0].round_id],
     );
     await audit(client, gameId, admin.username, 'deleted round block', 'round_block', blockId);

@@ -19,9 +19,9 @@ export default wrap(async (request) => {
     if (existing.rows[0]) throw new HttpError(409, 'A player with this name already exists');
 
     const player = await client.query(
-      `INSERT INTO players(game_night_id,display_name,public_color,active)
-       VALUES($1,$2,$3,TRUE) RETURNING id`,
-      [gameId, displayName, color],
+      `INSERT INTO players(game_night_id,display_name,public_color,active,starting_balance_snapshot)
+       VALUES($1,$2,$3,TRUE,$4) RETURNING id`,
+      [gameId, displayName, color, Number(game.rows[0].starting_balance)],
     );
     const playerId = Number(player.rows[0].id);
     const startingBalance = Number(game.rows[0].starting_balance);

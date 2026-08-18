@@ -40,16 +40,7 @@ export async function setScreenMode(
   const blockId = options.blockId ?? null;
   const payload = { ...(typeof options.payload === 'object' && options.payload ? options.payload as object : {}), blockId };
 
-  if (mode !== 'ROULETTE') {
-    const currentScreen = await client.query('SELECT mode,payload FROM screen_state WHERE game_night_id=$1 FOR UPDATE', [gameId]);
-    if (currentScreen.rows[0]?.mode === 'ROULETTE') {
-      const currentRouletteId = Number(currentScreen.rows[0].payload?.rouletteGameId || 0) || null;
-      const liveRoulette = currentRouletteId
-        ? await client.query("SELECT id FROM roulette_games WHERE id=$1 AND game_night_id=$2 AND status IN ('OPEN','LOCKED','RESULT') FOR UPDATE", [currentRouletteId, gameId])
-        : await client.query("SELECT id FROM roulette_games WHERE game_night_id=$1 AND round_block_id=$2 AND status IN ('OPEN','LOCKED','RESULT') LIMIT 1 FOR UPDATE", [gameId, game.rows[0].current_round_block_id]);
-      if (liveRoulette.rows[0]) throw new HttpError(409, 'Settle or cancel the live roulette market before changing the projector');
-    }
-  }
+
 
   if (mode === 'DASHBOARD') {
     roundId = null;
@@ -102,13 +93,22 @@ export async function setActiveRoundBlock(client: PoolClient, gameId: number, ro
 
   const previousBlockId = Number(game.rows[0].current_round_block_id || 0) || null;
   if (previousBlockId && previousBlockId !== blockId) {
+    const previousQuestion = await client.query(
+      `SELECT interactive_status FROM round_blocks
+       WHERE id=$1 AND game_night_id=$2 AND type='DUOLINGO_QUESTION' FOR UPDATE`,
+      [previousBlockId, gameId],
+    );
+    if (previousQuestion.rows[0] && ['OPEN','CLOSED','REVEALED'].includes(previousQuestion.rows[0].interactive_status)) {
+      throw new HttpError(409, 'Finish the current live question before changing content');
+    }
+
     const previousRoulette = await client.query(
       `SELECT id,status FROM roulette_games
-       WHERE game_night_id=$1 AND round_block_id=$2 AND status IN ('DRAFT','OPEN','LOCKED','RESULT')
+       WHERE game_night_id=$1 AND round_block_id=$2 AND status IN ('DRAFT','OPEN','LOCKED','SPINNING','RESULT')
        ORDER BY id DESC LIMIT 1 FOR UPDATE`,
       [gameId, previousBlockId],
     );
-    if (previousRoulette.rows[0] && ['OPEN','LOCKED','RESULT'].includes(previousRoulette.rows[0].status)) {
+    if (previousRoulette.rows[0] && ['OPEN','LOCKED','SPINNING','RESULT'].includes(previousRoulette.rows[0].status)) {
       throw new HttpError(409, 'Finish or cancel the current roulette game before changing content');
     }
     if (previousRoulette.rows[0]?.status === 'DRAFT') {
@@ -121,7 +121,7 @@ export async function setActiveRoundBlock(client: PoolClient, gameId: number, ro
   if (block.rows[0].type === 'ROULETTE') {
     const otherLive = await client.query(
       `SELECT id,round_block_id,status FROM roulette_games
-       WHERE game_night_id=$1 AND round_block_id<>$2 AND status IN ('OPEN','LOCKED','RESULT')
+       WHERE game_night_id=$1 AND round_block_id<>$2 AND status IN ('OPEN','LOCKED','SPINNING','RESULT')
        LIMIT 1 FOR UPDATE`,
       [gameId, blockId],
     );
@@ -134,11 +134,11 @@ export async function setActiveRoundBlock(client: PoolClient, gameId: number, ro
     await client.query(
       `INSERT INTO roulette_games(game_night_id,round_id,round_block_id,status)
        SELECT $1,$2,$3,'DRAFT'
-       WHERE NOT EXISTS (SELECT 1 FROM roulette_games WHERE game_night_id=$1 AND round_block_id=$3 AND status IN ('DRAFT','OPEN','LOCKED','RESULT'))`,
+       WHERE NOT EXISTS (SELECT 1 FROM roulette_games WHERE game_night_id=$1 AND round_block_id=$3 AND status IN ('DRAFT','OPEN','LOCKED','SPINNING','RESULT'))`,
       [gameId, roundId, blockId],
     );
     const roulette = await client.query(
-      `SELECT id FROM roulette_games WHERE game_night_id=$1 AND round_block_id=$2 AND status IN ('DRAFT','OPEN','LOCKED','RESULT') ORDER BY id DESC LIMIT 1`,
+      `SELECT id FROM roulette_games WHERE game_night_id=$1 AND round_block_id=$2 AND status IN ('DRAFT','OPEN','LOCKED','SPINNING','RESULT') ORDER BY id DESC LIMIT 1`,
       [gameId, blockId],
     );
     await setScreenMode(client, gameId, 'ROULETTE', actor, { roundId, blockId, payload: { rouletteGameId: roulette.rows[0] ? Number(roulette.rows[0].id) : null } });

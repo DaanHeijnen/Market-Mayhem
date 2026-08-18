@@ -17,7 +17,9 @@ export default wrap(async request => {
     const pred = await client.query('SELECT status,display_number,round_id FROM predictions WHERE id=$1 AND game_night_id=$2 FOR UPDATE', [predictionId, gameId]);
     if (!pred.rows[0]) throw new HttpError(404, 'Prediction not found');
     if (pred.rows[0].status === 'CANCELLED') return { duplicate: true };
-    if (pred.rows[0].status === 'SETTLED') throw new HttpError(409, 'Settled prediction cannot be cancelled');
+    if (!['DRAFT','SCHEDULED','OPEN','LOCKED'].includes(pred.rows[0].status)) {
+      throw new HttpError(409, 'A prediction cannot be cancelled after a result has been chosen');
+    }
 
     const bets = await client.query("SELECT * FROM bets WHERE prediction_id=$1 AND status='ACTIVE' ORDER BY player_id,id FOR UPDATE", [predictionId]);
     for (const bet of bets.rows) {
@@ -32,8 +34,16 @@ export default wrap(async request => {
       if (ledger.rows[0]) {
         await client.query('UPDATE wallets SET current_balance=current_balance+$1,updated_at=NOW() WHERE player_id=$2', [bet.stake, bet.player_id]);
       } else {
-        const existing = await client.query("SELECT id FROM ledger_entries WHERE bet_id=$1 AND transaction_type='BET_REFUND'", [bet.id]);
-        if (!existing.rows[0]) throw new HttpError(409, 'Cancellation idempotency key conflicts with another transaction');
+        const existing = await client.query(
+          "SELECT player_id,amount,prediction_id FROM ledger_entries WHERE bet_id=$1 AND transaction_type='BET_REFUND'",
+          [bet.id],
+        );
+        if (!existing.rows[0]
+          || Number(existing.rows[0].player_id) !== Number(bet.player_id)
+          || Number(existing.rows[0].amount) !== Number(bet.stake)
+          || Number(existing.rows[0].prediction_id) !== predictionId) {
+          throw new HttpError(409, 'Cancellation idempotency key conflicts with another transaction');
+        }
       }
       await client.query("UPDATE bets SET status='REFUNDED',settled_at=NOW() WHERE id=$1", [bet.id]);
     }

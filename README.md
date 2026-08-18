@@ -1,86 +1,135 @@
 # Market Mayhem
 
-Market Mayhem is a private game-night economy, prediction market, roulette, player-wallet and projector-control app.
+Market Mayhem is a private game-night economy with player wallets, prediction deposits, visual roulette, interactive round questions and a projector dashboard. React is the presentation layer; Netlify Functions and PostgreSQL own game state and every financial rule.
 
 ## Stack
 
 - React 19 + TypeScript + Vite
 - Netlify Functions
 - Netlify Database / PostgreSQL
-- Versioned SQL migrations in `netlify/database/migrations/`
-- HttpOnly Admin/player sessions
-- Transactional wallets with an immutable ledger
+- Numbered SQL migrations in `netlify/database/migrations/`
+- HttpOnly Admin/player sessions protected with `SESSION_SECRET`
+- Transactional wallets plus immutable ledger history
 - Lightweight version polling with targeted snapshots
 
 ## Routes
 
 - `/admin/:gameId` — Control Center
-- `/admin/:gameId/settings` — game defaults and game reset
-- `/admin/:gameId/players` — player management and join links
-- `/admin/:gameId/rounds` — rounds
-- `/admin/:gameId/rounds/:roundId` — ordered round content builder
-- `/admin/:gameId/predictions` — fixed-odds prediction markets
-- `/admin/:gameId/ledger` — filtered ledger and round economy summary
-- `/play/:gameId` — authenticated player wallet and market home
+- `/admin/:gameId/settings` — game settings and reset
+- `/admin/:gameId/players` — players, join links and per-player adjustments
+- `/admin/:gameId/rounds` — round list
+- `/admin/:gameId/rounds/:roundId` — content, round groups and group scoring
+- `/admin/:gameId/predictions` — prediction market configuration and control
+- `/admin/:gameId/ledger` — filtered immutable ledger
+- `/play/:gameId` — authenticated player wallet and live actions
 - `/screen/:gameId` — public-safe Big Screen
+- `/join/:token` — single-use player join exchange
 
-## First-run workflow
+## First setup
 
-A fresh game contains no players, rounds, predictions or transactions. Configure it in this order:
+A reset/fresh game has no players, rounds, predictions or transactions.
 
-1. **Settings** — name, starting coins, prediction timer and prediction stake limits.
-2. **Players** — add players and generate single-use join links.
-3. **Rounds** — create rounds. Round number is a label; Admin may start any upcoming round.
-4. **Round Content** — add ordered `TEXT`, `QUESTION` and `ROULETTE` blocks.
-5. **Predictions** — create fixed YES/NO odds and optionally schedule a prediction on a round.
-6. **Control** — run the active round, move through content, operate roulette, adjust coins and watch the live projector preview.
+1. **Settings** — set game name, starting coins and optional maximum wallet percentage per prediction.
+2. **Players** — create players and generate their single-use join links.
+3. **Rounds** — create rounds in any numbering scheme; execution does not assume `current + 1`.
+4. **Round Content** — add ordered `TEXT`, `QUESTION`, `DUOLINGO_QUESTION` and `ROULETTE` blocks.
+5. **Predictions** — set probability, market-specific duration and min/max deposit, then optionally schedule to a round.
+6. **Control Center** — run the round, move through content, operate live questions/roulette, adjust coins and control the projector.
 
 ## Predictions
 
-Prediction odds are entered by Admin. There is no crowd-probability vote and wager volume never changes odds.
+Admin configures a YES probability from 1–99%. The server calculates fixed multipliers:
 
-State machine:
+- YES = `1 / probability_yes`
+- NO = `1 / (1 - probability_yes)`
+
+Each prediction stores its own `prediction_time_seconds`, `minimum_stake` and `maximum_stake`. When a scheduled prediction's round starts it opens on player phones and receives server timestamps, but round start does **not** change the current Big Screen presentation or select a content block. Admin explicitly chooses what to show, including **SHOW PREDICTION**.
+
+Internal state is:
 
 `DRAFT → SCHEDULED → OPEN → LOCKED → RESULT → SETTLED`
 
-A draft may also open manually. Any unresolved prediction may be cancelled; active stakes are refunded transactionally.
+Cancellation can occur through `LOCKED`, before a YES/NO result is chosen. Public views map completed outcomes to `RESOLVED_YES`, `RESOLVED_NO` or `CANCELLED`. There is no crowd-probability voting system.
 
-When a round starts, its `SCHEDULED` predictions automatically become `OPEN`. `opened_at` and `closes_at` are generated server-side from the per-game prediction duration. A stale player UI cannot place a late bet: the bet endpoint verifies `closes_at` again inside the transaction.
+### Deposit accounting
 
-Players may simply abstain. No zero-value bet or wallet transaction is created.
+A prediction wager is a deposit, not an immediate permanent loss:
+
+1. placement decreases available wallet balance and creates an active locked bet;
+2. total player value remains `available + locked deposits` while unresolved;
+3. a winner removes the lock and credits the full `round(stake × multiplier_snapshot)` return;
+4. a loser removes the lock with no credit;
+5. cancellation returns the deposited stake.
+
+The accepted bet stores its multiplier snapshot. Settlement never recalculates financial terms from a later slider value.
 
 ## Roulette
 
-A `ROULETTE` round block creates the current roulette spin when activated. Admin controls:
+A `ROULETTE` round block uses a visual, canonical table. Players choose a chip amount and may place one or more positions in a single server-validated batch.
 
-`DRAFT → OPEN → LOCKED → RESULT → SETTLED`
+Supported bets:
 
-The initial mobile bet types are straight number, red/black, odd/even and low/high. Payouts are calculated server-side from stored bet snapshots. Cancelled spins refund active stakes.
+- straight number 0–36
+- red / black
+- odd / even
+- low 1–18 / high 19–36
 
-## Ledger and wallets
+State is:
 
-`wallets.current_balance` is the transactional current balance. `ledger_entries` is immutable financial history. Starting balances, signed Admin adjustments, prediction stakes/payouts/refunds and roulette stakes/payouts/refunds update wallet + ledger in the same PostgreSQL transaction.
+`DRAFT → OPEN → LOCKED → SPINNING → RESULT → SETTLED`
 
-Manual adjustments require an exact written reason and can optionally be attributed to any round. Corrections are new compensating entries; old ledger rows are never edited.
+The server selects and stores the winning number before the animation starts. The Big Screen wheel animates toward that stored value; the frontend never chooses the financial result. Public-safe player chips (name, color, position, stake) are shown on the projector. Cancellation is available before the spin starts and refunds active stakes; once the server-selected spin begins, the result must be settled.
 
-The Ledger page filters in SQL by all rounds, a specific round, or General/no-round and includes per-player earned/lost/net totals.
+## Live Duolingo questions
+
+`DUOLINGO_QUESTION` is separate from a static `QUESTION` block. Admin configures question text, four answer texts, one correct answer and a reward. The four player controls always use:
+
+`🍆  🌽  🍑  😳`
+
+State is:
+
+`READY → OPEN → CLOSED → REVEALED → SETTLED`
+
+When the block is current, player phones automatically switch to four large emoji controls. Player APIs never expose answer text or the correct index before reveal. Each player may submit once. Reveal credits correct players transactionally with immutable `QUESTION_REWARD` ledger entries attributed to the round and block.
+
+## Round groups
+
+Groups are scoped to a round, not global teams. Admin may create/rename/delete groups and assign each player to at most one group in that round. A signed group adjustment applies the same amount to every member in one server transaction, with one immutable ledger row per player carrying the round, group and mandatory reason. Group adjustments become available once the round has started and remain available retroactively after the round is completed.
+
+Group scoring may be applied retroactively after a round is completed. It changes wallets now while preserving the completed round attribution and current transaction timestamp.
+
+## Wallet and ledger rules
+
+- Available wallet balance never goes below zero.
+- Locked prediction/roulette stakes are unavailable for spending but remain part of total player value until resolved.
+- Every money movement is ledger-backed in the same PostgreSQL transaction.
+- Old ledger rows are never edited; corrections are compensating entries.
+- Manual and group adjustments require a reason.
+- High-impact actions use idempotency keys.
+- Database row locks prevent simultaneous requests from spending the same available balance twice.
 
 ## Big Screen
 
-The dashboard is driven only by real economy data:
+The default projector is an exchange-style dashboard based on real data only:
 
-- chronological wallet-value graph from ledger entries
-- player current value and change vs that player's starting-balance ledger entry
-- current round
-- open prediction + roulette market count
-- total coins in play = active wallet balances + stakes locked in unresolved prediction/roulette markets
-- public ledger ticker
+- chronological player-value graph from real economy events
+- all players begin at their own starting balance on the graph midpoint
+- symmetric dynamic gain/loss scaling
+- latest settled prediction results beside the graph
+- current round, markets open and total coins in play
+- real public-safe transaction ticker
 
-Round content, prediction open/locked/result states and roulette have dedicated projector compositions. The Control Center embeds the exact `/screen/:gameId` output in an iframe.
+`total coins in play = available wallets + unresolved prediction deposits + unresolved roulette stakes`.
+
+The projector can also present round blocks, an explicitly featured prediction, and roulette. Control Center contains the exact `/screen/:gameId` preview plus a persistent **SHOW MAIN DASHBOARD** action.
+
+## Design system
+
+The application follows `ADMINNOTES/designhandboek.txt`: Inter + JetBrains Mono, slate-900 canvas, slate-800 cards, indigo primary actions, emerald/red YES/NO semantics, 12/16/24px radii, 44px minimum touch targets, responsive single-column mobile layouts and dense desktop Admin controls. Shared styling lives in `src/styles/tokens.css`.
 
 ## Authentication
 
-Configure all three variables:
+Configure:
 
 ```env
 ADMIN_USERNAME=admin
@@ -88,7 +137,7 @@ ADMIN_PASSWORD=replace-me
 SESSION_SECRET=replace-with-at-least-32-random-characters
 ```
 
-`SESSION_SECRET` HMAC-protects the server-side digest of opaque Admin/player session tokens. Changing this secret invalidates existing Admin/player sessions, so users must sign in/join again. Player identity always comes from an HttpOnly cookie backed by `player_sessions`; localStorage and URL player IDs are never trusted.
+`SESSION_SECRET` HMAC-protects stored session digests. Raw Admin/player session tokens live only in HttpOnly cookies. Player identity never comes from localStorage or URL player IDs. Join links are random, hashed server-side and single-use; after Admin successfully copies a generated URL the raw link is removed from React state/DOM.
 
 ## Local development
 
@@ -108,29 +157,33 @@ Then open `http://localhost:8888/admin/1`.
 2. Import it into Netlify.
 3. Enable Netlify Database.
 4. Configure `ADMIN_USERNAME`, `ADMIN_PASSWORD` and `SESSION_SECRET`.
-5. Deploy. New schema work is added as numbered migrations; previously deployed migrations are not rewritten.
+5. Apply/deploy migrations through `0006_backlog_interactive_models.sql`.
+6. Deploy.
+
+Previously deployed migrations are historical and are not rewritten.
 
 ## Delete Game Save
 
-Settings → Danger Zone → **DELETE GAME SAVE** requires the exact phrase `yes delete` in both the browser and backend. The transaction resets only the requested game ID: players/sessions/tokens and legacy teams, wallets/ledger, rounds/blocks, predictions/bets, roulette, screen state and game settings. Admin sessions remain usable. A `GAME_RESET` audit event is written before cleanup.
+Settings → Danger Zone → **DELETE GAME SAVE** requires exactly `yes delete` in both UI and backend. The transaction is scoped to the requested game ID and removes player/game economy, round content/groups/questions, predictions, roulette and screen state while preserving Admin sessions and the audit table. A final `GAME_RESET` audit record is written first.
 
 ## Live updates
 
-Clients poll only `/api/game-version` until the version changes, then refresh their targeted state endpoint. Polls do not overlap, stale snapshot refreshes use `AbortController`, hidden tabs are throttled, and a successful local mutation refreshes immediately.
+Clients poll `/api/game-version` rather than constantly downloading full snapshots. A version change triggers a targeted Admin/player/screen refresh. Polls are deduplicated, stale snapshots use `AbortController`, hidden tabs are throttled and post-action refreshes are immediate. Mobile switches to the faster cadence only while the backend reports an actionable prediction, roulette market or live question.
 
-Mobile uses the backend `actionable` flag to select active vs idle polling cadence.
-
-## Tests
+## Verification
 
 ```bash
-npm test
 npm run build
+npm test
 ```
 
-The Playwright full-flow test requires a real Netlify/PostgreSQL environment:
+The full Playwright flow needs Netlify Functions and PostgreSQL:
 
 ```bash
-E2E_BASE_URL=http://localhost:8888 E2E_ADMIN_USERNAME=admin E2E_ADMIN_PASSWORD=... npm run test:e2e
+E2E_BASE_URL=http://localhost:8888 \
+E2E_ADMIN_USERNAME=admin \
+E2E_ADMIN_PASSWORD=... \
+npm run test:e2e
 ```
 
-See `docs/ARCHITECTURE.md` and `docs/DATABASE.md` for the detailed state/data model.
+See `docs/ARCHITECTURE.md` and `docs/DATABASE.md` for implementation details.

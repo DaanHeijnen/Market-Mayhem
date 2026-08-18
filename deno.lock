@@ -19,7 +19,7 @@
         "npm:@types/react-dom@^19.1.7",
         "npm:@types/react@^19.1.10",
         "npm:@vitejs/plugin-react@^5.0.2",
-        "npm:netlify-cli@^23.2.1",
+        "npm:netlify-cli@^27.1.1",
         "npm:pg@^8.16.3",
         "npm:react-dom@^19.1.1",
         "npm:react-router-dom@^7.8.0",

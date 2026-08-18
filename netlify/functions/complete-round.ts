@@ -26,8 +26,16 @@ export default wrap(async request => {
     );
     if (livePred.rows[0]) throw new HttpError(409, `Prediction #${livePred.rows[0].display_number} is still ${livePred.rows[0].status}`);
 
+
+    const liveQuestion = await client.query(
+      `SELECT id,interactive_status FROM round_blocks
+       WHERE round_id=$1 AND type='DUOLINGO_QUESTION' AND interactive_status IN ('OPEN','CLOSED','REVEALED')
+       ORDER BY sort_order,id LIMIT 1`,
+      [roundId],
+    );
+    if (liveQuestion.rows[0]) throw new HttpError(409, `Live question #${liveQuestion.rows[0].id} is still ${liveQuestion.rows[0].interactive_status}`);
     const liveRoulette = await client.query(
-      `SELECT id,status FROM roulette_games WHERE round_id=$1 AND status IN ('OPEN','LOCKED','RESULT') LIMIT 1`,
+      `SELECT id,status FROM roulette_games WHERE round_id=$1 AND status IN ('OPEN','LOCKED','SPINNING','RESULT') LIMIT 1`,
       [roundId],
     );
     if (liveRoulette.rows[0]) throw new HttpError(409, `Roulette #${liveRoulette.rows[0].id} is still ${liveRoulette.rows[0].status}`);
