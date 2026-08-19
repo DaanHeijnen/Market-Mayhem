@@ -133,11 +133,11 @@ Configure:
 
 ```env
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=replace-me
+ADMIN_PASSWORD_HASH=replace-with-generated-hash
 SESSION_SECRET=replace-with-at-least-32-random-characters
 ```
 
-`SESSION_SECRET` HMAC-protects stored session digests. Raw Admin/player session tokens live only in HttpOnly cookies. Player identity never comes from localStorage or URL player IDs. Join links are random, hashed server-side and single-use; after Admin successfully copies a generated URL the raw link is removed from React state/DOM.
+Generate `ADMIN_PASSWORD_HASH` with `npm run admin:hash`. The generated value uses PBKDF2-HMAC-SHA256 and a random salt; the plaintext password is never stored in the project or Netlify environment variables. `SESSION_SECRET` HMAC-protects stored session digests. Raw Admin/player session tokens live only in HttpOnly cookies. Player identity never comes from localStorage or URL player IDs. Join links are random, hashed server-side and single-use; after Admin successfully copies a generated URL the raw link is removed from React state/DOM.
 
 ## Local development
 
@@ -156,7 +156,7 @@ Then open `http://localhost:8888/admin/1`.
 1. Push the repository to GitHub.
 2. Import it into Netlify.
 3. Enable Netlify Database.
-4. Configure `ADMIN_USERNAME`, `ADMIN_PASSWORD` and `SESSION_SECRET`.
+4. Generate a hash with `npm run admin:hash`, then configure `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH` and `SESSION_SECRET`.
 5. Apply/deploy migrations through `0006_backlog_interactive_models.sql`.
 6. Deploy.
 

@@ -1,0 +1,1 @@
+import{describe,it,expect}from'vitest';import{LIVE_CONFIG}from'../src/config/live';describe('polling config',()=>{it('keeps active mobile faster than idle',()=>expect(LIVE_CONFIG.MOBILE_ACTIVE_POLL_MS).toBeLessThan(LIVE_CONFIG.MOBILE_IDLE_POLL_MS));it('hidden tabs are slowest',()=>expect(LIVE_CONFIG.HIDDEN_TAB_POLL_MS).toBeGreaterThan(LIVE_CONFIG.ADMIN_POLL_MS))});

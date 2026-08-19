@@ -1,0 +1,60 @@
+MARKET MAYHEM WORKFLOW
+
+Run these commands from the project folder:
+
+1. Start a new feature or bugfix from the latest main branch
+
+git fetch origin
+git switch main
+git pull --ff-only origin main
+git switch -c feature/short-name
+
+Use a name such as feature/roulette-ui or fix/login-error.
+
+2. Install packages when needed
+
+npm install
+
+Run npm install after cloning the project, when node_modules is missing, or after package.json/package-lock.json changes. You do not need to run it before every start.
+
+3. Work and test locally
+
+npm run dev
+
+Open the local URL shown by Netlify. In another terminal, run:
+
+npm test
+npm run build
+npm run test:e2e
+
+Run the checks that apply to your change. Stop the dev server with Ctrl+C when finished.
+
+4. Commit and push the branch
+
+git status
+git add .
+git commit -m "Describe the change"
+git push -u origin feature/short-name
+
+5. Create the pull request
+
+Open GitHub, create a pull request from feature/short-name into main, and wait for the Netlify deploy preview. Test the preview URL online.
+
+6. Merge after the preview is good
+
+Merge the pull request into main on GitHub. Then clean up locally and remotely:
+
+git switch main
+git pull --ff-only origin main
+git branch -d feature/short-name
+git push origin --delete feature/short-name
+
+Start the next task by repeating step 1. Always branch from the freshly updated main branch.
+
+QUICK COMMAND GUIDE
+
+npm install       Install or update packages when dependencies changed.
+npm run dev       Start the local Netlify development server.
+npm test          Run unit and integration tests.
+npm run build     Check TypeScript and create a production build.
+npm run test:e2e  Run Playwright end-to-end tests.

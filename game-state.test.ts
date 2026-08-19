@@ -1,0 +1,2 @@
+import{describe,expect,it}from'vitest';import{HttpError}from'../netlify/lib/http';import{screenModeValue}from'../netlify/lib/game-state';
+describe('screen mode validation',()=>{it('accepts current modes',()=>{for(const mode of ['DASHBOARD','ROUND_BLOCK','PREDICTIONS_OPEN','PREDICTION_LOCKED','PREDICTION_RESULT','ROULETTE'])expect(screenModeValue(mode)).toBe(mode)});it('rejects obsolete and arbitrary modes',()=>{for(const mode of ['PREDICTION_VOTING','CROWD_REVEAL','WHATEVER'])expect(()=>screenModeValue(mode)).toThrow(HttpError)})});

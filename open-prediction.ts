@@ -1,0 +1,26 @@
+import { requireAdmin, audit } from '../lib/auth';
+import { withTransaction } from '../lib/db';
+import { body, ok, intValue, HttpError } from '../lib/http';
+import { incrementGameVersion } from '../lib/game-state';
+import { wrap } from './_wrap';
+
+export default wrap(async request => {
+  const admin = await requireAdmin(request);
+  const p = await body<any>(request);
+  const gameId = intValue(p.gameId, 'gameId', { min: 1 });
+  const predictionId = intValue(p.predictionId, 'predictionId', { min: 1 });
+  return ok(await withTransaction(async client => {
+    const game = await client.query('SELECT current_round_id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
+    if (!game.rows[0]) throw new HttpError(404, 'Game not found');
+    const pred = await client.query('SELECT status,round_id,prediction_time_seconds FROM predictions WHERE id=$1 AND game_night_id=$2 FOR UPDATE', [predictionId, gameId]);
+    if (!pred.rows[0]) throw new HttpError(404, 'Prediction not found');
+    if (!['DRAFT','SCHEDULED'].includes(pred.rows[0].status)) throw new HttpError(409, 'Prediction is not ready to open');
+    if (pred.rows[0].round_id && Number(pred.rows[0].round_id) !== Number(game.rows[0].current_round_id)) throw new HttpError(409, 'Linked round must be active before opening this prediction');
+    await client.query(
+      `UPDATE predictions SET status='OPEN',opened_at=NOW(),closes_at=NOW()+($2::text||' seconds')::interval,updated_at=NOW() WHERE id=$1`,
+      [predictionId, Number(pred.rows[0].prediction_time_seconds)],
+    );
+    await audit(client, gameId, admin.username, 'opened prediction', 'prediction', predictionId);
+    return { version: await incrementGameVersion(client, gameId) };
+  }));
+});
