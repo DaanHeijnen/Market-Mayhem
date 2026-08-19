@@ -1,0 +1,2 @@
+import{describe,expect,it}from'vitest';import{ledgerBalance}from'../netlify/lib/economy';import{textValue}from'../netlify/lib/http';
+describe('ledger adjustment rules',()=>{it('supports signed positive adjustments',()=>expect(ledgerBalance([100,25])).toBe(125));it('supports signed negative adjustments',()=>expect(ledgerBalance([100,-10])).toBe(90));it('rejects missing adjustment reasons',()=>expect(()=>textValue('','reason')).toThrow());it('round attribution is metadata, not balance math',()=>expect(ledgerBalance([100,20,-5])).toBe(115))});
