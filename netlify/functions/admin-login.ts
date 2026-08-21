@@ -22,25 +22,19 @@ export default wrap(async (request) => {
 
   const expectedUsername = process.env.ADMIN_USERNAME || '';
   const expectedPasswordHash = process.env.ADMIN_PASSWORD_HASH || '';
-
   if (!expectedUsername || !expectedPasswordHash) {
-    const diagnostic = {
-      hasAdminUsername: Boolean(expectedUsername),
-      hasAdminPasswordHash: Boolean(expectedPasswordHash),
-    };
+    console.error('Admin login is missing ADMIN_USERNAME or ADMIN_PASSWORD_HASH');
+    throw new HttpError(503, 'Admin credentials are not configured');
+  }
 
-    console.error('Admin login environment diagnostic', diagnostic);
-
-    throw new HttpError(
-      503,
-      'Admin credentials are not configured',
-      diagnostic,
-    );
+  const sessionSecret = process.env.SESSION_SECRET || '';
+  if (sessionSecret.length < 32) {
+    console.error('Admin login requires SESSION_SECRET with at least 32 characters');
+    throw new HttpError(503, 'Admin session secret is not configured correctly');
   }
 
   const usernameMatches = safeTextEqual(payload.username, expectedUsername);
   let passwordMatches = false;
-
   try {
     passwordMatches = await verifyAdminPassword(payload.password, expectedPasswordHash);
   } catch (error) {
@@ -58,12 +52,5 @@ export default wrap(async (request) => {
     VALUES (${payload.username}, ${sessionDigest(rawSession)}, NOW() + INTERVAL '12 hours')
   `;
 
-  return ok(
-    { ok: true },
-    {
-      headers: {
-        'set-cookie': sessionCookie(ADMIN_COOKIE, rawSession, 43200),
-      },
-    },
-  );
+  return ok({ ok: true }, { headers: { 'set-cookie': sessionCookie(ADMIN_COOKIE, rawSession, 43200) } });
 });

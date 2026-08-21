@@ -1,17 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LIVE_CONFIG } from '../config/live';
+import { getLivePollDelay, LIVE_CONFIG, type LivePollKind } from '../config/live';
 import { api, ApiError } from '../lib/api';
-
-type Kind = 'screen' | 'admin' | 'mobile';
 
 const isAbort = (error: unknown) => error instanceof DOMException && error.name === 'AbortError';
 
-export function useGamePolling<T>(gameId: number, kind: Kind, endpoint: string, active = false) {
+export function useGamePolling<T>(gameId: number, kind: LivePollKind, endpoint: string, active = false) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState('');
   const version = useRef<number | null>(null);
   const latestData = useRef<T | null>(null);
   const polling = useRef(false);
+  const accessBlocked = useRef(false);
   const pollController = useRef<AbortController | null>(null);
   const snapshotController = useRef<AbortController | null>(null);
   const snapshotPromise = useRef<Promise<T | null> | null>(null);
@@ -27,6 +26,7 @@ export function useGamePolling<T>(gameId: number, kind: Kind, endpoint: string, 
     run = api<T>(endpoint, { signal: controller.signal })
       .then((next) => {
         if (controller.signal.aborted) return null;
+        accessBlocked.current = false;
         latestData.current = next;
         setData(next);
         const nextVersion = (next as { version?: unknown })?.version;
@@ -39,6 +39,7 @@ export function useGamePolling<T>(gameId: number, kind: Kind, endpoint: string, 
       .catch((err: unknown) => {
         if (isAbort(err)) return null;
         if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          accessBlocked.current = true;
           latestData.current = null;
           version.current = null;
           setData(null);
@@ -67,22 +68,27 @@ export function useGamePolling<T>(gameId: number, kind: Kind, endpoint: string, 
     const mobileIsActive = () => {
       if (active) return true;
       if (kind !== 'mobile') return false;
-      return Boolean((latestData.current as any)?.actionable);
+      return Boolean((latestData.current as { actionable?: unknown } | null)?.actionable);
     };
 
-    const interval = () => {
-      if (document.visibilityState === 'hidden') return LIVE_CONFIG.HIDDEN_TAB_POLL_MS;
-      if (kind === 'screen') return LIVE_CONFIG.BIG_SCREEN_POLL_MS;
-      if (kind === 'admin') return LIVE_CONFIG.ADMIN_POLL_MS;
-      return mobileIsActive() ? LIVE_CONFIG.MOBILE_ACTIVE_POLL_MS : LIVE_CONFIG.MOBILE_IDLE_POLL_MS;
+    const isVisible = () => document.visibilityState !== 'hidden';
+    const interval = () => getLivePollDelay(kind, mobileIsActive(), document.visibilityState);
+
+    const clearTimer = () => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
     };
 
-    const schedule = (delay: number) => {
-      if (!stopped) timer = window.setTimeout(tick, delay);
+    const schedule = (delay: number | null) => {
+      clearTimer();
+      if (!stopped && !accessBlocked.current && delay !== null) timer = window.setTimeout(tick, delay);
     };
 
     const tick = async () => {
-      if (stopped) return;
+      timer = undefined;
+      if (stopped || accessBlocked.current || !isVisible()) return;
       if (polling.current) {
         schedule(interval());
         return;
@@ -106,28 +112,40 @@ export function useGamePolling<T>(gameId: number, kind: Kind, endpoint: string, 
       } finally {
         if (pollController.current === controller) pollController.current = null;
         polling.current = false;
-        schedule(failed ? LIVE_CONFIG.ERROR_RETRY_MS : interval());
+        if (!stopped && !accessBlocked.current && isVisible()) {
+          schedule(failed ? LIVE_CONFIG.ERROR_RETRY_MS : interval());
+        }
       }
     };
 
-    void loadSnapshot(false).catch((err: unknown) => {
-      if (!stopped) setError(err instanceof Error ? err.message : 'LIVE CONNECTION INTERRUPTED');
-    });
-    if (LIVE_CONFIG.ENABLE_POLLING) schedule(interval());
+    const resume = async () => {
+      clearTimer();
+      if (stopped || accessBlocked.current || !isVisible()) return;
+      try {
+        await loadSnapshot(false);
+        if (!stopped && !accessBlocked.current && LIVE_CONFIG.ENABLE_POLLING) schedule(interval());
+      } catch (err) {
+        if (!stopped) setError(err instanceof Error ? err.message : 'LIVE CONNECTION INTERRUPTED');
+        if (!stopped && !accessBlocked.current && LIVE_CONFIG.ENABLE_POLLING) schedule(LIVE_CONFIG.ERROR_RETRY_MS);
+      }
+    };
+
+    void resume();
 
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState === 'hidden') {
+        clearTimer();
         pollController.current?.abort();
-        void loadSnapshot(false).catch((err: unknown) => {
-          if (!stopped) setError(err instanceof Error ? err.message : 'LIVE CONNECTION INTERRUPTED');
-        });
+        return;
       }
+      pollController.current?.abort();
+      void resume();
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
       stopped = true;
-      if (timer) clearTimeout(timer);
+      clearTimer();
       pollController.current?.abort();
       snapshotController.current?.abort();
       document.removeEventListener('visibilitychange', onVisibilityChange);
