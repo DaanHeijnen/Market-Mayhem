@@ -27,6 +27,12 @@ export default wrap(async (request) => {
     throw new HttpError(503, 'Admin credentials are not configured');
   }
 
+  const sessionSecret = process.env.SESSION_SECRET || '';
+  if (sessionSecret.length < 32) {
+    console.error('Admin login requires SESSION_SECRET with at least 32 characters');
+    throw new HttpError(503, 'Admin session secret is not configured correctly');
+  }
+
   const usernameMatches = safeTextEqual(payload.username, expectedUsername);
   let passwordMatches = false;
   try {
