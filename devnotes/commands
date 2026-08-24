@@ -1,0 +1,48 @@
+Volgorde.
+
+Wanneer je het project weer voor het eerst opent vandaag
+
+    git status
+    git checkout main
+    git pull
+
+hiermee haal je de laatste versie van de main branch op, hierna
+
+    git checkout development
+    git pull
+
+Hiermee haal je de laatste versie van de development branch op, hierna bij het bouwen van een nieuwe feature naar development
+
+    git checkout -b feature/my-feature 
+    git checkout -b bug/bug-fix
+    git checkout -b change/change-this
+
+Controleer dan of je op de juiste branch je aanpassingen gaat doen door
+
+    git status
+
+De aanpassingen ga je dan lekker vibecoden.
+De branch kun je vervolgens testen door: 
+
+    npm install
+    npm run dev
+
+Dan lekker testen en aanpassingen door blijven voeren.
+Als alles werkt en je bent klaar om door te zetten naar github.
+
+    Ctrl + C (stoppen van npm run dev)
+    npm run build
+    git status
+    git add .
+    git commit -m "mijn commit message"
+
+Dan als het de eerste keer is wanneer je een nieuwe branch naar github pusht
+
+    git push -u origin feature/my-feature
+    git push -u origin bug/bug-fix
+    git push -u origin change/change-this
+
+hierna kan je vanuit die branch gewoon altijd
+
+    git push
+

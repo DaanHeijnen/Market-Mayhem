@@ -412,7 +412,7 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .preview-heading { align-items: center; }
 .preview-actions { margin-top: 16px; }
 .screen-preview { position: relative; width: 100%; aspect-ratio: 16/9; margin-top: 16px; border: 0; border-radius: 20px; background: var(--ink); overflow: hidden; }
-.screen-preview iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.screen-preview iframe { position: absolute; top: 0; left: 0; width: 1920px; height: 1080px; border: 0; transform-origin: top left; pointer-events: none; }
 .quick-adjust-card { padding: 26px 28px; background: var(--ink); color: #fff; }
 .quick-adjust-card .muted, .quick-adjust-card .label { color: var(--dark-secondary); }
 .quick-adjust-card .field { background: var(--ink-2); color: #fff; border-color: #3D392F; }

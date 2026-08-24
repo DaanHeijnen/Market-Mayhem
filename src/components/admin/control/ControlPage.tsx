@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { RunMutation } from '../types';
 import { Card, Countdown, Empty, Status } from '../ui';
 import { CoinIcon } from '../../shared/CoinIcon';
@@ -93,7 +93,7 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
       <Card className="preview-card">
         <div className="row-between preview-heading"><div><div className="label muted">LIVE BIG SCREEN PREVIEW</div><div className="display card-heading">Exact projector output</div></div><a className="btn btn-secondary btn-compact" href={`/screen/${gameId}`} target="_blank" rel="noreferrer">OPEN FULL SCREEN ↗</a></div>
         <div className="preview-actions"><button className="btn btn-primary btn-full" onClick={showDashboard}>SHOW MAIN DASHBOARD</button></div>
-        <div className="screen-preview"><iframe title="Live Big Screen" src={`/screen/${gameId}`} /></div>
+        <LiveScreenPreview gameId={gameId} />
       </Card>
 
       <Card className="quick-adjust-card">
@@ -107,5 +107,33 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
         <button className="btn btn-primary btn-full quick-save" disabled={adjusting || !playerId || !reason.trim() || !amount || Number(amount) === 0} onClick={adjust}>{adjusting ? 'SAVING…' : <><CoinIcon size={16} /> SAVE ADJUSTMENT</>}</button>
       </Card>
     </div>
+  </div>;
+}
+
+const SCREEN_WIDTH = 1920;
+const SCREEN_HEIGHT = 1080;
+
+function LiveScreenPreview({ gameId }: { gameId: number }) {
+  const previewRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    const preview = previewRef.current;
+    if (!preview) return;
+    const updateScale = () => setScale(preview.clientWidth / SCREEN_WIDTH);
+    updateScale();
+    const observer = new ResizeObserver(updateScale);
+    observer.observe(preview);
+    return () => observer.disconnect();
+  }, []);
+
+  return <div className="screen-preview" ref={previewRef}>
+    <iframe
+      title="Live Big Screen"
+      src={`/screen/${gameId}`}
+      width={SCREEN_WIDTH}
+      height={SCREEN_HEIGHT}
+      style={{ transform: `scale(${scale})` }}
+    />
   </div>;
 }
