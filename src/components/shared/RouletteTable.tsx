@@ -24,9 +24,11 @@ export function RouletteTable({ onSelect, markers = [], disabled = false, compac
   compact?: boolean;
 }) {
   const cell = (position: RoulettePosition, label: string, kind = '') => {
+    const key = `${position.betType}-${position.selection}`;
     const here = markers.filter(marker => same(marker, position));
     return (
       <button
+        key={key}
         type="button"
         className={`roulette-cell ${kind} ${here.length ? 'has-chip' : ''}`}
         disabled={disabled || !onSelect}

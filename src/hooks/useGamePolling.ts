@@ -23,7 +23,14 @@ export function useGamePolling<T>(gameId: number, kind: LivePollKind, endpoint: 
   const stats = useRef({ polls: 0, refreshes: 0, lastPoll: 0, lastRefresh: 0 });
 
   const loadSnapshot = useCallback((force = false) => {
-    if (snapshotPromise.current && !force) return snapshotPromise.current;
+    // Deduplicate concurrent callers onto one in-flight request — but never onto an
+    // aborted one. An aborted snapshot resolves to null, so a caller that piggybacked on
+    // it would get no data and then sit idle until the next poll tick. That is how the
+    // projector could come up showing only "MARKET MAYHEM": React's development
+    // double-mount aborts the first snapshot, the second mount reused that same dead
+    // promise, and nothing rendered until a whole poll interval later.
+    const inFlightAborted = snapshotController.current?.signal.aborted ?? false;
+    if (snapshotPromise.current && !force && !inFlightAborted) return snapshotPromise.current;
     if (force) snapshotController.current?.abort();
 
     const controller = new AbortController();
