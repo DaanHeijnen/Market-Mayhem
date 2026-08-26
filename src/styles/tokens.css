@@ -1043,3 +1043,30 @@ button.chip-blue:hover { background: var(--violet); }
 
 /* Header presentation toggle */
 .header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* ============================================================
+   ROUND MEDIA — picture and music round authoring
+   ============================================================ */
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.media-field { display: grid; gap: 10px; margin: 18px 0; }
+.media-hint { margin: 0; font-size: 12px; line-height: 1.5; }
+.media-drop {
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+  padding: 18px;
+  border: 2px dashed #D7D1BC;
+  border-radius: 16px;
+  background: var(--paper);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color .15s ease-in-out, background .15s ease-in-out;
+}
+.media-drop:hover, .media-drop.is-dragging { border-color: var(--blue); background: var(--surface-soft); }
+.media-drop.has-file { padding: 0; border-style: solid; overflow: hidden; }
+.media-drop img { display: block; width: 100%; max-height: 320px; object-fit: contain; }
+.media-audio { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.media-audio audio { flex: 1; min-width: 220px; height: 36px; }
+.media-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.type-note { margin: 14px 0 0; font-size: 12px; line-height: 1.5; }
+.block-thumb { display: block; max-width: 260px; max-height: 150px; margin-top: 12px; border-radius: 12px; object-fit: cover; }

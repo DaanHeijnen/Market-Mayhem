@@ -102,23 +102,40 @@ export async function getGameVersion(gameId: number): Promise<GameVersion> {
 function normalizeBlock(row: any, admin = true) {
   if (!row) return null;
   const payload = row.payload || {};
+  const revealed = ['REVEALED', 'SETTLED'].includes(row.interactive_status);
+
   const normalizedPayload = admin ? payload : (() => {
-    if (row.type !== 'DUOLINGO_QUESTION') return payload;
-    const safe: Record<string, unknown> = {
-      answers: Array.isArray(payload.answers) ? payload.answers : [],
-      rewardCoins: Number(payload.rewardCoins || 0),
-    };
-    if (['REVEALED','SETTLED'].includes(row.interactive_status) && Number.isInteger(Number(payload.correctAnswerIndex))) {
-      safe.correctAnswerIndex = Number(payload.correctAnswerIndex);
+    if (row.type === 'DUOLINGO_QUESTION') {
+      const safe: Record<string, unknown> = {
+        answers: Array.isArray(payload.answers) ? payload.answers : [],
+        rewardCoins: Number(payload.rewardCoins || 0),
+      };
+      if (revealed && Number.isInteger(Number(payload.correctAnswerIndex))) {
+        safe.correctAnswerIndex = Number(payload.correctAnswerIndex);
+      }
+      return safe;
     }
-    return safe;
+    // A wager round's correct answer is the thing being guessed; it must not leave the
+    // server before the host reveals it.
+    if (row.type === 'WAGER') {
+      const { correctAnswer, ...rest } = payload;
+      return revealed ? payload : rest;
+    }
+    return payload;
   })();
+
+  // A music round's title IS the song title and a picture round's title is the answer,
+  // so both are withheld from non-admin surfaces until reveal. Stripped here rather
+  // than in the UI so the secret never crosses the wire.
+  const hideTitle = !admin && ['MUSIC', 'PICTURE'].includes(row.type) && !revealed;
+
   return {
     ...row,
     id: Number(row.id),
     round_id: Number(row.round_id),
     sort_order: Number(row.sort_order),
     answer_count: Number(row.answer_count || 0),
+    title: hideTitle ? null : row.title,
     payload: normalizedPayload,
   };
 }
