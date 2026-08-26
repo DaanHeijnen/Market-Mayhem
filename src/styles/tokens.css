@@ -266,9 +266,16 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
   flex: 0 0 230px;
   padding: 36px 20px;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
   background: var(--ink);
   border: 0;
 }
+/* Pushes the player-app entry to the foot of the sidebar, as the design has it. */
+.sidebar-spacer { flex: 1; min-height: 24px; }
+.sidebar-caption { margin: 0 14px 8px; color: var(--dark-muted); font-size: 10px; font-weight: 800; letter-spacing: .1em; }
+.admin-sidebar .sidebar-preview-btn { border: 1px dashed #3D392F; color: var(--dark-secondary); font-size: 12px; }
+.admin-sidebar .sidebar-preview-btn:hover { border-color: var(--lime); background: var(--ink-2); color: var(--lime); }
 .brand {
   display: flex;
   align-items: center;
@@ -547,8 +554,10 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .roulette-title { margin: 4px 0; font-size: 28px; }
 .roulette-help { margin: 14px 0; padding: 13px 15px; border: 0; border-radius: 16px; background: var(--surface-soft); color: var(--secondary); font-size: 11px; line-height: 1.5; }
 .chip-picker { display: flex; gap: 8px; align-items: stretch; overflow-x: auto; padding-bottom: 5px; margin-bottom: 14px; }
-.chip { min-width: 50px; height: 50px; border: 3px solid var(--ink); border-radius: 50%; background: var(--white); color: var(--ink); font-family: var(--display); font-weight: 700; }
-.chip.selected { border-color: var(--ink); background: var(--lime); }
+/* Scoped to the picker: the Control Center's orientation `.chip` is declared later
+   in this file, so an unscoped rule here lost its round shape and ink ring to it. */
+.chip-picker .chip { min-width: 50px; height: 50px; padding: 0; border: 3px solid var(--ink); border-radius: 50%; background: var(--white); color: var(--ink); font-family: var(--display); font-size: 16px; font-weight: 700; text-transform: none; }
+.chip-picker .chip.selected { border-color: var(--ink); background: var(--lime); }
 .custom-chip { display: grid; grid-template-columns: auto 68px; align-items: center; gap: 6px; min-width: 136px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 14px; background: var(--white); color: var(--muted); font-size: 10px; }
 .custom-chip input { width: 68px; min-width: 0; border: 0; border-radius: 8px; padding: 7px; background: var(--paper); color: var(--ink); }
 .roulette-table { display: grid; gap: 7px; width: 100%; }
@@ -966,7 +975,9 @@ button.chip-blue:hover { background: var(--violet); }
 .graph-panel-admin .graph-wrap { min-height: 340px; margin-top: 14px; }
 .graph-panel-admin .graph-wrap svg { height: 300px; }
 .graph-panel-admin .graph-axis-label { font-size: 10px; }
-.graph-panel-admin .graph-legend { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-top: 14px; }
+/* max-content, not 1fr: with two players a fill pattern stretched the legend across
+   the whole panel and read as a layout fault. */
+.graph-panel-admin .graph-legend { grid-template-columns: repeat(auto-fit, minmax(140px, max-content)); justify-content: start; gap: 10px 22px; margin-top: 14px; }
 .graph-panel-admin .graph-legend > div { font-size: 12px; }
 .graph-panel-admin .graph-empty { min-height: 240px; }
 .run-step-kicker, .run-step-label { display: block; }
@@ -1107,6 +1118,28 @@ button.chip-blue:hover { background: var(--violet); }
 @media (max-width: 900px) {
   .form-grid.triple { grid-template-columns: 1fr; }
 }
+
+/* ============================================================
+   PHONE PREVIEW — the real player app inside the Admin surface
+   ============================================================ */
+.phone-backdrop { z-index: 200; }
+.phone-frame {
+  width: min(390px, 100%);
+  max-height: 92vh;
+  padding: 20px;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  overflow: auto;
+  border-radius: 44px;
+  background: var(--paper);
+}
+.phone-frame-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.phone-player-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+.phone-player-tabs .chip { display: inline-flex; align-items: center; gap: 8px; }
+/* Keeps every .mobile-shell descendant rule while dropping the full-page geometry. */
+.phone-screen { width: 100%; min-height: 0; margin: 0; padding: 0; border-radius: 0; overflow: visible; }
+.phone-note { margin: 0; font-size: 12px; line-height: 1.5; }
 
 /* Player-submitted prediction requests (mobile) */
 .request-form { display: grid; gap: 10px; margin-top: 12px; }

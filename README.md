@@ -32,7 +32,7 @@ A reset/fresh game has no players, rounds, predictions or transactions.
 1. **Settings** — set game name, starting coins and optional maximum wallet percentage per prediction.
 2. **Players** — create players and generate their single-use join links.
 3. **Rounds** — create rounds in any numbering scheme; execution does not assume `current + 1`.
-4. **Round Content** — add ordered `TEXT`, `QUESTION`, `DUOLINGO_QUESTION` and `ROULETTE` blocks.
+4. **Round Content** — add ordered blocks: `TEXT`, `QUESTION`, `DUOLINGO_QUESTION`, `ROULETTE`, `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`.
 5. **Predictions** — set probability, market-specific duration and min/max deposit, then optionally schedule to a round.
 6. **Control Center** — run the round, move through content, operate live questions/roulette, adjust coins and control the projector.
 
@@ -125,7 +125,19 @@ The projector can also present round blocks, an explicitly featured prediction, 
 
 ## Design system
 
-The application follows `ADMINNOTES/designhandboek.txt`: Inter + JetBrains Mono, slate-900 canvas, slate-800 cards, indigo primary actions, emerald/red YES/NO semantics, 12/16/24px radii, 44px minimum touch targets, responsive single-column mobile layouts and dense desktop Admin controls. Shared styling lives in `src/styles/tokens.css`.
+The application follows the Game Night Exchange Design Handbook (`devnotes/designhandboek.txt`): Space Grotesk display, Manrope body and JetBrains Mono figures; a paper `#F4F1E4` canvas with ink `#14120F` and white cards; lime `#DFF24C` for the host's primary action; violet, blue, magenta, cyan and orange as content accents; green/red YES/NO semantics; pill buttons, the asymmetric `12px 44px 12px 44px` card radius, 44px minimum touch targets, responsive single-column mobile layouts and dense desktop Admin controls.
+
+Everything is tokenised in `src/styles/tokens.css`, with the shared primitives in `src/components/admin/ui.tsx` (`Card`, `Accordion`, `Chip`, `Status`, `Empty`, `CoinAmount`, `Countdown`). Pages carry no inline hex — a new colour belongs in the token file. Block-type accents come from `src/components/admin/blockMeta.ts` via one `.accent-*` class each, so every content type stays tellable apart in the run of show.
+
+## Preview on phone
+
+The Admin sidebar's **▸ PREVIEW ON PHONE** opens what a chosen player's phone is showing right now, inside the Admin surface. It renders the real player components (`src/components/mobile/MobileViews.tsx`, shared with the live app) from the real `player-state` payload, so it cannot drift from the app the players are holding.
+
+It is **read-only**: navigation works so the host can look around, but every submit control is disabled and no mutation can fire — nobody can bet, answer or request on a player's behalf.
+
+`player-state-preview` is an Admin-authenticated read rather than an impersonated player session. Minting a real player session for the Admin would be new auth surface, and because the preview is a same-origin view it would overwrite the `mm_player_session` cookie of anyone also joined as a player in another tab. `getPlayerState` scopes its lookup to the game night and active players, so an arbitrary `playerId` cannot read across games.
+
+The modal fetches once per Admin snapshot version, so an open preview adds no polling and no extra database compute.
 
 ## Authentication
 
@@ -165,7 +177,7 @@ Notes that save time:
 2. Import it into Netlify.
 3. Enable Netlify Database.
 4. Generate a hash with `npm run admin:hash`, then configure `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH` and `SESSION_SECRET`.
-5. Apply/deploy migrations through `0006_backlog_interactive_models.sql`.
+5. Apply/deploy migrations through `0009_prediction_requests.sql`.
 6. Deploy.
 
 Previously deployed migrations are historical and are not rewritten.

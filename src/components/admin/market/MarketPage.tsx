@@ -42,16 +42,9 @@ export function MarketPage({ state: s, gameId, run }: { state: any; gameId: numb
       ? <Empty title="No players yet — the chart appears once players are added" />
       : <div className="market-chart-panel graph-panel-admin">
         <div className="label muted">PLAYER VALUE · ECONOMIC CHRONOLOGY</div>
+        {/* PlayerValueGraph already renders the design's legend — dot, name, value in
+            lime — so current value lives there rather than in a second list. */}
         <PlayerValueGraph players={screen.leaderboard} />
-        {/* Current value belongs with the chart, as the design's legend does, rather
-            than in a second card repeating the same players. */}
-        <div className="market-chart-legend">
-          {s.players.filter((p: any) => p.active).map((p: any) => <div key={p.id}>
-            <span className="legend-dot" style={{ background: p.public_color }} />
-            <b>{p.display_name}</b>
-            <strong>{p.current_balance + p.locked_prediction}</strong>
-          </div>)}
-        </div>
       </div>}
   </div>;
 }
