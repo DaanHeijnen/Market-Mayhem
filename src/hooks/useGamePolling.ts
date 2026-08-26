@@ -14,6 +14,9 @@ export function useGamePolling<T>(gameId: number, kind: LivePollKind, endpoint: 
   const pollController = useRef<AbortController | null>(null);
   const snapshotController = useRef<AbortController | null>(null);
   const snapshotPromise = useRef<Promise<T | null> | null>(null);
+  // Server-reported "nothing can change on its own" signal, used to pick the poll
+  // interval. Starts false so a fresh client polls at the live rate until told otherwise.
+  const gameIdle = useRef(false);
   const stats = useRef({ polls: 0, refreshes: 0, lastPoll: 0, lastRefresh: 0 });
 
   const loadSnapshot = useCallback((force = false) => {
@@ -72,7 +75,7 @@ export function useGamePolling<T>(gameId: number, kind: LivePollKind, endpoint: 
     };
 
     const isVisible = () => document.visibilityState !== 'hidden';
-    const interval = () => getLivePollDelay(kind, mobileIsActive(), document.visibilityState);
+    const interval = () => getLivePollDelay(kind, mobileIsActive(), document.visibilityState, gameIdle.current);
 
     const clearTimer = () => {
       if (timer !== undefined) {
@@ -101,7 +104,8 @@ export function useGamePolling<T>(gameId: number, kind: LivePollKind, endpoint: 
       try {
         stats.current.polls += 1;
         stats.current.lastPoll = Date.now();
-        const current = await api<{ version: number }>(`/api/game-version?gameId=${gameId}`, { signal: controller.signal });
+        const current = await api<{ version: number; idle?: boolean }>(`/api/game-version?gameId=${gameId}`, { signal: controller.signal });
+        gameIdle.current = Boolean(current.idle);
         if (version.current === null || current.version !== version.current) await loadSnapshot(false);
         if (!controller.signal.aborted) setError('');
       } catch (err) {

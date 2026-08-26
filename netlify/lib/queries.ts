@@ -57,20 +57,45 @@ export async function syncTimedState(gameId: number, knownDue = false) {
 
 export const syncExpiredPredictions = syncTimedState;
 
-export async function getGameVersion(gameId: number) {
+export type GameVersion = { version: number; idle: boolean };
+
+// This is the single hottest query in the product: every client polls it on an
+// interval, so it is also what keeps the database compute from suspending. A very
+// short per-container cache collapses the bursts that happen when the Admin, the
+// projector and several phones all land inside the same moment.
+const VERSION_CACHE_MS = 500;
+const versionCache = new Map<number, { value: GameVersion; at: number }>();
+
+export async function getGameVersion(gameId: number): Promise<GameVersion> {
+  const cached = versionCache.get(gameId);
+  if (cached && Date.now() - cached.at < VERSION_CACHE_MS) return cached.value;
+
+  // One round trip. `idle` is derived from columns this query already had to read,
+  // so telling clients they may back off costs nothing.
   const result = await database().pool.query(
     `SELECT g.game_state_version,
+      g.current_round_id,
       EXISTS(SELECT 1 FROM predictions p WHERE p.game_night_id=g.id AND p.status='OPEN' AND p.closes_at IS NOT NULL AND p.closes_at<=NOW()) AS prediction_due,
-      EXISTS(SELECT 1 FROM roulette_games rg WHERE rg.game_night_id=g.id AND rg.status='SPINNING' AND rg.spun_at IS NOT NULL AND rg.spun_at<=NOW()-($2::text||' milliseconds')::interval) AS roulette_due
+      EXISTS(SELECT 1 FROM roulette_games rg WHERE rg.game_night_id=g.id AND rg.status='SPINNING' AND rg.spun_at IS NOT NULL AND rg.spun_at<=NOW()-($2::text||' milliseconds')::interval) AS roulette_due,
+      EXISTS(SELECT 1 FROM predictions p WHERE p.game_night_id=g.id AND p.status IN ('OPEN','LOCKED','RESULT')) AS market_live,
+      EXISTS(SELECT 1 FROM roulette_games rg WHERE rg.game_night_id=g.id AND rg.status IN ('OPEN','LOCKED','SPINNING','RESULT')) AS roulette_live
      FROM game_nights g WHERE g.id=$1`,
     [gameId, ROULETTE_SPIN_MS],
   );
   const row = result.rows[0];
   if (!row) throw new HttpError(404, 'Game not found');
-  if (!row.prediction_due && !row.roulette_due) return Number(row.game_state_version);
-  await syncTimedState(gameId, true);
-  const refreshed = await database().pool.query('SELECT game_state_version FROM game_nights WHERE id=$1', [gameId]);
-  return Number(refreshed.rows[0].game_state_version);
+
+  const idle = !row.current_round_id && !row.market_live && !row.roulette_live;
+  let version = Number(row.game_state_version);
+  if (row.prediction_due || row.roulette_due) {
+    await syncTimedState(gameId, true);
+    const refreshed = await database().pool.query('SELECT game_state_version FROM game_nights WHERE id=$1', [gameId]);
+    version = Number(refreshed.rows[0].game_state_version);
+  }
+
+  const value: GameVersion = { version, idle };
+  versionCache.set(gameId, { value, at: Date.now() });
+  return value;
 }
 
 function normalizeBlock(row: any, admin = true) {
@@ -118,13 +143,17 @@ function normalizePrediction(p: any) {
 }
 
 export async function getAdminState(gameId: number) {
-  await syncTimedState(gameId);
+  // Timer reconciliation is owned by getGameVersion, which every client polls before
+  // it ever asks for a snapshot. Repeating the due-check here cost an extra query on
+  // every snapshot for no new information. If a timer falls due while nobody is
+  // polling, the next version poll reconciles it and bumps the version, which pulls a
+  // fresh snapshot — so this self-heals within one poll interval.
   const pool = database().pool;
   const gameResult = await pool.query('SELECT * FROM game_nights WHERE id=$1', [gameId]);
   const game = gameResult.rows[0];
   if (!game) throw new HttpError(404, 'Game not found');
 
-  const [rounds, blocks, groups, players, predictions, recent, roulette] = await Promise.all([
+  const [rounds, blocks, groups, players, predictions, recent, roulette, screen] = await Promise.all([
     pool.query('SELECT * FROM rounds WHERE game_night_id=$1 ORDER BY round_number,id', [gameId]),
     pool.query(
       `SELECT b.*,COUNT(a.id)::int AS answer_count
@@ -171,6 +200,7 @@ export async function getAdminState(gameId: number) {
        WHERE rg.game_night_id=$1 AND rg.round_block_id=$2 AND rg.status IN ('DRAFT','OPEN','LOCKED','SPINNING','RESULT')
        GROUP BY rg.id ORDER BY rg.id DESC LIMIT 1`, [gameId, game.current_round_block_id],
     ),
+    pool.query('SELECT mode,round_id,prediction_id,payload FROM screen_state WHERE game_night_id=$1', [gameId]),
   ]);
 
   const normalizedBlocks = blocks.rows.map((b: any) => normalizeBlock(b, true));
@@ -186,6 +216,14 @@ export async function getAdminState(gameId: number) {
       current_screen_mode: game.current_screen_mode,
       game_state_version: Number(game.game_state_version),
     },
+    screen: (() => {
+      const row = screen.rows[0];
+      return {
+        mode: row?.mode || game.current_screen_mode,
+        predictionId: row?.prediction_id ? Number(row.prediction_id) : null,
+        blockId: Number(row?.payload?.blockId || 0) || null,
+      };
+    })(),
     rounds: rounds.rows.map((r: any) => ({
       ...r, id: Number(r.id), round_number: Number(r.round_number),
       blocks: normalizedBlocks.filter((b: any) => b.round_id === Number(r.id)),
@@ -201,7 +239,11 @@ export async function getAdminState(gameId: number) {
 }
 
 export async function getPlayerState(gameId: number, playerId: number) {
-  await syncTimedState(gameId);
+  // Timer reconciliation is owned by getGameVersion, which every client polls before
+  // it ever asks for a snapshot. Repeating the due-check here cost an extra query on
+  // every snapshot for no new information. If a timer falls due while nobody is
+  // polling, the next version poll reconciles it and bumps the version, which pulls a
+  // fresh snapshot — so this self-heals within one poll interval.
   const pool = database().pool;
   const playerResult = await pool.query(
     `WITH values AS (
@@ -292,7 +334,11 @@ function eventTimestamp(value: unknown) {
 }
 
 export async function getScreenState(gameId: number) {
-  await syncTimedState(gameId);
+  // Timer reconciliation is owned by getGameVersion, which every client polls before
+  // it ever asks for a snapshot. Repeating the due-check here cost an extra query on
+  // every snapshot for no new information. If a timer falls due while nobody is
+  // polling, the next version poll reconciles it and bumps the version, which pulls a
+  // fresh snapshot — so this self-heals within one poll interval.
   const pool = database().pool;
   const gameResult = await pool.query('SELECT g.*,s.mode,s.round_id AS screen_round_id,s.prediction_id,s.payload FROM game_nights g LEFT JOIN screen_state s ON s.game_night_id=g.id WHERE g.id=$1', [gameId]);
   const game = gameResult.rows[0];

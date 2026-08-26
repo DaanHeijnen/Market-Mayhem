@@ -72,9 +72,12 @@ function Home({ state: s, go, gameId }: { state: any; go: (x?: string) => void; 
       <button className="btn btn-primary big-mobile-btn" disabled={!s.predictionAvailable} onClick={() => go('/predictions')}>
         <span>PREDICTIONS</span><span className="button-count">{s.predictions.filter((p: any) => p.status === 'OPEN').length}</span>
       </button>
-      <button className="btn btn-secondary big-mobile-btn" disabled={!s.rouletteAvailable && !s.roulette} onClick={() => go('/roulette')}>
+      {/* player-state only sends a roulette once it has left DRAFT, so its presence
+          means the Admin has opened the spin. Showing a permanently disabled tile
+          otherwise advertises a game that may never run. */}
+      {s.roulette && <button className="btn btn-secondary big-mobile-btn" onClick={() => go('/roulette')}>
         <span>ROULETTE</span><span className="button-count">{s.roulette?.status === 'OPEN' ? 'LIVE' : 'VIEW'}</span>
-      </button>
+      </button>}
     </div>
     {!s.actionable && <Card><div className="display card-title">No live actions</div><p className="muted">Your wallet stays ready. Prediction participation is optional: doing nothing creates no transaction.</p></Card>}
     <Ledger state={s} />

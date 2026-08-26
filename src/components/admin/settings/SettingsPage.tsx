@@ -28,32 +28,30 @@ export function SettingsPage({ state: s, run, onReset }: { state: any; run: RunM
       <button className="btn btn-primary" onClick={() => run('/api/update-settings', { ...form, maximumWalletPercentage: form.maximumWalletPercentage === '' ? null : Number(form.maximumWalletPercentage) })}>SAVE SETTINGS</button>
     </Card>
 
-    <Card className="danger-card">
+    <Card className="danger-card danger-inline">
       <div className="label danger-text">DANGER ZONE</div>
       <h2 className="display">Delete Game Save</h2>
       <p className="muted">Permanently reset only this game night. Your Admin login remains available.</p>
-      <button className="btn btn-danger btn-danger-large" onClick={() => { setPhrase(''); setDanger(true); }}>DELETE GAME SAVE</button>
+      {!danger
+        ? <button className="btn btn-danger btn-danger-large" onClick={() => { setPhrase(''); setDanger(true); }}>DELETE GAME SAVE</button>
+        : <>
+          <p>The following game-specific data will be removed:</p>
+          <ul className="danger-list">
+            <li>players, join tokens and player sessions</li>
+            <li>wallets and immutable ledger entries</li>
+            <li>rounds, groups, memberships and round content</li>
+            <li>live-question answers and reward state</li>
+            <li>predictions, deposits and payouts</li>
+            <li>roulette games and bets</li>
+            <li>screen state and game settings</li>
+          </ul>
+          <p>Type exactly <b>yes delete</b> to continue.</p>
+          <input autoFocus className="field" value={phrase} onChange={e => setPhrase(e.target.value)} placeholder="yes delete" />
+          <div className="actions">
+            <button className="btn btn-danger" disabled={phrase !== 'yes delete'} onClick={async () => { if (await run('/api/reset-game', { confirmation: phrase })) { setDanger(false); onReset(); } }}>DELETE EVERYTHING</button>
+            <button className="btn btn-secondary" onClick={() => { setDanger(false); setPhrase(''); }}>CANCEL</button>
+          </div>
+        </>}
     </Card>
-
-    {danger && <div className="modal-backdrop"><div className="modal card">
-      <div className="label danger-text">PERMANENT RESET</div>
-      <h2 className="display">Delete this game save?</h2>
-      <p>The following game-specific data will be removed:</p>
-      <ul className="danger-list">
-        <li>players, join tokens and player sessions</li>
-        <li>wallets and immutable ledger entries</li>
-        <li>rounds, groups, memberships and round content</li>
-        <li>live-question answers and reward state</li>
-        <li>predictions, deposits and payouts</li>
-        <li>roulette games and bets</li>
-        <li>screen state and game settings</li>
-      </ul>
-      <p>Type exactly <b>yes delete</b> to continue.</p>
-      <input autoFocus className="field" value={phrase} onChange={e => setPhrase(e.target.value)} placeholder="yes delete" />
-      <div className="modal-actions">
-        <button className="btn btn-secondary" onClick={() => setDanger(false)}>CANCEL</button>
-        <button className="btn btn-danger" disabled={phrase !== 'yes delete'} onClick={async () => { if (await run('/api/reset-game', { confirmation: phrase })) { setDanger(false); onReset(); } }}>DELETE EVERYTHING</button>
-      </div>
-    </div></div>}
   </div>;
 }

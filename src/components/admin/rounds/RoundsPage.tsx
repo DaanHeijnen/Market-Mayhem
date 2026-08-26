@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { RunMutation } from '../types';
 import { Card, Empty, Status } from '../ui';
+import { AUTHORABLE_BLOCK_TYPES, blockLabel, blockMeta } from '../blockMeta';
 
 const QUESTION_EMOJIS = ['🍆','🌽','🍑','😳'] as const;
 
@@ -10,20 +11,30 @@ const blankBlock = { type: 'TEXT', title: '', body: '', answers: ['', '', '', ''
 export function RoundsPage({ state: s, gameId, roundId, run }: { state: any; gameId: number; roundId: number | null; run: RunMutation }) {
   const nav = useNavigate();
   const [selected, setSelected] = useState<any>(null);
+  const [creating, setCreating] = useState(false);
   const [newRound, setNewRound] = useState({ roundNumber: '', title: '', description: '' });
   const round = useMemo(() => s.rounds.find((r: any) => r.id === roundId) || null, [s.rounds, roundId]);
   if (round) return <RoundDetail state={s} round={round} run={run} back={() => nav(`/admin/${gameId}/rounds`)} />;
 
+  const cancelCreate = () => { setCreating(false); setNewRound({ roundNumber: '', title: '', description: '' }); };
+
   return <div className="page-stack">
-    <Card>
-      <div className="label muted">CREATE ROUND</div>
-      <div className="form-grid compact">
-        <label>Round number<input className="field" type="number" min="1" value={newRound.roundNumber} onChange={e => setNewRound({ ...newRound, roundNumber: e.target.value })} /></label>
-        <label>Title<input className="field" value={newRound.title} onChange={e => setNewRound({ ...newRound, title: e.target.value })} /></label>
-      </div>
-      <label>Description<textarea className="field" rows={2} value={newRound.description} onChange={e => setNewRound({ ...newRound, description: e.target.value })} /></label>
-      <div className="actions"><button className="btn btn-primary" disabled={!newRound.roundNumber || !newRound.title.trim()} onClick={async () => { if (await run('/api/create-round', { roundNumber: Number(newRound.roundNumber), title: newRound.title, description: newRound.description })) setNewRound({ roundNumber: '', title: '', description: '' }); }}>CREATE ROUND</button></div>
-    </Card>
+    <div className="explainer">A round is one segment of the night — a quiz, a mini-game, a break. Build it with content blocks; in Control Center you step through them in this exact order.</div>
+
+    {!creating
+      ? <div className="row-end"><button className="btn btn-primary" onClick={() => setCreating(true)}>+ NEW ROUND</button></div>
+      : <Card>
+        <div className="label muted">CREATE ROUND</div>
+        <div className="form-grid compact">
+          <label>Round number<input className="field" type="number" min="1" value={newRound.roundNumber} onChange={e => setNewRound({ ...newRound, roundNumber: e.target.value })} /></label>
+          <label>Title<input className="field" value={newRound.title} onChange={e => setNewRound({ ...newRound, title: e.target.value })} /></label>
+        </div>
+        <label>Description<textarea className="field" rows={2} value={newRound.description} onChange={e => setNewRound({ ...newRound, description: e.target.value })} /></label>
+        <div className="actions">
+          <button className="btn btn-primary" disabled={!newRound.roundNumber || !newRound.title.trim()} onClick={async () => { if (await run('/api/create-round', { roundNumber: Number(newRound.roundNumber), title: newRound.title, description: newRound.description })) cancelCreate(); }}>CREATE ROUND</button>
+          <button className="btn btn-secondary" onClick={cancelCreate}>CANCEL</button>
+        </div>
+      </Card>}
 
     {s.rounds.length === 0 ? <Empty title="No rounds yet — Create your first round" /> : <div className="card-list round-list">
       {s.rounds.map((item: any) => <Card key={item.id} className={`round-card round-${String(item.status).toLowerCase()}`}>
@@ -80,10 +91,19 @@ function RoundDetail({ state: s, round, run, back }: { state: any; round: any; r
     </Card>
 
     {!readOnlyContent && <Card>
-      <div className="label muted">{edit ? 'EDIT BLOCK' : 'ADD ROUND CONTENT'}</div>
+      <div className="label muted">{edit ? 'EDIT BLOCK' : 'ADD CONTENT — CHOOSE WHAT HAPPENS'}</div>
+      <div className="block-type-grid">
+        {AUTHORABLE_BLOCK_TYPES.map(type => {
+          const meta = blockMeta(type);
+          return <button key={type} className={`block-type-tile accent-${meta.accent} ${blockForm.type === type ? 'selected' : ''}`} aria-pressed={blockForm.type === type} onClick={() => setBlockForm({ ...blankBlock, type })}>
+            <span className="accent-swatch" />
+            <b>{meta.label}</b>
+            <span>{meta.description}</span>
+          </button>;
+        })}
+      </div>
       <div className="form-grid compact">
-        <label>Type<select className="field" value={blockForm.type} onChange={e => setBlockForm({ ...blankBlock, type: e.target.value })}><option>TEXT</option><option>QUESTION</option><option>DUOLINGO_QUESTION</option><option>ROULETTE</option></select></label>
-        <label>{blockForm.type === 'QUESTION' || blockForm.type === 'DUOLINGO_QUESTION' ? 'Question text' : blockForm.type === 'TEXT' ? 'Optional title' : 'Title'}<input className="field" value={blockForm.title} onChange={e => setBlockForm({ ...blockForm, title: e.target.value })} /></label>
+        <label className="span-2">{blockForm.type === 'QUESTION' || blockForm.type === 'DUOLINGO_QUESTION' ? 'Question text' : blockForm.type === 'TEXT' ? 'Optional title' : 'Title'}<input className="field" value={blockForm.title} onChange={e => setBlockForm({ ...blockForm, title: e.target.value })} /></label>
       </div>
       {['TEXT','QUESTION'].includes(blockForm.type) && <label>{blockForm.type === 'QUESTION' ? 'Optional supporting text' : 'Body / instructions'}<textarea className="field" rows={4} value={blockForm.body} onChange={e => setBlockForm({ ...blockForm, body: e.target.value })} /></label>}
       {blockForm.type === 'DUOLINGO_QUESTION' && <div className="duo-editor">
@@ -97,8 +117,8 @@ function RoundDetail({ state: s, round, run, back }: { state: any; round: any; r
     </Card>}
 
     {blocks.length === 0 ? <Empty title="No round content yet — Add the first block" /> : <div className="card-list block-list">
-      {blocks.map((block: any, index: number) => <Card key={block.id} className={`round-block-card ${s.game.current_round_block_id === block.id ? 'live-card' : ''}`}>
-        <div className="row-between"><div><div className="label muted">{String(index + 1).padStart(2, '0')} · {block.type.replaceAll('_', ' ')}</div><div className="display row-title">{block.title || ({ TEXT: 'Text block', QUESTION: 'Question', ROULETTE: 'Roulette', DUOLINGO_QUESTION: 'Live question' } as any)[block.type]}</div>{block.payload?.body && <p className="muted block-copy">{block.payload.body}</p>}{block.type === 'DUOLINGO_QUESTION' && <div className="duo-block-summary"><Status tone={block.interactive_status === 'OPEN' ? 'open' : block.interactive_status === 'SETTLED' ? 'success' : 'neutral'}>{block.interactive_status}</Status><span>{block.answer_count} answers</span><span>{block.payload.rewardCoins} coin reward</span></div>}</div>{s.game.current_round_block_id === block.id && <Status tone="open">LIVE</Status>}</div>
+      {blocks.map((block: any, index: number) => <Card key={block.id} className={`round-block-card accent-${blockMeta(block.type).accent} ${s.game.current_round_block_id === block.id ? 'live-card' : ''}`}>
+        <div className="row-between"><div><div className="label muted">{String(index + 1).padStart(2, '0')} · {blockMeta(block.type).label}</div><div className="display row-title">{blockLabel(block)}</div>{block.payload?.body && <p className="muted block-copy">{block.payload.body}</p>}{block.type === 'DUOLINGO_QUESTION' && <div className="duo-block-summary"><Status tone={block.interactive_status === 'OPEN' ? 'open' : block.interactive_status === 'SETTLED' ? 'success' : 'neutral'}>{block.interactive_status}</Status><span>{block.answer_count} answers</span><span>{block.payload.rewardCoins} coin reward</span></div>}</div>{s.game.current_round_block_id === block.id && <Status tone="open">LIVE</Status>}</div>
         {!readOnlyContent && <div className="actions actions-compact"><button className="btn btn-secondary btn-compact" disabled={index === 0} onClick={() => move(index, -1)}>↑</button><button className="btn btn-secondary btn-compact" disabled={index === blocks.length - 1} onClick={() => move(index, 1)}>↓</button><button className="btn btn-secondary btn-compact" onClick={() => beginEdit(block)}>EDIT</button>{round.status === 'ACTIVE' && <button className="btn btn-primary btn-compact" onClick={() => show(block)}>SHOW</button>}<button className="btn btn-danger-ghost btn-compact" onClick={() => run('/api/delete-round-block', { blockId: block.id })}>DELETE</button></div>}
         {block.type === 'DUOLINGO_QUESTION' && round.status === 'ACTIVE' && s.game.current_round_block_id === block.id && <div className="interactive-controls">
           {block.interactive_status === 'READY' && <button className="btn btn-primary" onClick={() => questionAction(block, 'OPEN')}>OPEN ANSWERS</button>}

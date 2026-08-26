@@ -49,11 +49,6 @@ export function PredictionsPage({ state: s, run }: { state: any; run: RunMutatio
     });
   };
 
-  const showPrediction = (prediction: any) => {
-    const mode = prediction.status === 'OPEN' ? 'PREDICTIONS_OPEN' : ['RESULT','SETTLED'].includes(prediction.status) ? 'PREDICTION_RESULT' : 'PREDICTION_LOCKED';
-    return run('/api/screen-mode', { mode, predictionId: prediction.id });
-  };
-
   const canSave = form.question.trim() && Number(form.minimumStake) > 0 && Number(form.maximumStake) >= Number(form.minimumStake) && Number(form.predictionTimeSeconds) >= 5;
 
   return <div className="page-stack">
@@ -89,23 +84,23 @@ export function PredictionsPage({ state: s, run }: { state: any; run: RunMutatio
           <div><div className="label muted">PREDICTION #{prediction.display_number}{prediction.round_number ? ` · R${String(prediction.round_number).padStart(2, '0')}` : ''}</div><div className="display row-title">{prediction.question}</div></div>
           <Status tone={prediction.status === 'OPEN' ? 'open' : prediction.status === 'CANCELLED' ? 'danger' : prediction.status === 'SETTLED' ? 'success' : 'neutral'}>{visibleStatus(prediction)}</Status>
         </div>
-        <div className="odds-row prediction-metrics">
-          <div><span>PROBABILITY</span><b>{Math.round(prediction.probability_yes * 100)}%</b></div>
+        <div className="odds-row prediction-metrics prediction-metrics-primary">
           <div className="yes"><span>YES</span><b>{prediction.yes_odds.toFixed(2)}×</b></div>
           <div className="no"><span>NO</span><b>{prediction.no_odds.toFixed(2)}×</b></div>
-          <div><span>DEPOSIT LIMITS</span><b>{prediction.minimum_stake}–{prediction.maximum_stake}</b></div>
           <div><span>PARTICIPATION</span><b>{prediction.participation_count} / {s.players.filter((p: any) => p.active).length}</b></div>
-          {prediction.status === 'OPEN' && <div><span>TIME</span><b><Countdown closesAt={prediction.closes_at} /></b></div>}
+        </div>
+        <div className="muted prediction-meta-line">
+          <span>Probability <b>{Math.round(prediction.probability_yes * 100)}%</b></span>
+          <span>Deposit <b>{prediction.minimum_stake}–{prediction.maximum_stake}</b></span>
+          <span>Duration <b>{prediction.prediction_time_seconds}s</b></span>
+          {prediction.status === 'OPEN' && <span>Closes in <b className="mono"><Countdown closesAt={prediction.closes_at} /></b></span>}
         </div>
         <div className="actions actions-compact">
           {['DRAFT','SCHEDULED'].includes(prediction.status) && (() => {
             const waitingForRound = prediction.round_id && s.game.current_round_id !== prediction.round_id;
             return <><button className="btn btn-secondary btn-compact" onClick={() => begin(prediction)}>EDIT</button><button className="btn btn-primary btn-compact" disabled={Boolean(waitingForRound)} title={waitingForRound ? 'This market opens automatically when its linked round starts.' : undefined} onClick={() => run('/api/open-prediction', { predictionId: prediction.id })}>{waitingForRound ? 'WAITING FOR ROUND' : 'OPEN NOW'}</button><button className="btn btn-danger-ghost btn-compact" onClick={() => run('/api/delete-prediction', { predictionId: prediction.id })}>DELETE</button></>;
           })()}
-          {['OPEN','LOCKED','RESULT','SETTLED'].includes(prediction.status) && <button className="btn btn-secondary btn-compact" onClick={() => showPrediction(prediction)}>SHOW PREDICTION</button>}
-          {prediction.status === 'OPEN' && <button className="btn btn-secondary btn-compact" onClick={() => run('/api/lock-prediction', { predictionId: prediction.id })}>LOCK NOW</button>}
-          {prediction.status === 'LOCKED' && <><button className="btn btn-success btn-compact" onClick={() => run('/api/set-prediction-result', { predictionId: prediction.id, result: 'YES' })}>RESULT YES</button><button className="btn btn-danger btn-compact" onClick={() => run('/api/set-prediction-result', { predictionId: prediction.id, result: 'NO' })}>RESULT NO</button></>}
-          {prediction.status === 'RESULT' && <button className="btn btn-primary btn-compact" onClick={() => run('/api/settle-prediction', { predictionId: prediction.id }, true)}>SETTLE PAYOUTS</button>}
+          {['OPEN','LOCKED','RESULT'].includes(prediction.status) && <span className="muted lifecycle-hint">Live controls are on the Control Center</span>}
           {['DRAFT','SCHEDULED','OPEN','LOCKED'].includes(prediction.status) && <button className="btn btn-danger-ghost btn-compact" onClick={() => run('/api/cancel-prediction', { predictionId: prediction.id }, true)}>CANCEL + REFUND</button>}
         </div>
       </Card>)}
