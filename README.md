@@ -32,7 +32,7 @@ A reset/fresh game has no players, rounds, predictions or transactions.
 1. **Settings** — set game name, starting coins and optional maximum wallet percentage per prediction.
 2. **Players** — create players and generate their single-use join links.
 3. **Rounds** — create rounds in any numbering scheme; execution does not assume `current + 1`.
-4. **Round Content** — add ordered `TEXT`, `QUESTION`, `DUOLINGO_QUESTION` and `ROULETTE` blocks.
+4. **Round Content** — add ordered blocks: `TEXT`, `QUESTION`, `DUOLINGO_QUESTION`, `ROULETTE`, `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`.
 5. **Predictions** — set probability, market-specific duration and min/max deposit, then optionally schedule to a round.
 6. **Control Center** — run the round, move through content, operate live questions/roulette, adjust coins and control the projector.
 
@@ -125,7 +125,19 @@ The projector can also present round blocks, an explicitly featured prediction, 
 
 ## Design system
 
-The application follows `ADMINNOTES/designhandboek.txt`: Inter + JetBrains Mono, slate-900 canvas, slate-800 cards, indigo primary actions, emerald/red YES/NO semantics, 12/16/24px radii, 44px minimum touch targets, responsive single-column mobile layouts and dense desktop Admin controls. Shared styling lives in `src/styles/tokens.css`.
+The application follows the Game Night Exchange Design Handbook (`devnotes/designhandboek.txt`): Space Grotesk display, Manrope body and JetBrains Mono figures; a paper `#F4F1E4` canvas with ink `#14120F` and white cards; lime `#DFF24C` for the host's primary action; violet, blue, magenta, cyan and orange as content accents; green/red YES/NO semantics; pill buttons, the asymmetric `12px 44px 12px 44px` card radius, 44px minimum touch targets, responsive single-column mobile layouts and dense desktop Admin controls.
+
+Everything is tokenised in `src/styles/tokens.css`, with the shared primitives in `src/components/admin/ui.tsx` (`Card`, `Accordion`, `Chip`, `Status`, `Empty`, `CoinAmount`, `Countdown`). Pages carry no inline hex — a new colour belongs in the token file. Block-type accents come from `src/components/admin/blockMeta.ts` via one `.accent-*` class each, so every content type stays tellable apart in the run of show.
+
+## Preview on phone
+
+The Admin sidebar's **▸ PREVIEW ON PHONE** opens what a chosen player's phone is showing right now, inside the Admin surface. It renders the real player components (`src/components/mobile/MobileViews.tsx`, shared with the live app) from the real `player-state` payload, so it cannot drift from the app the players are holding.
+
+It is **read-only**: navigation works so the host can look around, but every submit control is disabled and no mutation can fire — nobody can bet, answer or request on a player's behalf.
+
+`player-state-preview` is an Admin-authenticated read rather than an impersonated player session. Minting a real player session for the Admin would be new auth surface, and because the preview is a same-origin view it would overwrite the `mm_player_session` cookie of anyone also joined as a player in another tab. `getPlayerState` scopes its lookup to the game night and active players, so an arbitrary `playerId` cannot read across games.
+
+The modal fetches once per Admin snapshot version, so an open preview adds no polling and no extra database compute.
 
 ## Authentication
 
@@ -144,12 +156,20 @@ Generate `ADMIN_PASSWORD_HASH` with `npm run admin:hash`. The generated value us
 ```bash
 npm install
 cp .env.example .env
-npx netlify database init --yes
-npx netlify database migrations apply
+npx --yes netlify-cli@27.1.1 database init --yes
+npx --yes netlify-cli@27.1.1 database migrations apply
 npm run dev
 ```
 
 Then open `http://localhost:8888/admin/1`.
+
+Notes that save time:
+
+- The CLI is **not** installed globally and is not a dependency — always invoke it as `npx --yes netlify-cli@27.1.1 …`, the same pinned form `npm run dev` uses. Plain `npx netlify` resolves a different package.
+- `database init` only creates the data directory. **Skipping `migrations apply` leaves a database with no tables**, and admin login then fails with a generic `500 Internal server error` — the credential checks pass and the `INSERT INTO admin_sessions` is what actually blows up.
+- Stop the dev server with **Ctrl+C, never `kill`**. The local database is a WASM Postgres running as a child of the Netlify process; an ungraceful stop corrupts `.netlify/db`, after which every start logs `Failed to start Netlify Database locally: RuntimeError: Aborted()` and serves the app *without* a database, so the pages load but every API call 500s. Recover with `rm -rf .netlify/db` and re-run init + migrations.
+- The seeded game is intentionally empty — migration `0003` clears the demo data — so add players and a round before anything interesting appears.
+- `netlify dev` caches function bundles and does **not** always pick up edits to files under `netlify/lib/`. If an endpoint keeps returning the old shape, `touch` the function file that imports it (e.g. `touch netlify/functions/player-state.ts`) to force a re-bundle. Easy to mistake for a bug in your own change.
 
 ## Deploy to Netlify
 
@@ -157,7 +177,7 @@ Then open `http://localhost:8888/admin/1`.
 2. Import it into Netlify.
 3. Enable Netlify Database.
 4. Generate a hash with `npm run admin:hash`, then configure `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH` and `SESSION_SECRET`.
-5. Apply/deploy migrations through `0006_backlog_interactive_models.sql`.
+5. Apply/deploy migrations through `0009_prediction_requests.sql`.
 6. Deploy.
 
 Previously deployed migrations are historical and are not rewritten.
@@ -169,6 +189,29 @@ Settings → Danger Zone → **DELETE GAME SAVE** requires exactly `yes delete` 
 ## Live updates
 
 Clients poll `/api/game-version` rather than constantly downloading full snapshots. A version change triggers a targeted Admin/player/screen refresh. Polls are deduplicated, stale snapshots use `AbortController`, hidden tabs are throttled and post-action refreshes are immediate. Mobile switches to the faster cadence only while the backend reports an actionable prediction, roulette market or live question.
+
+## Database compute
+
+Netlify Database (Neon) bills **compute time, not query count**. The endpoint stays billable for as long as it is active, and it is kept active by *any* client polling — so the thing that costs money is not a busy game night, it is a quiet one with a tab left open.
+
+`/api/game-version` is one query and is the only thing polled on an interval. Two signals throttle it, both in `src/config/live.ts`:
+
+| Situation | Admin | Big Screen | Mobile |
+|---|---|---|---|
+| Round or market live | 3s | 5s | 2.5s active / 12s idle |
+| Game idle (no round, no market, no roulette) | 15s | 15s | unchanged |
+| Idle **and** no interaction for 10 min | **stops** | 60s | **stops** |
+| Tab hidden | stops | stops | stops |
+
+- The `idle` flag comes back on the version response, derived from columns that query already reads, so telling clients to back off costs nothing.
+- An **abandoned but visible** tab is the expensive case — the hidden-tab check never fires for it. Admin and mobile stop entirely and resume instantly on a click, keypress, scroll or window focus.
+- The Big Screen slows rather than stops, because nobody ever touches a projector. That is what lets it notice a round starting without someone refreshing it.
+- Mobile keeps its interval when the game is idle on purpose: a phone picks its cadence from its last known state, so slowing it down would directly delay how long a player waits to see a market open.
+- An Admin action refreshes its own snapshot directly, so neither the idle tier nor the away stop can ever delay the host seeing their own change.
+- Media (`/api/block-media`) is served from Netlify Blobs and touches no database, so the projector and every phone loading the same image generates zero database load. Only the blob key is stored in the block payload — bytes there would ride inside every snapshot.
+- `netlify/lib/db.ts` releases idle connections after 10s. An open idle connection keeps the Neon endpoint active, so this matters as much as the polling.
+
+If usage still looks high, the first thing to check is whether a `/screen/:gameId` or `/admin/:gameId` tab is open somewhere on a machine nobody is using.
 
 ## Verification
 

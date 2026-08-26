@@ -142,6 +142,26 @@ Batch chip placement is canonical and transactional. Public Big Screen roulette 
 
 Opening a prediction does not touch `screen_state`; only explicit SHOW PREDICTION does. SHOW MAIN DASHBOARD is always available and changes presentation without changing underlying market state.
 
+### Presenter model — staged, live, previous
+
+`screen_state` carries three parallel pointers, all on the one row (migration `0008`):
+
+- the live set (`mode`, `round_id`, `prediction_id`, `payload`) — what the projector is showing;
+- `staged_*` — what `GO LIVE` will promote next. Staging is deliberately near side-effect-free: it moves nothing on screen;
+- `previous_*` — filled only when the host jumps to the dashboard with `remember`, so BACK TO RUN OF SHOW returns to the exact step rather than guessing.
+
+`promoteStaged` routes blocks through `setActiveRoundBlock`, so every existing guard still applies — an unfinished live question or a roulette in progress refuses the promotion rather than being bypassed. After promoting it advances the staged pointer to the next run-of-show step.
+
+Run-of-show order has exactly one implementation, `netlify/lib/run-of-show.ts`, used by both the Admin strip and `promoteStaged`. That is the point: `GO LIVE` cannot skip or repeat a step relative to what the host is looking at.
+
+Both `staged_*` and `previous_*` live in the row `getAdminState` already reads, so the presenter model costs no extra query.
+
+### Previewing a player's phone
+
+`player-state-preview` returns the exact `player-state` payload for a chosen player, read with Admin authority, and the Admin modal renders the same `MobileViews` components the live player app uses. It is read-only — every submit control is disabled and no mutation can fire.
+
+It is an Admin-authenticated read rather than an impersonated session: minting a real player session for the Admin would be new auth surface, and a same-origin preview would overwrite the `mm_player_session` cookie of anyone also joined as a player in another tab.
+
 The exchange dashboard is derived from real financial chronology. Prediction/roulette deposits are represented as locked value until resolution, so graph value does not falsely fall merely because coins moved from available to locked.
 
 ## Security and reset

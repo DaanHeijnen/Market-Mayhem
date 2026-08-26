@@ -2,9 +2,12 @@ import { requireAdmin, audit } from '../lib/auth';
 import { withTransaction } from '../lib/db';
 import { body, ok, intValue, textValue, HttpError } from '../lib/http';
 import { incrementGameVersion } from '../lib/game-state';
+import { mediaKeyValue } from '../lib/media';
 import { wrap } from './_wrap';
 
-const TYPES = ['TEXT','QUESTION','ROULETTE','DUOLINGO_QUESTION'] as const;
+// Must stay in step with round_blocks_type_check (migration 0007) and with
+// blockMeta.ts on the client, which generates the content picker from the same set.
+const TYPES = ['TEXT','QUESTION','ROULETTE','DUOLINGO_QUESTION','PICTURE','MUSIC','BUZZER','WAGER'] as const;
 type BlockType = typeof TYPES[number];
 
 function optionalText(value: unknown, max: number) {
@@ -35,6 +38,28 @@ export default wrap(async request => {
     const rewardCoins = intValue(p.rewardCoins, 'rewardCoins', { min: 0, max: 1_000_000 });
     payload = { answers, correctAnswerIndex, rewardCoins };
   }
+  if (type === 'PICTURE') {
+    // The image is optional at first save so the Admin can outline a round and add
+    // artwork later. Only the blob key is stored — never the bytes.
+    payload = { body: bodyText, imageKey: p.imageKey == null ? '' : mediaKeyValue(p.imageKey) };
+  }
+  if (type === 'MUSIC') {
+    // The title is the song title and stays hidden from players until reveal, so it is
+    // not required up front either.
+    payload = {
+      body: bodyText,
+      audioKey: p.audioKey == null ? '' : mediaKeyValue(p.audioKey),
+      audioName: optionalText(p.audioName, 300),
+    };
+  }
+  if (type === 'BUZZER') {
+    if (!title) throw new HttpError(400, 'Buzzer rounds require question text');
+    payload = { body: bodyText };
+  }
+  if (type === 'WAGER') {
+    if (!title) throw new HttpError(400, 'Wager rounds require question text');
+    payload = { body: bodyText, correctAnswer: optionalText(p.correctAnswer, 300) };
+  }
 
   return ok(await withTransaction(async client => {
     const game = await client.query('SELECT current_round_block_id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
@@ -62,7 +87,7 @@ export default wrap(async request => {
       }
       await client.query(
         `UPDATE round_blocks SET type=$2,title=$3,payload=$4::jsonb,
-          interactive_status=CASE WHEN $2='DUOLINGO_QUESTION' THEN 'READY' ELSE NULL END,
+          interactive_status=CASE WHEN $2 IN ('DUOLINGO_QUESTION','PICTURE','MUSIC','BUZZER','WAGER') THEN 'READY' ELSE NULL END,
           opened_at=NULL,closed_at=NULL,revealed_at=NULL,settled_at=NULL,updated_at=NOW() WHERE id=$1`,
         [blockId, type, title || null, JSON.stringify(payload)],
       );
@@ -70,7 +95,7 @@ export default wrap(async request => {
       const next = await client.query('SELECT COALESCE(MAX(sort_order),-1)+1 AS n FROM round_blocks WHERE round_id=$1', [roundId]);
       const q = await client.query(
         `INSERT INTO round_blocks(game_night_id,round_id,type,sort_order,title,payload,interactive_status)
-         VALUES($1,$2,$3,$4,$5,$6::jsonb,CASE WHEN $3='DUOLINGO_QUESTION' THEN 'READY' ELSE NULL END) RETURNING id`,
+         VALUES($1,$2,$3,$4,$5,$6::jsonb,CASE WHEN $3 IN ('DUOLINGO_QUESTION','PICTURE','MUSIC','BUZZER','WAGER') THEN 'READY' ELSE NULL END) RETURNING id`,
         [gameId, roundId, type, Number(next.rows[0].n), title || null, JSON.stringify(payload)],
       );
       id = Number(q.rows[0].id);

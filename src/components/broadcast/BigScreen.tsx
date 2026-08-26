@@ -1,8 +1,8 @@
-import { useMemo } from 'react';
 import { useGamePolling } from '../../hooks/useGamePolling';
 import { RouletteTable, type RouletteMarker } from '../shared/RouletteTable';
 import { RouletteWheel } from '../shared/RouletteWheel';
 import { CoinIcon } from '../shared/CoinIcon';
+import { PlayerValueGraph } from '../shared/PlayerValueGraph';
 
 const QUESTION_EMOJIS = ['🍆', '🌽', '🍑', '😳'] as const;
 const money = (n: number) => new Intl.NumberFormat().format(n);
@@ -27,7 +27,7 @@ function Dashboard({ s, error }: { s: any; error: string }) {
     <div className="exchange-dashboard-grid">
       <section className="exchange-panel graph-panel">
         <div className="exchange-panel-title"><div><div className="label muted">PLAYER VALUE · ECONOMIC CHRONOLOGY</div><div className="display panel-title">LIVE VALUE GRAPH</div></div></div>
-        <PlayerGraph players={s.leaderboard} />
+        <PlayerValueGraph players={s.leaderboard} />
       </section>
       <aside className="exchange-panel results-panel">
         <div className="label muted">LATEST RESOLVED MARKETS</div>
@@ -38,27 +38,6 @@ function Dashboard({ s, error }: { s: any; error: string }) {
     </div>
     <Ticker items={s.ticker} />
     {error && <div className="screen-error">LIVE CONNECTION INTERRUPTED</div>}
-  </div>;
-}
-
-function PlayerGraph({ players }: { players: any[] }) {
-  const bounds = useMemo(() => {
-    const all = players.flatMap(p => (p.series || []).map((x: any) => ({ x: Number(x.x), delta: Number(x.balance) - Number(p.starting_balance) })));
-    const maxX = Math.max(1, ...all.map(x => x.x));
-    const maxAbs = Math.max(1, ...all.map(x => Math.abs(x.delta)));
-    return { maxX, maxAbs };
-  }, [players]);
-  if (players.length === 0) return <div className="graph-empty display">NO PLAYERS YET</div>;
-  const w = 1000, h = 500, pad = 48, mid = h / 2;
-  const point = (x: number, delta: number) => `${pad + (x / bounds.maxX) * (w - pad * 2)},${mid - (delta / bounds.maxAbs) * (h / 2 - pad)}`;
-  return <div className="graph-wrap">
-    <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-label="Player value history relative to starting balance">
-      <g className="grid-lines">{[0, 1, 2, 3, 4].map(i => <line key={i} x1={pad} x2={w - pad} y1={pad + i * (h - pad * 2) / 4} y2={pad + i * (h - pad * 2) / 4} />)}</g>
-      <line className="graph-baseline" x1={pad} x2={w - pad} y1={mid} y2={mid} />
-      {players.map((p, index) => { const series = p.series || []; const last = series[series.length - 1]; const [cx, cy] = last ? point(Number(last.x), Number(last.balance) - Number(p.starting_balance)).split(',').map(Number) : [pad, mid]; return <g key={p.id}><polyline className="graph-line" style={{ animationDelay: `${0.05 + index * 0.15}s` }} points={series.map((x: any) => point(Number(x.x), Number(x.balance) - Number(p.starting_balance))).join(' ')} fill="none" stroke={p.public_color} strokeWidth={index === 0 ? "7" : "6"} vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" /><circle className="graph-end-dot" style={{ animationDelay: `${1.7 + index * 0.2}s` }} cx={cx} cy={cy} r="7" fill={p.public_color} /></g>; })}
-    </svg>
-    <div className="graph-axis-label positive">GAIN</div><div className="graph-axis-label baseline">START</div><div className="graph-axis-label negative">LOSS</div>
-    <div className="graph-legend">{players.map(p => <div key={p.id}><span className="legend-dot" style={{ background: p.public_color }} /><b>{p.display_name}</b><strong>{p.current_balance}</strong></div>)}</div>
   </div>;
 }
 
@@ -82,10 +61,42 @@ function Ticker({ items }: { items: any[] }) {
   return <div className="ticker"><div className="ticker-track">{[...labels, ...labels].map((x, i) => <span className="display" key={i}>{x}</span>)}</div></div>;
 }
 
+const mediaUrl = (key: string) => `/api/block-media?key=${encodeURIComponent(key)}`;
+
 function BlockScene({ block, round }: { block: any; round: any }) {
   if (block.type === 'DUOLINGO_QUESTION') return <DuolingoScene block={block} round={round} />;
-  const question = block.type === 'QUESTION';
-  return <Scene className={question ? 'question-scene' : 'text-scene'}><div className="scene-eyebrow">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'ROUND CONTENT'}</div><div className="scene-kicker">{question ? 'QUESTION' : 'ROUND NOTE'}</div>{block.title && <h1>{block.title}</h1>}{block.payload?.body && <p className="scene-body">{block.payload.body}</p>}</Scene>;
+  if (block.type === 'PICTURE') return <PictureScene block={block} round={round} />;
+  if (block.type === 'MUSIC') return <MusicScene block={block} round={round} />;
+  const kicker = ({ QUESTION: 'QUESTION', BUZZER: 'BUZZER ROUND', WAGER: 'WAGER ROUND' } as any)[block.type] || 'ROUND NOTE';
+  const question = block.type !== 'TEXT';
+  return <Scene className={question ? 'question-scene' : 'text-scene'}><div className="scene-eyebrow">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'ROUND CONTENT'}</div><div className="scene-kicker">{kicker}</div>{block.title && <h1>{block.title}</h1>}{block.payload?.body && <p className="scene-body">{block.payload.body}</p>}{block.payload?.correctAnswer && <div className="scene-reveal">{block.payload.correctAnswer}</div>}</Scene>;
+}
+
+// The title is the answer, so the server withholds it until reveal — which is why this
+// renders whatever it was given rather than deciding for itself.
+function PictureScene({ block, round }: { block: any; round: any }) {
+  return <Scene className="picture-scene">
+    <div className="scene-eyebrow">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'PICTURE ROUND'}</div>
+    <div className="scene-kicker">WHAT IS THIS?</div>
+    {block.payload?.imageKey
+      ? <img className="picture-scene-image" src={mediaUrl(block.payload.imageKey)} alt="" />
+      : <div className="scene-body">No image on this round yet.</div>}
+    {block.title && <div className="scene-reveal">{block.title}</div>}
+  </Scene>;
+}
+
+function MusicScene({ block, round }: { block: any; round: any }) {
+  return <Scene className="music-scene">
+    <div className="scene-eyebrow">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'MUSIC ROUND'}</div>
+    <div className="scene-kicker">NAME THAT SONG</div>
+    <div className="music-scene-art" aria-hidden="true">♫</div>
+    {block.payload?.audioKey
+      // Controls are shown rather than autoplaying: browsers block unprompted audio, so
+      // the host presses play once on the projector.
+      ? <audio className="music-scene-player" controls preload="auto" src={mediaUrl(block.payload.audioKey)} />
+      : <div className="scene-body">No audio on this round yet.</div>}
+    {block.title && <div className="scene-reveal">{block.title}</div>}
+  </Scene>;
 }
 
 function DuolingoScene({ block, round }: { block: any; round: any }) {

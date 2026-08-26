@@ -266,9 +266,16 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
   flex: 0 0 230px;
   padding: 36px 20px;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
   background: var(--ink);
   border: 0;
 }
+/* Pushes the player-app entry to the foot of the sidebar, as the design has it. */
+.sidebar-spacer { flex: 1; min-height: 24px; }
+.sidebar-caption { margin: 0 14px 8px; color: var(--dark-muted); font-size: 10px; font-weight: 800; letter-spacing: .1em; }
+.admin-sidebar .sidebar-preview-btn { border: 1px dashed #3D392F; color: var(--dark-secondary); font-size: 12px; }
+.admin-sidebar .sidebar-preview-btn:hover { border-color: var(--lime); background: var(--ink-2); color: var(--lime); }
 .brand {
   display: flex;
   align-items: center;
@@ -401,7 +408,6 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .control-side-column { min-width: 0; }
 .setup-flow { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; color: var(--secondary); }
 .setup-flow b { padding: 7px 11px; border-radius: 999px; background: var(--surface-soft); }
-.content-controls { display: flex; gap: 9px; flex-wrap: wrap; align-items: center; margin-top: 18px; }
 .market-line, .ledger-line { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 13px 0; border-bottom: 1px solid var(--border); }
 .market-line:last-child, .ledger-line:last-child { border-bottom: 0; }
 .market-line-copy { min-width: 0; line-height: 1.45; }
@@ -413,12 +419,8 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .preview-actions { margin-top: 16px; }
 .screen-preview { position: relative; width: 100%; aspect-ratio: 16/9; margin-top: 16px; border: 0; border-radius: 20px; background: var(--ink); overflow: hidden; }
 .screen-preview iframe { position: absolute; top: 0; left: 0; width: 1920px; height: 1080px; border: 0; transform-origin: top left; pointer-events: none; }
-.quick-adjust-card { padding: 26px 28px; background: var(--ink); color: #fff; }
-.quick-adjust-card .muted, .quick-adjust-card .label { color: var(--dark-secondary); }
-.quick-adjust-card .field { background: var(--ink-2); color: #fff; border-color: #3D392F; }
-.quick-adjust-card .field::placeholder { color: var(--dark-muted); }
-.quick-adjust-card .btn-primary { background: var(--lime); color: var(--ink); }
-.quick-adjust-card .btn-primary:hover:not(:disabled) { background: #ECF97A; }
+/* Dark surface treatment comes from the shared .on-ink primitive. */
+.quick-adjust-card { padding: 26px 28px; }
 .quick-adjust-grid { display: grid; grid-template-columns: 1fr 120px; gap: 10px; margin-top: 14px; }
 .quick-adjust-grid .quick-reason { grid-column: 1 / -1; }
 .quick-save { margin-top: 10px; }
@@ -551,8 +553,10 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .roulette-title { margin: 4px 0; font-size: 28px; }
 .roulette-help { margin: 14px 0; padding: 13px 15px; border: 0; border-radius: 16px; background: var(--surface-soft); color: var(--secondary); font-size: 11px; line-height: 1.5; }
 .chip-picker { display: flex; gap: 8px; align-items: stretch; overflow-x: auto; padding-bottom: 5px; margin-bottom: 14px; }
-.chip { min-width: 50px; height: 50px; border: 3px solid var(--ink); border-radius: 50%; background: var(--white); color: var(--ink); font-family: var(--display); font-weight: 700; }
-.chip.selected { border-color: var(--ink); background: var(--lime); }
+/* Scoped to the picker: the Control Center's orientation `.chip` is declared later
+   in this file, so an unscoped rule here lost its round shape and ink ring to it. */
+.chip-picker .chip { min-width: 50px; height: 50px; padding: 0; border: 3px solid var(--ink); border-radius: 50%; background: var(--white); color: var(--ink); font-family: var(--display); font-size: 16px; font-weight: 700; text-transform: none; }
+.chip-picker .chip.selected { border-color: var(--ink); background: var(--lime); }
 .custom-chip { display: grid; grid-template-columns: auto 68px; align-items: center; gap: 6px; min-width: 136px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 14px; background: var(--white); color: var(--muted); font-size: 10px; }
 .custom-chip input { width: 68px; min-width: 0; border: 0; border-radius: 8px; padding: 7px; background: var(--paper); color: var(--ink); }
 .roulette-table { display: grid; gap: 7px; width: 100%; }
@@ -603,7 +607,11 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
   position: relative;
   isolation: isolate;
   height: 100vh;
-  padding: 4.45vh 3.33vw 64px;
+  /* The ticker is absolutely positioned at the bottom, so its 64px has to be
+     reserved here — plus a gap, or the panels sit flush against it. */
+  padding: 4.45vh 3.33vw calc(64px + 2.2vh);
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   background: var(--paper);
   color: var(--ink);
@@ -622,7 +630,9 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .screen-stat:nth-child(2) .muted { color: var(--dark-secondary); }
 .screen-stat .display { display: flex; align-items: center; gap: 8px; margin-top: 3px; font-family: var(--display); font-size: 1.6vw; color: #fff; }
 .screen-stat:nth-child(2) .display { color: var(--lime); }
-.exchange-dashboard-grid { display: grid; grid-template-columns: minmax(0,2.05fr) minmax(300px,.8fr); gap: 20px; height: calc(100vh - 205px); margin-top: 28px; }
+/* Fills what the header leaves, rather than a magic pixel height that did not know
+   about the ticker and ran the panels 36px underneath it. */
+.exchange-dashboard-grid { display: grid; grid-template-columns: minmax(0,2.05fr) minmax(300px,.8fr); gap: 20px; flex: 1; min-height: 0; margin-top: 28px; }
 .exchange-panel { min-width: 0; min-height: 0; padding: 2.8vh 2.1vw; border: 0; border-radius: 36px; background: var(--white); }
 .graph-panel { display: flex; flex-direction: column; background: var(--ink); color: #fff; }
 .graph-panel .muted { color: var(--dark-secondary); }
@@ -655,7 +665,9 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .graph-axis-label.positive { top: 4%; }
 .graph-axis-label.baseline { top: 46%; }
 .graph-axis-label.negative { bottom: 16%; }
-.graph-legend { display: grid; grid-template-columns: repeat(auto-fit,minmax(115px,1fr)); gap: 7px; margin-top: 6px; }
+/* max-content, not 1fr: with two players a fill pattern stretched each entry across
+   half the panel and threw the value far from the name it belongs to. */
+.graph-legend { display: grid; grid-template-columns: repeat(auto-fit,minmax(115px,max-content)); justify-content: start; gap: 7px 24px; margin-top: 6px; }
 .graph-legend > div { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 7px; align-items: center; color: var(--dark-secondary); font-size: .68vw; }
 .graph-legend b { overflow: hidden; color: #fff; text-overflow: ellipsis; white-space: nowrap; }
 .graph-legend strong { color: var(--lime); font-family: var(--display); }
@@ -718,10 +730,18 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .roulette-status span { color: #fff; font: 700 1.3vw var(--display); }
 .roulette-status b { color: #DBE2FF; font-size: .9vw; }
 .roulette-screen-grid { display: grid; grid-template-columns: minmax(300px,.85fr) minmax(540px,1.45fr); gap: 2.5vw; align-items: center; flex: 1; min-height: 0; }
-.roulette-board-wrap { min-width: 0; padding: 1.4vw; border-radius: 28px; background: var(--ink); }
-.roulette-screen .roulette-table { max-height: 75vh; }
-.roulette-screen .roulette-number-grid { grid-template-columns: 56px 1fr; }
-.roulette-screen .roulette-cell { min-height: 60px; }
+/* Stretches to the row and lays out table-then-caption, so the board is bounded by
+   the panel instead of overflowing it. `max-height` used to clamp the table's box
+   while its rows kept their intrinsic height, which put the last row of cells
+   outside the dark panel and off the bottom of the projector. overflow:hidden keeps
+   any remaining spill inside the rounded panel on a shorter canvas. */
+.roulette-board-wrap { min-width: 0; min-height: 0; align-self: stretch; display: grid; grid-template-rows: minmax(0,1fr) auto; padding: 1.4vw; border-radius: 28px; background: var(--ink); overflow: hidden; }
+.roulette-screen .roulette-table { min-height: 0; grid-template-rows: minmax(0,1fr) auto; }
+.roulette-screen .roulette-number-grid { grid-template-columns: 56px 1fr; min-height: 0; }
+/* Rows share the height that is actually available, with a legible floor. */
+.roulette-screen .roulette-numbers { grid-auto-rows: minmax(40px,1fr); min-height: 0; }
+.roulette-screen .roulette-outside-grid { grid-auto-rows: minmax(52px,1fr); }
+.roulette-screen .roulette-cell { min-height: 0; }
 .roulette-screen .roulette-cell-label { font-size: 1vw; }
 .roulette-screen .roulette-marker { min-width: 32px; min-height: 32px; font-size: .65vw; }
 .roulette-screen .roulette-marker small { max-width: 58px; font-size: .48vw; }
@@ -793,7 +813,6 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .active-market-stack { display: grid; gap: 0; }
 .card-title { margin: 3px 0 0; font-family: var(--display); font-size: 21px; }
 .control-main-column { min-width: 0; }
-.control-round-head { align-items: center; }
 .mobile-connect-title { font-size: 34px; }
 
 .round-list .round-card.round-active .btn-primary,
@@ -813,3 +832,360 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 
 .prediction-screen.result-yes .scene-eyebrow { color: #0F2C17; }
 .prediction-screen.result-no .scene-eyebrow { color: #591512; }
+
+/* ============================================================
+   ADMIN UX REDESIGN — Aurora primitives
+   Handbook refs: 02 COLOR, 04 SHAPE & RADIUS, 06 CARDS, 07 STATUS
+   ============================================================ */
+
+/* Block-type accents. One class per accent so the palette stays tokenised.
+   --block-accent-ink is the readable foreground when the accent is used as a fill,
+   following the handbook's flat-colour contrast rule: only the two lightest accents
+   (orange, cyan) take ink text; the rest take white. */
+.accent-muted   { --block-accent: var(--muted);   --block-accent-ink: #fff; }
+.accent-orange  { --block-accent: var(--orange);  --block-accent-ink: var(--ink); }
+.accent-violet  { --block-accent: var(--violet);  --block-accent-ink: #fff; }
+.accent-red     { --block-accent: var(--red);     --block-accent-ink: #fff; }
+.accent-cyan    { --block-accent: var(--cyan);    --block-accent-ink: var(--ink); }
+.accent-magenta { --block-accent: var(--magenta); --block-accent-ink: #fff; }
+.accent-blue    { --block-accent: var(--blue);    --block-accent-ink: #fff; }
+.accent-green   { --block-accent: var(--green);   --block-accent-ink: #fff; }
+.accent-ink     { --block-accent: var(--ink);     --block-accent-ink: #fff; }
+.accent-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--block-accent, var(--muted)); flex: 0 0 auto; }
+.accent-swatch { width: 28px; height: 28px; border-radius: 8px; background: var(--block-accent, var(--muted)); }
+
+/* Orientation chip row (Control Center) */
+.chip-row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 24px; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 18px;
+  border: 0;
+  border-radius: 999px;
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transition: background .15s ease-in-out, color .15s ease-in-out;
+}
+button.chip { cursor: pointer; }
+.chip-white { background: var(--white); color: var(--ink); }
+.chip-ink { background: var(--ink); color: var(--paper); }
+.chip-blue { background: var(--blue); color: #fff; }
+button.chip-white:hover { background: var(--surface-soft); }
+button.chip-ink:hover { background: var(--blue); color: #fff; }
+button.chip-blue:hover { background: var(--violet); }
+
+/* Accordion card */
+.accordion-head {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.accordion-icon { color: var(--muted); font-size: 20px; font-weight: 800; line-height: 1; }
+.accordion-body { margin-top: 16px; }
+.accordion-card.on-ink .accordion-head .label,
+.accordion-card.on-ink .accordion-icon { color: var(--dark-secondary); }
+
+/* Run of show — horizontal step strip */
+.run-of-show { display: grid; gap: 10px; }
+.run-of-show-track { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; }
+.run-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  min-width: 170px;
+  min-height: 62px;
+  padding: 12px 16px;
+  border: 2px solid transparent;
+  border-radius: 16px;
+  background: var(--white);
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .15s ease-in-out, background .15s ease-in-out, color .15s ease-in-out;
+}
+.run-step:hover:not(:disabled) { border-color: #D7D1BC; }
+.run-step.is-live { background: var(--ink); color: #fff; border-color: var(--ink); }
+.run-step.is-live .accent-dot { background: var(--magenta); animation: gne-pulse 1.4s ease-in-out infinite; }
+.run-step-copy { min-width: 0; }
+.run-step-kicker { font-size: 9px; font-weight: 800; letter-spacing: .08em; opacity: .65; text-transform: uppercase; }
+.run-step-label { max-width: 150px; overflow: hidden; font-size: 13px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Content-type picker tiles */
+.block-type-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 14px; }
+.block-type-tile {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  padding: 16px;
+  border: 2px solid var(--border);
+  border-radius: 16px;
+  background: var(--white);
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .15s ease-in-out, background .15s ease-in-out;
+}
+.block-type-tile:hover { border-color: #D7D1BC; }
+.block-type-tile.selected { border-color: var(--ink); background: var(--surface-soft); }
+.block-type-tile b { margin-top: 4px; font-size: 12px; font-weight: 800; letter-spacing: .05em; }
+.block-type-tile span { color: var(--secondary); font-size: 11px; line-height: 1.4; }
+
+/* This round's content — side summary */
+.round-content-summary { display: grid; gap: 2px; margin-top: 12px; }
+.round-content-line { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.round-content-line:last-child { border-bottom: 0; }
+.round-content-line > span { flex: 1; min-width: 0; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.round-content-line em { color: var(--magenta); font-size: 9px; font-weight: 800; font-style: normal; letter-spacing: .08em; }
+
+/* Quick coin adjustment on ink (handbook 06 — dark utility panel) */
+.card.on-ink { background: var(--ink); color: #fff; }
+.card.on-ink .label, .card.on-ink .muted { color: var(--dark-secondary); }
+.card.on-ink .field { background: var(--ink-2); border-color: #3D392F; color: #fff; }
+.card.on-ink .field::placeholder { color: var(--dark-muted); }
+.card.on-ink .btn-primary { background: var(--lime); color: var(--ink); }
+.card.on-ink .btn-primary:hover:not(:disabled) { background: #ECF97A; }
+.card.on-ink .btn-primary:disabled { background: #3D392F !important; border-color: #3D392F !important; color: var(--dark-muted) !important; }
+
+/* Market page — admin copy of the Big Screen value chart */
+.market-chart-panel { background: var(--ink); border-radius: 28px; padding: 32px; }
+.market-chart-panel svg { width: 100%; height: 340px; overflow: visible; }
+.market-chart-legend { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 18px; }
+.market-chart-legend > div { display: flex; align-items: center; gap: 8px; color: var(--dark-secondary); font-size: 12px; }
+.market-chart-legend b { color: #fff; }
+.market-chart-legend strong { color: var(--lime); font-family: var(--display); }
+.market-intro { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+.market-intro p { max-width: 520px; margin: 0; color: var(--secondary); font-size: 13px; line-height: 1.5; }
+
+/* Explainer banner (Rounds index) */
+.explainer { padding: 20px 24px; border-radius: 16px; background: #F0E6FA; color: #3a2159; font-size: 13px; line-height: 1.6; }
+
+/* Inline danger zone (Settings) */
+.danger-inline { display: grid; gap: 12px; }
+.danger-inline .field { max-width: 320px; }
+
+@media (max-width: 800px) {
+  .block-type-grid { grid-template-columns: 1fr 1fr; }
+  .market-chart-panel { padding: 20px; }
+  .market-chart-panel svg { height: 240px; }
+}
+
+/* The shared value graph is authored for the 1920×1080 projector canvas (vw type).
+   On the admin surface it keeps the same geometry but takes a px type scale. */
+.graph-panel-admin .label { color: var(--dark-secondary); }
+.graph-panel-admin .graph-wrap { min-height: 340px; margin-top: 14px; }
+.graph-panel-admin .graph-wrap svg { height: 300px; }
+.graph-panel-admin .graph-axis-label { font-size: 10px; }
+/* max-content, not 1fr: with two players a fill pattern stretched the legend across
+   the whole panel and read as a layout fault. */
+.graph-panel-admin .graph-legend { grid-template-columns: repeat(auto-fit, minmax(140px, max-content)); justify-content: start; gap: 10px 22px; margin-top: 14px; }
+.graph-panel-admin .graph-legend > div { font-size: 12px; }
+.graph-panel-admin .graph-empty { min-height: 240px; }
+.run-step-kicker, .run-step-label { display: block; }
+.step-position { align-self: center; font-size: 11px; font-weight: 800; letter-spacing: .08em; }
+.round-content-edit { margin-top: 16px; }
+.row-end { display: flex; justify-content: flex-end; }
+.block-list .round-block-card { border-left-color: var(--block-accent, var(--orange)); }
+.prediction-metrics-primary { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+.prediction-meta-line { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 12px; font-size: 12px; }
+.prediction-meta-line b { color: var(--ink); font-weight: 800; }
+.lifecycle-hint { align-self: center; font-size: 12px; font-style: italic; }
+
+/* ============================================================
+   PRESENTER MODEL — live | staged pair (Control Center)
+   ============================================================ */
+.presenter-grid { display: grid; grid-template-columns: minmax(0,1.3fr) minmax(0,1fr); gap: 20px; align-items: start; }
+.presenter-col { min-width: 0; display: grid; gap: 14px; align-content: start; }
+.presenter-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* The live side shows the real projector output, scaled. The staged side cannot —
+   it is not on screen yet — so it renders the step's identity in its accent colour. */
+.staged-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  aspect-ratio: 16/9;
+  padding: 26px;
+  border: 3px solid transparent;
+  border-radius: 12px 44px 12px 44px;
+  background: var(--block-accent, var(--muted));
+  color: var(--block-accent-ink, #fff);
+}
+/* Dashed lime edge means "staged but not showing" — the whole point of the pane. */
+.staged-card.is-pending { border-color: var(--lime); border-style: dashed; }
+.staged-eyebrow { font-size: 11px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; opacity: .7; }
+.staged-title { margin-top: 10px; font-family: var(--display); font-size: 22px; font-weight: 700; line-height: 1.2; }
+.staged-sub { margin: 8px 0 0; font-size: 12px; line-height: 1.45; opacity: .8; }
+.staged-badge {
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.22);
+  color: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.staged-card.accent-orange .staged-badge, .staged-card.accent-cyan .staged-badge { background: rgba(20,18,15,.16); }
+.presenter-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.go-live-btn { width: 100%; min-height: 56px; font-size: 14px; }
+
+@media (max-width: 1100px) {
+  .presenter-grid { grid-template-columns: 1fr; }
+}
+
+/* Player prediction requests — pinned above the Control Center because someone is
+   waiting on the host to answer. Orange is the handbook's warm attention accent. */
+.request-panel { display: grid; gap: 14px; padding: 22px 26px; border-radius: 20px; background: var(--orange); color: #fff; }
+.request-panel .label { color: rgba(255,255,255,.9); }
+.request-row { display: grid; gap: 12px; padding: 16px 18px; border-radius: 16px; background: rgba(0,0,0,.16); }
+.request-player { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; opacity: .85; }
+.request-question { margin-top: 4px; font-family: var(--display); font-size: 17px; font-weight: 700; line-height: 1.3; }
+.request-deny { display: grid; gap: 10px; }
+.request-deny .field { background: #fff; border-color: #fff; color: var(--ink); }
+/* Outline buttons sitting on a saturated fill need white edges, not ink. */
+.btn-secondary.on-colour { border-color: #fff; color: #fff; }
+.btn-secondary.on-colour:hover:not(:disabled) { background: #fff; color: var(--ink); }
+
+/* Staged step in the run of show: lime edge, matching the staged preview card. */
+.run-step.is-staged { border-color: var(--lime); }
+.live-meta { align-self: center; font-size: 12px; }
+
+/* Header presentation toggle */
+.header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* ============================================================
+   ROUND MEDIA — picture and music round authoring
+   ============================================================ */
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.media-field { display: grid; gap: 10px; margin: 18px 0; }
+.media-hint { margin: 0; font-size: 12px; line-height: 1.5; }
+.media-drop {
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+  padding: 18px;
+  border: 2px dashed #D7D1BC;
+  border-radius: 16px;
+  background: var(--paper);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color .15s ease-in-out, background .15s ease-in-out;
+}
+.media-drop:hover, .media-drop.is-dragging { border-color: var(--blue); background: var(--surface-soft); }
+.media-drop.has-file { padding: 0; border-style: solid; overflow: hidden; }
+.media-drop img { display: block; width: 100%; max-height: 320px; object-fit: contain; }
+.media-audio { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.media-audio audio { flex: 1; min-width: 220px; height: 36px; }
+.media-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.type-note { margin: 14px 0 0; font-size: 12px; line-height: 1.5; }
+.block-thumb { display: block; max-width: 260px; max-height: 150px; margin-top: 12px; border-radius: 12px; object-fit: cover; }
+
+/* Big Screen scenes for picture and music rounds. Sized in vw like the other scenes,
+   because the projector canvas is a fixed 1920x1080 and never responsive. */
+.picture-scene, .music-scene { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1.5vh; }
+.picture-scene-image { max-width: 74vw; max-height: 58vh; border-radius: 1.4vw; object-fit: contain; }
+.music-scene-art { color: var(--violet); font-size: 18vw; line-height: 1; animation: gne-pulse 1.4s ease-in-out infinite; }
+.music-scene-player { width: 48vw; height: 4vh; min-height: 44px; }
+/* The answer, once the host reveals it. */
+.scene-reveal { margin-top: 1vh; padding: 1.2vh 3vw; border-radius: 999px; background: var(--lime); color: var(--ink); font: 700 3.4vw var(--display); }
+
+/* ============================================================
+   REMAINING ADMIN SURFACES — predictions, players, ledger, settings
+   ============================================================ */
+/* The design's create-market row is three equal columns: round, min, max. */
+.form-grid.triple { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.stacked-field { display: grid; gap: 7px; color: var(--secondary); font-size: 13px; font-weight: 700; }
+.timing-row { display: flex; align-items: end; gap: 22px; flex-wrap: wrap; }
+.timing-row > label:first-child { display: grid; gap: 7px; min-width: 180px; color: var(--secondary); font-size: 13px; font-weight: 700; }
+.timing-row .check { margin: 0 0 10px; }
+
+/* Status and the join link sit with the name, as the design has them. */
+.player-row-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+
+/* Ledger, primary view: one readable line per movement. */
+.ledger-simple { border: 1px solid var(--border); border-radius: 20px; background: var(--white); overflow: hidden; }
+.ledger-simple-row { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.ledger-simple-row:last-child { border-bottom: 0; }
+.ledger-simple-row > span { min-width: 0; line-height: 1.45; }
+.ledger-simple-row > b { font-family: var(--display); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ledger-simple + .accordion-card .table-wrap { margin-top: 14px; }
+
+.danger-detail-toggle { justify-self: start; padding: 0; color: var(--red); text-align: left; }
+.danger-inline .btn-danger-large { margin-top: 4px; }
+
+@media (max-width: 900px) {
+  .form-grid.triple { grid-template-columns: 1fr; }
+}
+
+/* Every round in the game, on the Control Center. Replaced the current-round and
+   this-round's-content cards — the run of show covers what is inside the live round. */
+.round-line-list { display: grid; gap: 8px; margin-top: 14px; }
+.round-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border-left: 8px solid var(--surface-soft);
+  background: var(--paper);
+}
+.round-line.is-active { border-left-color: var(--blue); background: var(--white); box-shadow: inset 0 0 0 1px var(--border); }
+.round-line-copy { min-width: 0; }
+.round-line-title { font-family: var(--display); font-size: 15px; font-weight: 700; line-height: 1.3; }
+.round-line-meta { font-size: 12px; }
+.round-line .status-pill { min-height: 28px; padding: 6px 12px; font-size: 10px; }
+.round-line-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
+.round-line-actions .btn-compact { min-height: 40px; padding: 9px 15px; font-size: 11px; }
+
+/* ============================================================
+   PHONE PREVIEW — the real player app inside the Admin surface
+   ============================================================ */
+.phone-backdrop { z-index: 200; }
+/* 430px, not the design's 390: the frame's own 20px padding has to come off the top,
+   and the player app is authored for a 390px content box. At 390 the real components
+   were squeezed 40px narrower than any phone, which cut off the wallet tiles and put
+   a horizontal scrollbar under the modal. */
+.phone-frame {
+  width: min(430px, 100%);
+  max-height: 92vh;
+  padding: 20px;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-radius: 44px;
+  background: var(--paper);
+}
+.phone-frame-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.phone-player-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+.phone-player-tabs .chip { display: inline-flex; align-items: center; gap: 8px; }
+/* Keeps every .mobile-shell descendant rule while dropping the full-page geometry.
+   overflow stays hidden, as on a real phone: the wallet card's lime disc is
+   deliberately positioned outside the shell and must be clipped by it, not escape
+   into the frame and force it to scroll sideways. */
+.phone-screen { width: 100%; min-height: 0; margin: 0; padding: 0; border-radius: 0; overflow: hidden; }
+.phone-note { margin: 0; font-size: 12px; line-height: 1.5; }
+
+/* Player-submitted prediction requests (mobile) */
+.request-form { display: grid; gap: 10px; margin-top: 12px; }
+.request-mine-row { display: grid; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.request-mine-row:last-child { border-bottom: 0; }
+.request-mine-question { font-size: 13px; font-weight: 700; line-height: 1.4; }
+.request-mine-row .status-pill { justify-self: start; font-size: 10px; padding: 6px 12px; }

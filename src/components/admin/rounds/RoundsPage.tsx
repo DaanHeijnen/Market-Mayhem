@@ -2,28 +2,40 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { RunMutation } from '../types';
 import { Card, Empty, Status } from '../ui';
+import { AUTHORABLE_BLOCK_TYPES, blockLabel, blockMeta } from '../blockMeta';
+import { MediaField } from './MediaField';
 
 const QUESTION_EMOJIS = ['🍆','🌽','🍑','😳'] as const;
 
-const blankBlock = { type: 'TEXT', title: '', body: '', answers: ['', '', '', ''], correctAnswerIndex: 0, rewardCoins: 10 };
+const blankBlock = { type: 'TEXT', title: '', body: '', answers: ['', '', '', ''], correctAnswerIndex: 0, rewardCoins: 10, imageKey: '', audioKey: '', audioName: '', correctAnswer: '' };
 
 export function RoundsPage({ state: s, gameId, roundId, run }: { state: any; gameId: number; roundId: number | null; run: RunMutation }) {
   const nav = useNavigate();
   const [selected, setSelected] = useState<any>(null);
+  const [creating, setCreating] = useState(false);
   const [newRound, setNewRound] = useState({ roundNumber: '', title: '', description: '' });
   const round = useMemo(() => s.rounds.find((r: any) => r.id === roundId) || null, [s.rounds, roundId]);
-  if (round) return <RoundDetail state={s} round={round} run={run} back={() => nav(`/admin/${gameId}/rounds`)} />;
+  if (round) return <RoundDetail state={s} round={round} gameId={gameId} run={run} back={() => nav(`/admin/${gameId}/rounds`)} />;
+
+  const cancelCreate = () => { setCreating(false); setNewRound({ roundNumber: '', title: '', description: '' }); };
 
   return <div className="page-stack">
-    <Card>
-      <div className="label muted">CREATE ROUND</div>
-      <div className="form-grid compact">
-        <label>Round number<input className="field" type="number" min="1" value={newRound.roundNumber} onChange={e => setNewRound({ ...newRound, roundNumber: e.target.value })} /></label>
-        <label>Title<input className="field" value={newRound.title} onChange={e => setNewRound({ ...newRound, title: e.target.value })} /></label>
-      </div>
-      <label>Description<textarea className="field" rows={2} value={newRound.description} onChange={e => setNewRound({ ...newRound, description: e.target.value })} /></label>
-      <div className="actions"><button className="btn btn-primary" disabled={!newRound.roundNumber || !newRound.title.trim()} onClick={async () => { if (await run('/api/create-round', { roundNumber: Number(newRound.roundNumber), title: newRound.title, description: newRound.description })) setNewRound({ roundNumber: '', title: '', description: '' }); }}>CREATE ROUND</button></div>
-    </Card>
+    <div className="explainer">A round is one segment of the night — a quiz, a mini-game, a break. Build it with content blocks; in Control Center you step through them in this exact order.</div>
+
+    {!creating
+      ? <div className="row-end"><button className="btn btn-primary" onClick={() => setCreating(true)}>+ NEW ROUND</button></div>
+      : <Card>
+        <div className="label muted">CREATE ROUND</div>
+        <div className="form-grid compact">
+          <label>Round number<input className="field" type="number" min="1" value={newRound.roundNumber} onChange={e => setNewRound({ ...newRound, roundNumber: e.target.value })} /></label>
+          <label>Title<input className="field" value={newRound.title} onChange={e => setNewRound({ ...newRound, title: e.target.value })} /></label>
+        </div>
+        <label>Description<textarea className="field" rows={2} value={newRound.description} onChange={e => setNewRound({ ...newRound, description: e.target.value })} /></label>
+        <div className="actions">
+          <button className="btn btn-primary" disabled={!newRound.roundNumber || !newRound.title.trim()} onClick={async () => { if (await run('/api/create-round', { roundNumber: Number(newRound.roundNumber), title: newRound.title, description: newRound.description })) cancelCreate(); }}>CREATE ROUND</button>
+          <button className="btn btn-secondary" onClick={cancelCreate}>CANCEL</button>
+        </div>
+      </Card>}
 
     {s.rounds.length === 0 ? <Empty title="No rounds yet — Create your first round" /> : <div className="card-list round-list">
       {s.rounds.map((item: any) => <Card key={item.id} className={`round-card round-${String(item.status).toLowerCase()}`}>
@@ -39,7 +51,7 @@ export function RoundsPage({ state: s, gameId, roundId, run }: { state: any; gam
   </div>;
 }
 
-function RoundDetail({ state: s, round, run, back }: { state: any; round: any; run: RunMutation; back: () => void }) {
+function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round: any; gameId: number; run: RunMutation; back: () => void }) {
   const [edit, setEdit] = useState<any>(null);
   const [blockForm, setBlockForm] = useState<any>(blankBlock);
   const [groupName, setGroupName] = useState('');
@@ -51,6 +63,9 @@ function RoundDetail({ state: s, round, run, back }: { state: any; round: any; r
     const payload = {
       roundId: round.id, blockId: edit?.id || null, type: blockForm.type, title: blockForm.title, body: blockForm.body,
       ...(blockForm.type === 'DUOLINGO_QUESTION' ? { answers: blockForm.answers, correctAnswerIndex: Number(blockForm.correctAnswerIndex), rewardCoins: Number(blockForm.rewardCoins) } : {}),
+      ...(blockForm.type === 'PICTURE' ? { imageKey: blockForm.imageKey || null } : {}),
+      ...(blockForm.type === 'MUSIC' ? { audioKey: blockForm.audioKey || null, audioName: blockForm.audioName } : {}),
+      ...(blockForm.type === 'WAGER' ? { correctAnswer: blockForm.correctAnswer } : {}),
     };
     if (await run('/api/upsert-round-block', payload)) resetBlock();
   };
@@ -63,6 +78,10 @@ function RoundDetail({ state: s, round, run, back }: { state: any; round: any; r
       answers: block.payload?.answers || ['', '', '', ''],
       correctAnswerIndex: block.payload?.correctAnswerIndex ?? 0,
       rewardCoins: block.payload?.rewardCoins ?? 10,
+      imageKey: block.payload?.imageKey || '',
+      audioKey: block.payload?.audioKey || '',
+      audioName: block.payload?.audioName || '',
+      correctAnswer: block.payload?.correctAnswer || '',
     });
   };
   const move = async (index: number, dir: -1 | 1) => {
@@ -80,12 +99,41 @@ function RoundDetail({ state: s, round, run, back }: { state: any; round: any; r
     </Card>
 
     {!readOnlyContent && <Card>
-      <div className="label muted">{edit ? 'EDIT BLOCK' : 'ADD ROUND CONTENT'}</div>
-      <div className="form-grid compact">
-        <label>Type<select className="field" value={blockForm.type} onChange={e => setBlockForm({ ...blankBlock, type: e.target.value })}><option>TEXT</option><option>QUESTION</option><option>DUOLINGO_QUESTION</option><option>ROULETTE</option></select></label>
-        <label>{blockForm.type === 'QUESTION' || blockForm.type === 'DUOLINGO_QUESTION' ? 'Question text' : blockForm.type === 'TEXT' ? 'Optional title' : 'Title'}<input className="field" value={blockForm.title} onChange={e => setBlockForm({ ...blockForm, title: e.target.value })} /></label>
+      <div className="label muted">{edit ? 'EDIT BLOCK' : 'ADD CONTENT — CHOOSE WHAT HAPPENS'}</div>
+      <div className="block-type-grid">
+        {AUTHORABLE_BLOCK_TYPES.map(type => {
+          const meta = blockMeta(type);
+          return <button key={type} className={`block-type-tile accent-${meta.accent} ${blockForm.type === type ? 'selected' : ''}`} aria-pressed={blockForm.type === type} onClick={() => setBlockForm({ ...blankBlock, type })}>
+            <span className="accent-swatch" />
+            <b>{meta.label}</b>
+            <span>{meta.description}</span>
+          </button>;
+        })}
       </div>
-      {['TEXT','QUESTION'].includes(blockForm.type) && <label>{blockForm.type === 'QUESTION' ? 'Optional supporting text' : 'Body / instructions'}<textarea className="field" rows={4} value={blockForm.body} onChange={e => setBlockForm({ ...blockForm, body: e.target.value })} /></label>}
+      <div className="form-grid compact">
+        <label className="span-2">{blockForm.type === 'QUESTION' || blockForm.type === 'DUOLINGO_QUESTION' ? 'Question text' : blockForm.type === 'TEXT' ? 'Optional title' : 'Title'}<input className="field" value={blockForm.title} onChange={e => setBlockForm({ ...blockForm, title: e.target.value })} /></label>
+      </div>
+      {['TEXT','QUESTION','PICTURE','MUSIC','BUZZER','WAGER'].includes(blockForm.type) && <label>{blockForm.type === 'TEXT' ? 'Body / instructions' : 'Optional supporting text'}<textarea className="field" rows={blockForm.type === 'TEXT' ? 4 : 2} value={blockForm.body} onChange={e => setBlockForm({ ...blockForm, body: e.target.value })} /></label>}
+
+      {blockForm.type === 'PICTURE' && <MediaField
+        kind="image" gameId={gameId} value={blockForm.imageKey}
+        label="Round image"
+        hint="Shown on the projector. The title above is what players are guessing, so it stays hidden until you reveal it."
+        onChange={({ key }) => setBlockForm({ ...blockForm, imageKey: key })}
+      />}
+
+      {blockForm.type === 'MUSIC' && <MediaField
+        kind="audio" gameId={gameId} value={blockForm.audioKey} name={blockForm.audioName}
+        label="Song audio"
+        hint="Players hear this. The title above is the song title and stays hidden until you reveal it."
+        onChange={({ key, name }) => setBlockForm({ ...blockForm, audioKey: key, audioName: name })}
+      />}
+
+      {blockForm.type === 'WAGER' && <label>Correct answer<input className="field" placeholder="Used to judge who wins their wager" value={blockForm.correctAnswer} onChange={e => setBlockForm({ ...blockForm, correctAnswer: e.target.value })} /></label>}
+
+      {['BUZZER','WAGER'].includes(blockForm.type) && <p className="muted type-note">
+        {blockMeta(blockForm.type).label} content is authored and presented on the Big Screen, but has no phone-side flow yet — run it out loud and score with group or coin adjustments.
+      </p>}
       {blockForm.type === 'DUOLINGO_QUESTION' && <div className="duo-editor">
         <div className="form-grid">
           {QUESTION_EMOJIS.map((emoji, index) => <label key={emoji}>{emoji} Answer {index + 1}<input className="field" value={blockForm.answers[index]} onChange={e => { const answers = [...blockForm.answers]; answers[index] = e.target.value; setBlockForm({ ...blockForm, answers }); }} /></label>)}
@@ -97,9 +145,21 @@ function RoundDetail({ state: s, round, run, back }: { state: any; round: any; r
     </Card>}
 
     {blocks.length === 0 ? <Empty title="No round content yet — Add the first block" /> : <div className="card-list block-list">
-      {blocks.map((block: any, index: number) => <Card key={block.id} className={`round-block-card ${s.game.current_round_block_id === block.id ? 'live-card' : ''}`}>
-        <div className="row-between"><div><div className="label muted">{String(index + 1).padStart(2, '0')} · {block.type.replaceAll('_', ' ')}</div><div className="display row-title">{block.title || ({ TEXT: 'Text block', QUESTION: 'Question', ROULETTE: 'Roulette', DUOLINGO_QUESTION: 'Live question' } as any)[block.type]}</div>{block.payload?.body && <p className="muted block-copy">{block.payload.body}</p>}{block.type === 'DUOLINGO_QUESTION' && <div className="duo-block-summary"><Status tone={block.interactive_status === 'OPEN' ? 'open' : block.interactive_status === 'SETTLED' ? 'success' : 'neutral'}>{block.interactive_status}</Status><span>{block.answer_count} answers</span><span>{block.payload.rewardCoins} coin reward</span></div>}</div>{s.game.current_round_block_id === block.id && <Status tone="open">LIVE</Status>}</div>
+      {blocks.map((block: any, index: number) => <Card key={block.id} className={`round-block-card accent-${blockMeta(block.type).accent} ${s.game.current_round_block_id === block.id ? 'live-card' : ''}`}>
+        <div className="row-between"><div><div className="label muted">{String(index + 1).padStart(2, '0')} · {blockMeta(block.type).label}</div><div className="display row-title">{blockLabel(block)}</div>{block.payload?.body && <p className="muted block-copy">{block.payload.body}</p>}{block.type === 'DUOLINGO_QUESTION' && <div className="duo-block-summary"><Status tone={block.interactive_status === 'OPEN' ? 'open' : block.interactive_status === 'SETTLED' ? 'success' : 'neutral'}>{block.interactive_status}</Status><span>{block.answer_count} answers</span><span>{block.payload.rewardCoins} coin reward</span></div>}</div>{s.game.current_round_block_id === block.id && <Status tone="open">LIVE</Status>}</div>
         {!readOnlyContent && <div className="actions actions-compact"><button className="btn btn-secondary btn-compact" disabled={index === 0} onClick={() => move(index, -1)}>↑</button><button className="btn btn-secondary btn-compact" disabled={index === blocks.length - 1} onClick={() => move(index, 1)}>↓</button><button className="btn btn-secondary btn-compact" onClick={() => beginEdit(block)}>EDIT</button>{round.status === 'ACTIVE' && <button className="btn btn-primary btn-compact" onClick={() => show(block)}>SHOW</button>}<button className="btn btn-danger-ghost btn-compact" onClick={() => run('/api/delete-round-block', { blockId: block.id })}>DELETE</button></div>}
+        {block.type === 'PICTURE' && block.payload?.imageKey && <img className="block-thumb" src={`/api/block-media?key=${encodeURIComponent(block.payload.imageKey)}`} alt="" />}
+        {block.type === 'MUSIC' && block.payload?.audioKey && <div className="media-audio"><audio controls preload="none" src={`/api/block-media?key=${encodeURIComponent(block.payload.audioKey)}`} /><span className="muted">{block.payload.audioName || 'Audio'}</span></div>}
+        {block.type === 'WAGER' && block.payload?.correctAnswer && <p className="muted block-copy">Correct answer: <b>{block.payload.correctAnswer}</b></p>}
+
+        {/* Picture and music titles are the answer, so they are withheld from the
+            projector until the host reveals them. */}
+        {['PICTURE','MUSIC','BUZZER','WAGER'].includes(block.type) && round.status === 'ACTIVE' && s.game.current_round_block_id === block.id && <div className="interactive-controls">
+          {block.interactive_status === 'REVEALED'
+            ? <button className="btn btn-secondary" onClick={() => run('/api/reveal-block', { blockId: block.id, revealed: false })}>HIDE ANSWER AGAIN</button>
+            : <button className="btn btn-success" onClick={() => run('/api/reveal-block', { blockId: block.id, revealed: true })}>REVEAL ANSWER</button>}
+        </div>}
+
         {block.type === 'DUOLINGO_QUESTION' && round.status === 'ACTIVE' && s.game.current_round_block_id === block.id && <div className="interactive-controls">
           {block.interactive_status === 'READY' && <button className="btn btn-primary" onClick={() => questionAction(block, 'OPEN')}>OPEN ANSWERS</button>}
           {block.interactive_status === 'OPEN' && <button className="btn btn-secondary" onClick={() => questionAction(block, 'CLOSE')}>CLOSE ANSWERS</button>}

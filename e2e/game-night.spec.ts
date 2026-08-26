@@ -22,6 +22,9 @@ test('prediction deposits, live question, groups and roulette stay ledger-backed
   await admin.getByPlaceholder('Username').fill(process.env.E2E_ADMIN_USERNAME || 'admin');
   await admin.getByPlaceholder('Password').fill(process.env.E2E_ADMIN_PASSWORD!);
   await admin.getByRole('button', { name: 'SIGN IN' }).click();
+  // Signing in POSTs then reloads. Without waiting for the shell to actually appear,
+  // the requests below race the session cookie and fail as 401.
+  await expect(admin.locator('.admin-sidebar')).toBeVisible({ timeout: 20_000 });
 
   const wrongReset = await admin.request.post('/api/reset-game', { data: { gameId: 1, confirmation: 'YES DELETE' } });
   expect(wrongReset.status()).toBe(400);

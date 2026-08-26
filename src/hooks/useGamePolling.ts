@@ -14,10 +14,23 @@ export function useGamePolling<T>(gameId: number, kind: LivePollKind, endpoint: 
   const pollController = useRef<AbortController | null>(null);
   const snapshotController = useRef<AbortController | null>(null);
   const snapshotPromise = useRef<Promise<T | null> | null>(null);
+  // Server-reported "nothing can change on its own" signal, used to pick the poll
+  // interval. Starts false so a fresh client polls at the live rate until told otherwise.
+  const gameIdle = useRef(false);
+  // Last time anyone touched this tab. A tab left open on a desk is visible, so the
+  // visibility check never fires and it would otherwise poll forever.
+  const lastInteraction = useRef(Date.now());
   const stats = useRef({ polls: 0, refreshes: 0, lastPoll: 0, lastRefresh: 0 });
 
   const loadSnapshot = useCallback((force = false) => {
-    if (snapshotPromise.current && !force) return snapshotPromise.current;
+    // Deduplicate concurrent callers onto one in-flight request — but never onto an
+    // aborted one. An aborted snapshot resolves to null, so a caller that piggybacked on
+    // it would get no data and then sit idle until the next poll tick. That is how the
+    // projector could come up showing only "MARKET MAYHEM": React's development
+    // double-mount aborts the first snapshot, the second mount reused that same dead
+    // promise, and nothing rendered until a whole poll interval later.
+    const inFlightAborted = snapshotController.current?.signal.aborted ?? false;
+    if (snapshotPromise.current && !force && !inFlightAborted) return snapshotPromise.current;
     if (force) snapshotController.current?.abort();
 
     const controller = new AbortController();
@@ -72,7 +85,13 @@ export function useGamePolling<T>(gameId: number, kind: LivePollKind, endpoint: 
     };
 
     const isVisible = () => document.visibilityState !== 'hidden';
-    const interval = () => getLivePollDelay(kind, mobileIsActive(), document.visibilityState);
+    const interval = () => getLivePollDelay(
+      kind,
+      mobileIsActive(),
+      document.visibilityState,
+      gameIdle.current,
+      Date.now() - lastInteraction.current,
+    );
 
     const clearTimer = () => {
       if (timer !== undefined) {
@@ -101,7 +120,8 @@ export function useGamePolling<T>(gameId: number, kind: LivePollKind, endpoint: 
       try {
         stats.current.polls += 1;
         stats.current.lastPoll = Date.now();
-        const current = await api<{ version: number }>(`/api/game-version?gameId=${gameId}`, { signal: controller.signal });
+        const current = await api<{ version: number; idle?: boolean }>(`/api/game-version?gameId=${gameId}`, { signal: controller.signal });
+        gameIdle.current = Boolean(current.idle);
         if (version.current === null || current.version !== version.current) await loadSnapshot(false);
         if (!controller.signal.aborted) setError('');
       } catch (err) {
@@ -138,10 +158,22 @@ export function useGamePolling<T>(gameId: number, kind: LivePollKind, endpoint: 
         pollController.current?.abort();
         return;
       }
+      lastInteraction.current = Date.now();
       pollController.current?.abort();
       void resume();
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
+
+    // Any sign of a person restarts the clock, and restarts polling if the away rule had
+    // stopped it. Without this a tab that went dormant would never come back on its own.
+    const onInteraction = () => {
+      const wasAway = Date.now() - lastInteraction.current >= LIVE_CONFIG.AWAY_AFTER_MS;
+      lastInteraction.current = Date.now();
+      if (wasAway && timer === undefined && !polling.current) void resume();
+    };
+    const INTERACTION_EVENTS = ['pointerdown', 'keydown', 'focus', 'wheel', 'touchstart'] as const;
+    // passive: these must never delay input, and the handler is trivial.
+    INTERACTION_EVENTS.forEach(name => window.addEventListener(name, onInteraction, { passive: true }));
 
     return () => {
       stopped = true;
@@ -149,6 +181,7 @@ export function useGamePolling<T>(gameId: number, kind: LivePollKind, endpoint: 
       pollController.current?.abort();
       snapshotController.current?.abort();
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      INTERACTION_EVENTS.forEach(name => window.removeEventListener(name, onInteraction));
     };
   }, [active, gameId, kind, loadSnapshot]);
 

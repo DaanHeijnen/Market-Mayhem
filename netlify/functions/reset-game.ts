@@ -33,6 +33,7 @@ export default wrap(async request => {
     await client.query('DELETE FROM screen_state WHERE game_night_id=$1', [gameId]);
     await client.query('DELETE FROM ledger_entries WHERE game_night_id=$1', [gameId]);
     await client.query('DELETE FROM round_question_answers WHERE game_night_id=$1', [gameId]);
+    await client.query('DELETE FROM prediction_requests WHERE game_night_id=$1', [gameId]);
     await client.query('DELETE FROM round_group_members WHERE game_night_id=$1', [gameId]);
     await client.query('DELETE FROM roulette_bets WHERE roulette_game_id IN (SELECT id FROM roulette_games WHERE game_night_id=$1)', [gameId]);
     await client.query('DELETE FROM bets WHERE prediction_id IN (SELECT id FROM predictions WHERE game_night_id=$1)', [gameId]);
