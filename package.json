@@ -14,6 +14,7 @@
     "admin:hash": "node scripts/hash-admin-password.mjs"
   },
   "dependencies": {
+    "@netlify/blobs": "^10.1.0",
     "@netlify/database": "^1.0.0",
     "@netlify/functions": "^4.2.5",
     "pg": "^8.16.3",

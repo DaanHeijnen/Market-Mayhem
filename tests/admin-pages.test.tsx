@@ -48,8 +48,15 @@ function adminState(overrides: Record<string, unknown> = {}) {
 const render = (node: any) => renderToStaticMarkup(createElement(MemoryRouter, null, node));
 
 describe('admin block vocabulary', () => {
+  // Mirrors round_blocks_type_check. Migration 0007 widened it to all eight; if this
+  // list and that constraint ever diverge, the picker offers a type the insert rejects.
   it('only offers block types the database accepts', () => {
-    expect(AUTHORABLE_BLOCK_TYPES).toEqual(['TEXT', 'QUESTION', 'DUOLINGO_QUESTION', 'ROULETTE']);
+    expect(AUTHORABLE_BLOCK_TYPES).toEqual(['TEXT', 'QUESTION', 'DUOLINGO_QUESTION', 'ROULETTE', 'PICTURE', 'MUSIC', 'BUZZER', 'WAGER']);
+  });
+
+  it('marks only the types with a phone-side flow as interactive', () => {
+    const interactive = AUTHORABLE_BLOCK_TYPES.filter(type => blockMeta(type).interactive);
+    expect(interactive).toEqual(['DUOLINGO_QUESTION', 'ROULETTE']);
   });
 
   it('gives every type a distinct accent so run-of-show steps stay tellable apart', () => {
