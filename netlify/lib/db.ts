@@ -11,6 +11,16 @@ export function database() {
     pool = new pg.Pool({
       connectionString: getConnectionString(),
       max: 5,
+      // Netlify Database (Neon) bills compute for as long as its endpoint is active, and
+      // an open connection keeps it active — so idle connections cost money even when no
+      // query is running. Releasing them promptly is what lets the endpoint suspend
+      // between rounds. Not shorter than this: each reconnect pays connection latency,
+      // and on a suspended endpoint it also pays the wake-up.
+      idleTimeoutMillis: 10_000,
+      // Let a warm function container exit without waiting on the pool.
+      allowExitOnIdle: true,
+      // Fail fast rather than hanging the whole invocation on a bad connect.
+      connectionTimeoutMillis: 10_000,
     });
   }
 

@@ -144,12 +144,19 @@ Generate `ADMIN_PASSWORD_HASH` with `npm run admin:hash`. The generated value us
 ```bash
 npm install
 cp .env.example .env
-npx netlify database init --yes
-npx netlify database migrations apply
+npx --yes netlify-cli@27.1.1 database init --yes
+npx --yes netlify-cli@27.1.1 database migrations apply
 npm run dev
 ```
 
 Then open `http://localhost:8888/admin/1`.
+
+Notes that save time:
+
+- The CLI is **not** installed globally and is not a dependency — always invoke it as `npx --yes netlify-cli@27.1.1 …`, the same pinned form `npm run dev` uses. Plain `npx netlify` resolves a different package.
+- `database init` only creates the data directory. **Skipping `migrations apply` leaves a database with no tables**, and admin login then fails with a generic `500 Internal server error` — the credential checks pass and the `INSERT INTO admin_sessions` is what actually blows up.
+- Stop the dev server with **Ctrl+C, never `kill`**. The local database is a WASM Postgres running as a child of the Netlify process; an ungraceful stop corrupts `.netlify/db`, after which every start logs `Failed to start Netlify Database locally: RuntimeError: Aborted()` and serves the app *without* a database, so the pages load but every API call 500s. Recover with `rm -rf .netlify/db` and re-run init + migrations.
+- The seeded game is intentionally empty — migration `0003` clears the demo data — so add players and a round before anything interesting appears.
 
 ## Deploy to Netlify
 
@@ -169,6 +176,29 @@ Settings → Danger Zone → **DELETE GAME SAVE** requires exactly `yes delete` 
 ## Live updates
 
 Clients poll `/api/game-version` rather than constantly downloading full snapshots. A version change triggers a targeted Admin/player/screen refresh. Polls are deduplicated, stale snapshots use `AbortController`, hidden tabs are throttled and post-action refreshes are immediate. Mobile switches to the faster cadence only while the backend reports an actionable prediction, roulette market or live question.
+
+## Database compute
+
+Netlify Database (Neon) bills **compute time, not query count**. The endpoint stays billable for as long as it is active, and it is kept active by *any* client polling — so the thing that costs money is not a busy game night, it is a quiet one with a tab left open.
+
+`/api/game-version` is one query and is the only thing polled on an interval. Two signals throttle it, both in `src/config/live.ts`:
+
+| Situation | Admin | Big Screen | Mobile |
+|---|---|---|---|
+| Round or market live | 3s | 5s | 2.5s active / 12s idle |
+| Game idle (no round, no market, no roulette) | 15s | 15s | unchanged |
+| Idle **and** no interaction for 10 min | **stops** | 60s | **stops** |
+| Tab hidden | stops | stops | stops |
+
+- The `idle` flag comes back on the version response, derived from columns that query already reads, so telling clients to back off costs nothing.
+- An **abandoned but visible** tab is the expensive case — the hidden-tab check never fires for it. Admin and mobile stop entirely and resume instantly on a click, keypress, scroll or window focus.
+- The Big Screen slows rather than stops, because nobody ever touches a projector. That is what lets it notice a round starting without someone refreshing it.
+- Mobile keeps its interval when the game is idle on purpose: a phone picks its cadence from its last known state, so slowing it down would directly delay how long a player waits to see a market open.
+- An Admin action refreshes its own snapshot directly, so neither the idle tier nor the away stop can ever delay the host seeing their own change.
+- Media (`/api/block-media`) is served from Netlify Blobs and touches no database, so the projector and every phone loading the same image generates zero database load. Only the blob key is stored in the block payload — bytes there would ride inside every snapshot.
+- `netlify/lib/db.ts` releases idle connections after 10s. An open idle connection keeps the Neon endpoint active, so this matters as much as the polling.
+
+If usage still looks high, the first thing to check is whether a `/screen/:gameId` or `/admin/:gameId` tab is open somewhere on a machine nobody is using.
 
 ## Verification
 
