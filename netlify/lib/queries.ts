@@ -3,6 +3,7 @@ import { HttpError } from './http';
 import { incrementGameVersion } from './game-state';
 import { publicPredictionStatus } from './economy';
 import { orderRunOfShow } from './run-of-show';
+import { cooldownMinutesLeft, describeRequestStatus, requestsRemaining } from './prediction-requests';
 
 const ROULETTE_SPIN_MS = 5500;
 
@@ -304,7 +305,7 @@ export async function getPlayerState(gameId: number, playerId: number) {
   const player = playerResult.rows[0];
   if (!player) throw new HttpError(404, 'Player not found');
 
-  const [ledger, predictions, roulette, interactive] = await Promise.all([
+  const [ledger, predictions, roulette, interactive, myRequests] = await Promise.all([
     pool.query('SELECT id,amount,transaction_type,description,created_at,attributed_round_id,prediction_id,roulette_game_id,round_block_id FROM ledger_entries WHERE game_night_id=$1 AND player_id=$2 ORDER BY created_at DESC,id DESC LIMIT 12', [gameId, playerId]),
     pool.query(
       `SELECT p.id,p.display_number,p.question,p.status,p.probability_yes,p.yes_odds,p.no_odds,p.prediction_time_seconds,p.minimum_stake,p.maximum_stake,p.opened_at,p.closes_at,p.result,p.round_id,r.round_number,
@@ -331,6 +332,10 @@ export async function getPlayerState(gameId: number, playerId: number) {
        JOIN rounds r ON r.id=b.round_id
        WHERE g.id=$1 AND b.type='DUOLINGO_QUESTION' AND r.status='ACTIVE'`, [gameId, playerId],
     ),
+    pool.query(
+      'SELECT id,question,status,reason,created_at FROM prediction_requests WHERE game_night_id=$1 AND player_id=$2 ORDER BY created_at DESC,id DESC',
+      [gameId, playerId],
+    ),
   ]);
 
   const normalizedPredictions = predictions.rows.map((p: any) => ({
@@ -356,8 +361,22 @@ export async function getPlayerState(gameId: number, playerId: number) {
   } : null;
   const predictionLocked = Number(player.prediction_locked || 0);
   const rouletteLocked = Number(player.roulette_locked || 0);
+
+  // The player's own prediction requests, plus how many they have left and whether they
+  // are on cooldown. Computed here so the phone can explain the limits before the player
+  // types something and gets refused.
+  const myRequestRows = myRequests.rows;
+  const lastSubmittedAt = myRequestRows[0]?.created_at ?? null;
   return {
     version: Number(player.game_state_version),
+    predictionRequests: {
+      mine: myRequestRows.map((r: any) => ({
+        id: Number(r.id), question: r.question, status: r.status, reason: r.reason,
+        statusLabel: describeRequestStatus(r.status, r.reason),
+      })),
+      remaining: requestsRemaining(myRequestRows.length),
+      cooldownMinutesLeft: cooldownMinutesLeft(lastSubmittedAt),
+    },
     player: {
       id: Number(player.id), name: player.display_name, color: player.public_color, balance: Number(player.current_balance), startingBalance: Number(player.starting_balance), rank: Number(player.rank),
       lockedPrediction: predictionLocked, lockedRoulette: rouletteLocked, totalValue: Number(player.current_balance) + predictionLocked + rouletteLocked,

@@ -157,6 +157,7 @@ Notes that save time:
 - `database init` only creates the data directory. **Skipping `migrations apply` leaves a database with no tables**, and admin login then fails with a generic `500 Internal server error` — the credential checks pass and the `INSERT INTO admin_sessions` is what actually blows up.
 - Stop the dev server with **Ctrl+C, never `kill`**. The local database is a WASM Postgres running as a child of the Netlify process; an ungraceful stop corrupts `.netlify/db`, after which every start logs `Failed to start Netlify Database locally: RuntimeError: Aborted()` and serves the app *without* a database, so the pages load but every API call 500s. Recover with `rm -rf .netlify/db` and re-run init + migrations.
 - The seeded game is intentionally empty — migration `0003` clears the demo data — so add players and a round before anything interesting appears.
+- `netlify dev` caches function bundles and does **not** always pick up edits to files under `netlify/lib/`. If an endpoint keeps returning the old shape, `touch` the function file that imports it (e.g. `touch netlify/functions/player-state.ts`) to force a re-bundle. Easy to mistake for a bug in your own change.
 
 ## Deploy to Netlify
 

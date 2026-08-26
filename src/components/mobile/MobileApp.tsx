@@ -42,7 +42,7 @@ export function MobileApp({ gameId }: { gameId: number }) {
   const content = s.interactiveBlock
     ? <LiveQuestionView state={s} block={s.interactiveBlock} busy={busy} act={act} gameId={gameId} />
     : view === 'predictions'
-      ? <PredictionList state={s} go={go} />
+      ? <PredictionList state={s} go={go} busy={busy} act={act} gameId={gameId} />
       : view === 'prediction' && currentPrediction
         ? <PredictionDetail state={s} prediction={currentPrediction} busy={busy} act={act} go={go} gameId={gameId} />
         : view === 'roulette'
@@ -84,7 +84,7 @@ function Home({ state: s, go, gameId }: { state: any; go: (x?: string) => void; 
   </>;
 }
 
-function PredictionList({ state: s, go }: { state: any; go: (x?: string) => void }) {
+function PredictionList({ state: s, go, busy, act, gameId }: { state: any; go: (x?: string) => void; busy: boolean; act: (x: () => Promise<unknown>) => void; gameId: number }) {
   return <>
     <Back go={go} />
     <div className="page-heading"><div className="label muted">PREDICTIONS</div><h1 className="display">Markets</h1></div>
@@ -103,6 +103,40 @@ function PredictionList({ state: s, go }: { state: any; go: (x?: string) => void
           {p.status === 'CANCELLED' && <div className="settled-result">Cancelled · deposit refunded</div>}
         </button>;
       })}</div>}
+    <PredictionRequests state={s} busy={busy} act={act} gameId={gameId} />
+  </>;
+}
+
+/**
+ * Propose a market of your own. The limits are shown before the player types, so the
+ * refusal is never a surprise — two requests each, and an hour between them.
+ */
+function PredictionRequests({ state: s, busy, act, gameId }: { state: any; busy: boolean; act: (x: () => Promise<unknown>) => void; gameId: number }) {
+  const requests = s.predictionRequests || { mine: [], remaining: 0, cooldownMinutesLeft: 0 };
+  const [text, setText] = useState('');
+  const onCooldown = requests.cooldownMinutesLeft > 0;
+  const canSend = requests.remaining > 0 && !onCooldown && text.trim().length > 0 && !busy;
+
+  return <>
+    {requests.mine.length > 0 && <Card className="request-mine">
+      <div className="label muted">YOUR PREDICTION REQUESTS</div>
+      {requests.mine.map((r: any) => <div className="request-mine-row" key={r.id}>
+        <div className="request-mine-question">{r.question}</div>
+        <span className={`pill status-pill ${r.status === 'PENDING' ? 'neutral' : r.status === 'APPROVED' ? 'yes' : 'no'}`}>{r.statusLabel}</span>
+      </div>)}
+    </Card>}
+
+    <Card>
+      <div className="label muted">SUBMIT YOUR OWN PREDICTION{requests.remaining > 0 ? ` · ${requests.remaining} LEFT` : ''}</div>
+      {requests.remaining === 0
+        ? <p className="muted">You have used both of your prediction requests.</p>
+        : onCooldown
+          ? <p className="muted">You can send another prediction in {requests.cooldownMinutesLeft} min.</p>
+          : <div className="request-form">
+            <textarea className="field" rows={2} placeholder="e.g. Wint Team Blauw de bonusronde?" value={text} onChange={e => setText(e.target.value)} />
+            <button className="btn btn-primary btn-full" disabled={!canSend} onClick={() => act(async () => { await mutation('/api/create-prediction-request', { gameId, question: text.trim() }); setText(''); })}>SEND TO ADMINS</button>
+          </div>}
+    </Card>
   </>;
 }
 

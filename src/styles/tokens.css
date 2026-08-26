@@ -1079,3 +1079,10 @@ button.chip-blue:hover { background: var(--violet); }
 .music-scene-player { width: 48vw; height: 4vh; min-height: 44px; }
 /* The answer, once the host reveals it. */
 .scene-reveal { margin-top: 1vh; padding: 1.2vh 3vw; border-radius: 999px; background: var(--lime); color: var(--ink); font: 700 3.4vw var(--display); }
+
+/* Player-submitted prediction requests (mobile) */
+.request-form { display: grid; gap: 10px; margin-top: 12px; }
+.request-mine-row { display: grid; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.request-mine-row:last-child { border-bottom: 0; }
+.request-mine-question { font-size: 13px; font-weight: 700; line-height: 1.4; }
+.request-mine-row .status-pill { justify-self: start; font-size: 10px; padding: 6px 12px; }
