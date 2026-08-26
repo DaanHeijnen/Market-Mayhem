@@ -5,7 +5,7 @@ import { Card } from '../ui';
 export function SettingsPage({ state: s, run, onReset }: { state: any; run: RunMutation; onReset: () => void }) {
   const g = s.game;
   const [form, setForm] = useState<any>({});
-  const [danger, setDanger] = useState(false);
+  const [detail, setDetail] = useState(false);
   const [phrase, setPhrase] = useState('');
 
   useEffect(() => setForm({
@@ -28,30 +28,26 @@ export function SettingsPage({ state: s, run, onReset }: { state: any; run: RunM
       <button className="btn btn-primary" onClick={() => run('/api/update-settings', { ...form, maximumWalletPercentage: form.maximumWalletPercentage === '' ? null : Number(form.maximumWalletPercentage) })}>SAVE SETTINGS</button>
     </Card>
 
+    {/* The typed phrase is the gate, exactly as the design has it — the button stays
+        dead until it matches, so the confirmation is the input rather than a first click.
+        What gets removed is listed because it is not recoverable. */}
     <Card className="danger-card danger-inline">
       <div className="label danger-text">DANGER ZONE</div>
       <h2 className="display">Delete Game Save</h2>
-      <p className="muted">Permanently reset only this game night. Your Admin login remains available.</p>
-      {!danger
-        ? <button className="btn btn-danger btn-danger-large" onClick={() => { setPhrase(''); setDanger(true); }}>DELETE GAME SAVE</button>
-        : <>
-          <p>The following game-specific data will be removed:</p>
-          <ul className="danger-list">
-            <li>players, join tokens and player sessions</li>
-            <li>wallets and immutable ledger entries</li>
-            <li>rounds, groups, memberships and round content</li>
-            <li>live-question answers and reward state</li>
-            <li>predictions, deposits and payouts</li>
-            <li>roulette games and bets</li>
-            <li>screen state and game settings</li>
-          </ul>
-          <p>Type exactly <b>yes delete</b> to continue.</p>
-          <input autoFocus className="field" value={phrase} onChange={e => setPhrase(e.target.value)} placeholder="yes delete" />
-          <div className="actions">
-            <button className="btn btn-danger" disabled={phrase !== 'yes delete'} onClick={async () => { if (await run('/api/reset-game', { confirmation: phrase })) { setDanger(false); onReset(); } }}>DELETE EVERYTHING</button>
-            <button className="btn btn-secondary" onClick={() => { setDanger(false); setPhrase(''); }}>CANCEL</button>
-          </div>
-        </>}
+      <p className="muted">Permanently resets only this game night — players, rounds, predictions, roulette and ledger history. Your Admin login remains available.</p>
+      <button className="text-button danger-detail-toggle" onClick={() => setDetail(x => !x)}>{detail ? 'Hide exactly what is removed' : 'Show exactly what is removed'}</button>
+      {detail && <ul className="danger-list">
+        <li>players, join tokens and player sessions</li>
+        <li>wallets and immutable ledger entries</li>
+        <li>rounds, groups, memberships and round content</li>
+        <li>live-question answers and reward state</li>
+        <li>predictions, deposits and payouts</li>
+        <li>roulette games and bets</li>
+        <li>screen state and game settings</li>
+      </ul>}
+      <p>Type exactly <b>yes delete</b> to confirm.</p>
+      <input className="field" value={phrase} onChange={e => setPhrase(e.target.value)} placeholder="yes delete" />
+      <button className="btn btn-danger btn-danger-large" disabled={phrase.trim() !== 'yes delete'} onClick={async () => { if (await run('/api/reset-game', { confirmation: phrase.trim() })) { setPhrase(''); onReset(); } }}>DELETE GAME SAVE</button>
     </Card>
   </div>;
 }

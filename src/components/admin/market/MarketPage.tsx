@@ -27,35 +27,31 @@ export function MarketPage({ state: s, gameId, run }: { state: any; gameId: numb
   }, [gameId, s.version]);
   const onDashboard = s.screen?.mode === 'DASHBOARD';
 
+  // The design has no card around the intro — the copy and the one action sit
+  // directly on the paper, above the chart.
   return <div className="page-stack">
-    <Card>
-      <div className="market-intro">
-        <div>
-          <div className="label muted">EXCHANGE CHART</div>
-          <p>This is the exact chart shown on the Big Screen dashboard — each player's coin value plotted chronologically against their starting balance.</p>
-        </div>
-        <button className="btn btn-primary" disabled={onDashboard} onClick={() => run('/api/screen-mode', { mode: 'DASHBOARD' })}>
-          {onDashboard ? 'ON BIG SCREEN NOW' : 'SHOW ON BIG SCREEN'}
-        </button>
-      </div>
-      {error && <p className="neg"><b>{error}</b></p>}
-    </Card>
+    <div className="market-intro">
+      <p>This is the exact chart shown on the Big Screen dashboard — each player's coin value plotted chronologically against their starting balance.</p>
+      <button className="btn btn-lime btn-compact" disabled={onDashboard} onClick={() => run('/api/screen-mode', { mode: 'DASHBOARD' })}>
+        {onDashboard ? 'ON BIG SCREEN NOW' : 'SHOW ON BIG SCREEN'}
+      </button>
+    </div>
+    {error && <Card><p className="neg"><b>{error}</b></p></Card>}
 
     {!screen ? <Empty title="Loading exchange data…" /> : screen.leaderboard.length === 0
       ? <Empty title="No players yet — the chart appears once players are added" />
       : <div className="market-chart-panel graph-panel-admin">
         <div className="label muted">PLAYER VALUE · ECONOMIC CHRONOLOGY</div>
         <PlayerValueGraph players={screen.leaderboard} />
+        {/* Current value belongs with the chart, as the design's legend does, rather
+            than in a second card repeating the same players. */}
+        <div className="market-chart-legend">
+          {s.players.filter((p: any) => p.active).map((p: any) => <div key={p.id}>
+            <span className="legend-dot" style={{ background: p.public_color }} />
+            <b>{p.display_name}</b>
+            <strong>{p.current_balance + p.locked_prediction}</strong>
+          </div>)}
+        </div>
       </div>}
-
-    <Card>
-      <div className="label muted">CURRENT VALUE</div>
-      <div className="summary-grid">
-        {s.players.filter((p: any) => p.active).map((p: any) => <div key={p.id} className="summary-chip" style={{ borderLeftColor: p.public_color }}>
-          <b>{p.display_name}</b>
-          <strong>{p.current_balance + p.locked_prediction}</strong>
-        </div>)}
-      </div>
-    </Card>
   </div>;
 }

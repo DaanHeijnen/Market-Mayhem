@@ -1080,6 +1080,34 @@ button.chip-blue:hover { background: var(--violet); }
 /* The answer, once the host reveals it. */
 .scene-reveal { margin-top: 1vh; padding: 1.2vh 3vw; border-radius: 999px; background: var(--lime); color: var(--ink); font: 700 3.4vw var(--display); }
 
+/* ============================================================
+   REMAINING ADMIN SURFACES — predictions, players, ledger, settings
+   ============================================================ */
+/* The design's create-market row is three equal columns: round, min, max. */
+.form-grid.triple { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.stacked-field { display: grid; gap: 7px; color: var(--secondary); font-size: 13px; font-weight: 700; }
+.timing-row { display: flex; align-items: end; gap: 22px; flex-wrap: wrap; }
+.timing-row > label:first-child { display: grid; gap: 7px; min-width: 180px; color: var(--secondary); font-size: 13px; font-weight: 700; }
+.timing-row .check { margin: 0 0 10px; }
+
+/* Status and the join link sit with the name, as the design has them. */
+.player-row-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+
+/* Ledger, primary view: one readable line per movement. */
+.ledger-simple { border: 1px solid var(--border); border-radius: 20px; background: var(--white); overflow: hidden; }
+.ledger-simple-row { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.ledger-simple-row:last-child { border-bottom: 0; }
+.ledger-simple-row > span { min-width: 0; line-height: 1.45; }
+.ledger-simple-row > b { font-family: var(--display); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ledger-simple + .accordion-card .table-wrap { margin-top: 14px; }
+
+.danger-detail-toggle { justify-self: start; padding: 0; color: var(--red); text-align: left; }
+.danger-inline .btn-danger-large { margin-top: 4px; }
+
+@media (max-width: 900px) {
+  .form-grid.triple { grid-template-columns: 1fr; }
+}
+
 /* Player-submitted prediction requests (mobile) */
 .request-form { display: grid; gap: 10px; margin-top: 12px; }
 .request-mine-row { display: grid; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border); }

@@ -55,23 +55,27 @@ export function PredictionsPage({ state: s, run }: { state: any; run: RunMutatio
     <Card>
       <div className="label muted">{editing ? 'EDIT MARKET' : 'CREATE MARKET'}</div>
       <h2 className="display">Admin-set probability</h2>
-      <div className="form-grid">
-        <label className="span-2">Question<input className="field" value={form.question} onChange={e => setForm({ ...form, question: e.target.value })} /></label>
+      <label className="stacked-field">Question<input className="field" value={form.question} onChange={e => setForm({ ...form, question: e.target.value })} /></label>
+      <div className="form-grid triple">
         <label>Linked round<select className="field" value={form.roundId} onChange={e => {
           const id = e.target.value;
           const round = s.rounds.find((item: any) => item.id === Number(id));
           setForm({ ...form, roundId: id, scheduled: Boolean(id) && round?.status === 'UPCOMING' ? form.scheduled : false });
         }}><option value="">No round</option>{s.rounds.filter((r: any) => r.status !== 'COMPLETED').map((r: any) => <option key={r.id} value={r.id}>R{String(r.round_number).padStart(2, '0')} · {r.title}</option>)}</select></label>
-        <label>Duration (seconds)<input className="field" type="number" min="5" max="86400" value={form.predictionTimeSeconds} onChange={e => setForm({ ...form, predictionTimeSeconds: e.target.value })} /></label>
-        <label>Minimum deposit<input className="field" type="number" min="1" value={form.minimumStake} onChange={e => setForm({ ...form, minimumStake: e.target.value })} /></label>
-        <label>Maximum deposit<input className="field" type="number" min="1" value={form.maximumStake} onChange={e => setForm({ ...form, maximumStake: e.target.value })} /></label>
+        <label>Min deposit (coins)<input className="field" type="number" min="1" value={form.minimumStake} onChange={e => setForm({ ...form, minimumStake: e.target.value })} /></label>
+        <label>Max deposit (coins)<input className="field" type="number" min="1" value={form.maximumStake} onChange={e => setForm({ ...form, maximumStake: e.target.value })} /></label>
       </div>
       <div className="probability-builder">
         <div className="row-between"><div><div className="label muted">YES PROBABILITY</div><div className="display probability-value">{form.probabilityPercent}%</div></div><div className="odds-preview"><div className="yes"><span>YES</span><b>{yesMultiplier.toFixed(2)}×</b></div><div className="no"><span>NO</span><b>{noMultiplier.toFixed(2)}×</b></div></div></div>
         <input className="probability-slider" type="range" min="1" max="99" value={form.probabilityPercent} onChange={e => setForm({ ...form, probabilityPercent: Number(e.target.value) })} />
         <div className="slider-edge-labels"><span>1% YES</span><span>99% YES</span></div>
       </div>
-      <label className="check"><input type="checkbox" checked={form.scheduled} disabled={!form.roundId || s.rounds.find((r: any) => r.id === Number(form.roundId))?.status !== 'UPCOMING'} onChange={e => setForm({ ...form, scheduled: e.target.checked })} /> Scheduled — automatically open on the linked round</label>
+      {/* The design shows probability, deposits and round only. Duration and scheduling
+          are this app's own per-market settings, kept here as one timing row. */}
+      <div className="timing-row">
+        <label>Duration (seconds)<input className="field" type="number" min="5" max="86400" value={form.predictionTimeSeconds} onChange={e => setForm({ ...form, predictionTimeSeconds: e.target.value })} /></label>
+        <label className="check"><input type="checkbox" checked={form.scheduled} disabled={!form.roundId || s.rounds.find((r: any) => r.id === Number(form.roundId))?.status !== 'UPCOMING'} onChange={e => setForm({ ...form, scheduled: e.target.checked })} /> Scheduled — automatically open on the linked round</label>
+      </div>
       <div className="actions">
         <button className="btn btn-primary" disabled={!canSave} onClick={save}>{editing ? 'SAVE MARKET' : 'CREATE MARKET'}</button>
         {editing && <button className="btn btn-secondary" onClick={() => { setEditing(null); setForm(initialForm); }}>CANCEL</button>}

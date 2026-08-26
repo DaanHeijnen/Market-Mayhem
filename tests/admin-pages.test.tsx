@@ -8,6 +8,7 @@ import { PredictionsPage } from '../src/components/admin/predictions/Predictions
 import { PlayersPage } from '../src/components/admin/players/PlayersPage';
 import { SettingsPage } from '../src/components/admin/settings/SettingsPage';
 import { MarketPage } from '../src/components/admin/market/MarketPage';
+import { LedgerPage } from '../src/components/admin/ledger/LedgerPage';
 import { AUTHORABLE_BLOCK_TYPES, blockLabel, blockMeta } from '../src/components/admin/blockMeta';
 import { orderRunOfShow } from '../netlify/lib/run-of-show';
 
@@ -226,18 +227,57 @@ describe('admin pages render', () => {
     expect(html).not.toContain('SETTLE PAYOUTS');
     expect(html).not.toContain('RESULT YES');
     expect(html).toContain('CREATE MARKET');
+    // the design's three-column deposit row
+    expect(html).toContain('form-grid triple');
+    expect(html).toContain('Min deposit (coins)');
+    expect(html).toContain('Max deposit (coins)');
   });
 
-  it('renders Players and Settings', () => {
-    const players = render(createElement(PlayersPage, { state: adminState(), gameId: 1, run, setMsg: () => {} }));
-    expect(players).toContain('ADD PLAYER');
-    expect(players).toContain('GENERATE JOIN LINK');
+  // The design draws fewer controls than this app has. Each of these is a relocation,
+  // so one assertion per action: a later restyle cannot quietly drop an endpoint's only
+  // entry point.
+  it('keeps every prediction action reachable from the market cards', () => {
+    const state = adminState();
+    state.predictions[0] = { ...state.predictions[0], status: 'DRAFT' };
+    const html = render(createElement(PredictionsPage, { state, run }));
+    expect(html).toContain('EDIT');
+    expect(html).toContain('OPEN NOW');
+    expect(html).toContain('DELETE');
+    expect(html).toContain('CANCEL + REFUND');
+    // relocated out of the design's form, not dropped
+    expect(html).toContain('Duration (seconds)');
+    expect(html).toContain('Scheduled — automatically open on the linked round');
+  });
 
-    const settings = render(createElement(SettingsPage, { state: adminState(), run, onReset: () => {} }));
-    expect(settings).toContain('DANGER ZONE');
-    // the confirmation is inline now, revealed only after the first click
-    expect(settings).not.toContain('modal-backdrop');
-    expect(settings).toContain('DELETE GAME SAVE');
+  it('keeps every player action reachable from the player cards', () => {
+    const html = render(createElement(PlayersPage, { state: adminState(), gameId: 1, run, setMsg: () => {} }));
+    expect(html).toContain('ADD PLAYER');
+    // the design pairs status with the join link beside the name
+    expect(html).toContain('player-row-actions');
+    expect(html).toContain('REGENERATE JOIN LINK'); // player 1 has joined
+    expect(html).toContain('GENERATE JOIN LINK');   // player 2 has not
+    expect(html).toContain('NEW LINK + REVOKE SESSION');
+    expect(html).toContain('EDIT');
+    expect(html).toContain('ADJUST COINS');
+    expect(html).toContain('DEACTIVATE');
+  });
+
+  it('gates the game reset on the typed phrase and keeps the wallet cap setting', () => {
+    const html = render(createElement(SettingsPage, { state: adminState(), run, onReset: () => {} }));
+    expect(html).toContain('DANGER ZONE');
+    expect(html).not.toContain('modal-backdrop');
+    expect(html).toContain('DELETE GAME SAVE');
+    // the button is dead until "yes delete" is typed
+    expect(html).toMatch(/<button [^>]*disabled[^>]*>DELETE GAME SAVE<\/button>/);
+    expect(html).toContain('Max wallet % per prediction');
+  });
+
+  it('renders the Ledger with the readable list first and the full table behind it', () => {
+    const html = render(createElement(LedgerPage, { state: adminState(), gameId: 1 }));
+    expect(html).toContain('LEDGER FILTER');
+    // the entries themselves arrive from a one-shot fetch, which effects do not run here
+    expect(html).toContain('Loading ledger');
+    expect(html).not.toContain('table-wrap');
   });
 
   it('renders the Market page before its screen snapshot arrives', () => {

@@ -88,7 +88,12 @@ export function PlayersPage({ state: s, gameId, run, setMsg }: { state: any; gam
             <span className="player-dot" style={{ background: player.public_color }} />
             <div><div className="display row-title">{player.display_name}</div><div className="player-meta"><CoinAmount value={player.current_balance} />{player.locked_prediction > 0 && <span className="muted">+ {player.locked_prediction} locked</span>}<span className="muted">· {player.active ? (player.joined ? 'Joined' : 'Not joined') : 'Deactivated'}</span></div></div>
           </div>
-          <Status tone={player.active ? 'success' : 'neutral'}>{player.active ? 'ACTIVE' : 'INACTIVE'}</Status>
+          {/* The design pairs the status with the one action a host reaches for most,
+              right of the name. The rest of the controls live in the pill row below. */}
+          <div className="player-row-actions">
+            <Status tone={player.active ? 'success' : 'neutral'}>{player.active ? 'ACTIVE' : 'INACTIVE'}</Status>
+            {player.active && <button className="btn btn-secondary btn-compact" onClick={() => generateLink(player, false)}>{player.joined ? 'REGENERATE JOIN LINK' : 'GENERATE JOIN LINK'}</button>}
+          </div>
         </div>
 
         {editing?.id === player.id ? <div className="compact-edit-row">
@@ -98,7 +103,6 @@ export function PlayersPage({ state: s, gameId, run, setMsg }: { state: any; gam
           <button className="btn btn-secondary btn-compact" onClick={() => setEditing(null)}>CANCEL</button>
         </div> : player.active && <div className="actions actions-compact">
           <button className="btn btn-secondary btn-compact" onClick={() => setEditing({ ...player })}>EDIT</button>
-          <button className="btn btn-secondary btn-compact" onClick={() => generateLink(player, false)}>{player.joined ? 'REGENERATE JOIN LINK' : 'GENERATE JOIN LINK'}</button>
           {player.joined && <button className="btn btn-secondary btn-compact" onClick={() => generateLink(player, true)}>NEW LINK + REVOKE SESSION</button>}
           <button className="btn btn-secondary btn-compact" onClick={() => setAdjustment({ playerId: player.id, amount: '', reason: '', roundId: '', idempotencyKey: crypto.randomUUID() })}>ADJUST COINS</button>
           <button className="btn btn-danger-ghost btn-compact" onClick={() => run('/api/remove-player', { playerId: player.id })}>DEACTIVATE</button>
