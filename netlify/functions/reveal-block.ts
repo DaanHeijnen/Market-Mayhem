@@ -20,6 +20,9 @@ export default wrap(async request => {
   const revealed = p.revealed !== false;
 
   return ok(await withTransaction(async client => {
+    const game = await client.query('SELECT current_round_block_id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
+    if (!game.rows[0]) throw new HttpError(404, 'Game not found');
+
     const result = await client.query(
       'SELECT id,type,round_id,interactive_status FROM round_blocks WHERE id=$1 AND game_night_id=$2 FOR UPDATE',
       [blockId, gameId],
@@ -27,6 +30,11 @@ export default wrap(async request => {
     const block = result.rows[0];
     if (!block) throw new HttpError(404, 'Round block not found');
     if (!REVEALABLE.includes(block.type)) throw new HttpError(409, 'That block type does not have a reveal');
+    // Only the block actually on the projector can be revealed. Otherwise a block could
+    // be pre-revealed and would expose its answer the moment it went live.
+    if (Number(game.rows[0].current_round_block_id || 0) !== blockId) {
+      throw new HttpError(409, 'Show this block before revealing its answer');
+    }
 
     await client.query(
       `UPDATE round_blocks SET interactive_status=$2,revealed_at=$3,updated_at=NOW() WHERE id=$1`,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MEDIA_LIMITS, assertAcceptableMedia, buildMediaKey, mediaKeyValue, mediaKindValue } from '../netlify/lib/media';
+import { MEDIA_LIMITS, assertAcceptableMedia, buildMediaKey, mediaKeyValue, mediaKindValue, resolveContentType } from '../netlify/lib/media';
 
 describe('round media validation', () => {
   it('accepts the common image and audio types', () => {
@@ -69,5 +69,28 @@ describe('round media keys', () => {
     expect(() => mediaKeyValue('1/image/short.png')).toThrow(/Invalid media key/);
     expect(() => mediaKeyValue('')).toThrow(/Invalid media key/);
     expect(() => mediaKeyValue(null)).toThrow(/Invalid media key/);
+  });
+});
+
+describe('content type fallback', () => {
+  // Browsers do not always label a file usefully. curl and some OSes send
+  // application/octet-stream for audio, which would otherwise reject a valid MP3.
+  it('falls back to the extension when the type is generic or missing', () => {
+    expect(resolveContentType('application/octet-stream', 'snippet.mp3')).toBe('audio/mpeg');
+    expect(resolveContentType('', 'cover.PNG')).toBe('image/png');
+    expect(resolveContentType('binary/octet-stream', 'clip.m4a')).toBe('audio/mp4');
+  });
+
+  it('prefers a type the browser actually declared', () => {
+    expect(resolveContentType('image/webp', 'thing.png')).toBe('image/webp');
+  });
+
+  it('still refuses a genuinely wrong file even via the fallback', () => {
+    expect(() => assertAcceptableMedia('audio', 'application/octet-stream', 100, 'photo.png')).toThrow(/not supported for audio/);
+    expect(() => assertAcceptableMedia('audio', 'application/octet-stream', 100, 'notes.txt')).toThrow(/not supported/);
+  });
+
+  it('accepts an octet-stream wav, which is what broke in real use', () => {
+    expect(assertAcceptableMedia('audio', 'application/octet-stream', 1644, 'test.wav')).toBe('audio/wav');
   });
 });

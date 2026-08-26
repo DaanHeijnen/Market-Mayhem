@@ -23,7 +23,7 @@ export default wrap(async request => {
   const file = form.get('file');
   if (!(file instanceof File)) throw new HttpError(400, 'No file was attached');
 
-  const contentType = assertAcceptableMedia(kind, file.type, file.size);
+  const contentType = assertAcceptableMedia(kind, file.type, file.size, file.name);
   const key = buildMediaKey(gameId, kind, contentType, randomToken(8));
 
   const store = getStore(BLOB_STORE);

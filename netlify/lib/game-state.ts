@@ -132,6 +132,16 @@ export async function setActiveRoundBlock(client: PoolClient, gameId: number, ro
 
   await client.query('UPDATE game_nights SET current_round_block_id=$2,updated_at=NOW() WHERE id=$1', [gameId, blockId]);
 
+  // A picture/music/buzzer/wager block starts every showing hidden. Without this it
+  // keeps the REVEALED state from a previous showing, so coming back to a step — or
+  // pre-revealing one before it went live — would put the answer on the projector the
+  // instant it appeared.
+  await client.query(
+    `UPDATE round_blocks SET interactive_status='READY',revealed_at=NULL,updated_at=NOW()
+     WHERE id=$1 AND type IN ('PICTURE','MUSIC','BUZZER','WAGER')`,
+    [blockId],
+  );
+
   if (block.rows[0].type === 'ROULETTE') {
     const otherLive = await client.query(
       `SELECT id,round_block_id,status FROM roulette_games
