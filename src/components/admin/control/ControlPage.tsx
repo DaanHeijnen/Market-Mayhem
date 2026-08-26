@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { RunMutation } from '../types';
-import { Accordion, Card, Countdown, Empty, Status } from '../ui';
+import { Accordion, Card, Countdown, Status } from '../ui';
 import { CoinIcon } from '../../shared/CoinIcon';
 import { blockLabel, blockMeta } from '../blockMeta';
 
@@ -23,15 +23,12 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
 
   const activePlayers = s.players.filter((p: any) => p.active);
   const activeRound = s.rounds.find((r: any) => r.id === s.game.current_round_id) || null;
-  const upcomingRounds = s.rounds.filter((r: any) => r.status === 'UPCOMING');
-  const blocks = activeRound?.blocks || [];
   const activeRoulette = s.activeRoulette;
   const isFresh = activePlayers.length === 0 && s.rounds.length === 0 && s.predictions.length === 0;
 
   const live = s.screen || {};
   const staged = live.staged || {};
   const runOfShow: any[] = s.runOfShow || [];
-  const liveIndex = runOfShow.findIndex(step => stepMatches(step, live));
   const sameAsLive = staged.mode === live.mode && (staged.blockId || null) === (live.blockId || null) && (staged.predictionId || null) === (live.predictionId || null);
   const pendingRequests = (s.predictionRequests || []).filter((r: any) => r.status === 'PENDING');
 
@@ -150,29 +147,6 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
       </div>)}
     </div>}
 
-    {/* Round control. Kept prominent per backlog items 2, 4, 16 and 17 — starting and
-        completing a round, and stepping through it, are the host's core actions. */}
-    <Card>
-      <div className="row-between control-round-head">
-        <div>
-          <div className="label muted">{activeRound ? 'CURRENT ROUND' : 'NO ROUND ACTIVE'}</div>
-          {activeRound
-            ? <><div className="display card-heading">R{String(activeRound.round_number).padStart(2, '0')} · {activeRound.title}</div><div className="muted">{liveIndex >= 0 ? `Part ${liveIndex + 1} of ${runOfShow.length}` : `${runOfShow.length} parts in this round`}</div></>
-            : <div className="muted">Start a round to begin the run of show.</div>}
-        </div>
-        {activeRound && <Status tone="open">{activeRound.status}</Status>}
-      </div>
-      <div className="content-controls">
-        {activeRound ? <>
-          <button className="btn btn-secondary btn-compact" disabled={liveIndex <= 0} onClick={() => stage(runOfShow[liveIndex - 1]).then(goLive)}>← PREVIOUS</button>
-          <button className="btn btn-secondary btn-compact" disabled={liveIndex < 0 || liveIndex >= runOfShow.length - 1} onClick={() => stage(runOfShow[liveIndex + 1]).then(goLive)}>NEXT →</button>
-          <button className="btn btn-primary btn-compact" onClick={() => run('/api/complete-round', { roundId: activeRound.id })}>COMPLETE ROUND</button>
-        </> : upcomingRounds.length === 0
-          ? <span className="muted">No upcoming rounds — create one on the Rounds page.</span>
-          : upcomingRounds.map((round: any) => <button key={round.id} className="btn btn-primary btn-compact" onClick={() => run('/api/start-round', { roundId: round.id })}>START R{String(round.round_number).padStart(2, '0')} · {round.title}</button>)}
-      </div>
-    </Card>
-
     {/* The presenter pair. Live is the real projector output scaled down, so it cannot
         drift from what the audience sees; staged cannot be an iframe because it is not
         on screen yet, so it renders the step's identity in its accent colour. */}
@@ -256,18 +230,7 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
       </div>
 
       <div className="page-stack control-side-column">
-        {activeRound ? <Card>
-          <div className="label muted">THIS ROUND'S CONTENT</div>
-          <p className="muted round-content-copy">The order below is exactly what plays out in the run of show.</p>
-          {blocks.length === 0 ? <div className="sub-empty">No content blocks yet.</div> : <div className="round-content-summary">
-            {blocks.map((b: any, index: number) => <div key={b.id} className={`round-content-line accent-${blockMeta(b.type).accent}`}>
-              <span className="accent-dot" />
-              <span>{index + 1}. {blockLabel(b)}</span>
-              {live.blockId === b.id && <em>LIVE</em>}
-            </div>)}
-          </div>}
-          <button className="btn btn-secondary btn-full round-content-edit" onClick={() => nav(`/admin/${gameId}/rounds/${activeRound.id}`)}>EDIT ROUND CONTENT</button>
-        </Card> : <Empty title="No active round" />}
+        <RoundsInGame state={s} gameId={gameId} run={run} nav={nav} />
 
         {activeRound?.groups?.length > 0 && <Card>
           <div className="label muted">GROUPS THIS ROUND</div>
@@ -291,6 +254,56 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
       </div>
     </div>
   </div>;
+}
+
+/**
+ * Every round in the game night, in order, with the one action each needs.
+ *
+ * This replaces the old current-round and this-round's-content cards. The run of
+ * show already answers "what is inside the live round"; the question it cannot
+ * answer is "where are we in the evening, and what still needs building". EDIT
+ * hands off to the round's own page rather than duplicating the editor here.
+ */
+function RoundsInGame({ state: s, gameId, run, nav }: { state: any; gameId: number; run: RunMutation; nav: (path: string) => void }) {
+  const activeRoundId = s.game.current_round_id;
+  const label = (status: string) => status === 'COMPLETED' ? 'FINISHED' : status;
+  const tone = (status: string) => status === 'ACTIVE' ? 'open' : status === 'COMPLETED' ? 'success' : 'neutral';
+
+  return <Card>
+    <div className="row-between">
+      <div className="label muted">ROUNDS IN THIS GAME</div>
+      <Status>{s.rounds.length} ROUND{s.rounds.length === 1 ? '' : 'S'}</Status>
+    </div>
+    {s.rounds.length === 0
+      ? <div className="sub-empty">No rounds yet — create the first one on the Rounds page.</div>
+      : <div className="round-line-list">
+        {s.rounds.map((round: any) => {
+          const isActive = round.id === activeRoundId;
+          const parts = round.blocks?.length ?? 0;
+          const groups = round.groups?.length ?? 0;
+          // The server refuses a second active round with a 409, so the button says
+          // so up front rather than offering an action that is going to fail.
+          const blockedBy = round.status === 'UPCOMING' && activeRoundId ? s.rounds.find((r: any) => r.id === activeRoundId) : null;
+          return <div key={round.id} className={`round-line ${isActive ? 'is-active' : ''}`}>
+            <div className="round-line-copy">
+              <div className="round-line-title">R{String(round.round_number).padStart(2, '0')} · {round.title}</div>
+              <div className="muted round-line-meta">{parts} part{parts === 1 ? '' : 's'}{groups > 0 ? ` · ${groups} group${groups === 1 ? '' : 's'}` : ''}</div>
+            </div>
+            <Status tone={tone(round.status) as any}>{label(round.status)}</Status>
+            <div className="round-line-actions">
+              {round.status === 'UPCOMING' && <button
+                className="btn btn-primary btn-compact"
+                disabled={Boolean(blockedBy)}
+                title={blockedBy ? `Complete R${String(blockedBy.round_number).padStart(2, '0')} first` : undefined}
+                onClick={() => run('/api/start-round', { roundId: round.id })}
+              >START</button>}
+              {isActive && <button className="btn btn-primary btn-compact" onClick={() => run('/api/complete-round', { roundId: round.id })}>COMPLETE ROUND</button>}
+              <button className="btn btn-secondary btn-compact" onClick={() => nav(`/admin/${gameId}/rounds/${round.id}`)}>EDIT</button>
+            </div>
+          </div>;
+        })}
+      </div>}
+  </Card>;
 }
 
 function stepMatches(step: any, slot: any) {

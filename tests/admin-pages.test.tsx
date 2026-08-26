@@ -96,9 +96,18 @@ describe('admin pages render', () => {
     expect(html).toContain('RUN OF SHOW');
     // four content blocks plus the one unsettled market attached to the active round
     expect(html.match(/class="run-step accent-/g)?.length).toBe(5);
-    expect(html).toContain('Part 3 of 5');
-    expect(html).toContain('round-content-summary');
     expect(html).toContain('QUICK COIN ADJUSTMENT');
+  });
+
+  // The run of show is the only step navigator now. The current-round card and the
+  // this-round's-content list were removed because both restated what it already shows.
+  it('does not restate the run of show as a current-round card or a content list', () => {
+    const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
+    expect(html).not.toContain('CURRENT ROUND');
+    expect(html).not.toContain('PREVIOUS');
+    expect(html).not.toContain('NEXT →');
+    expect(html).not.toContain('CONTENT</div>'); // "THIS ROUND'S CONTENT" eyebrow
+    expect(html).not.toContain('round-content-copy');
   });
 
   // The presenter pair is the point of the redesign: live is the real projector output,
@@ -172,28 +181,53 @@ describe('admin pages render', () => {
     expect(html).not.toContain('Settled market');
   });
 
-  // With no round running, the host's only next action is starting one, so the
-  // Control Center has to offer that rather than an empty presenter.
-  it('offers the upcoming rounds to start when none is active', () => {
-    const state = adminState({
-      game: { ...adminState().game, current_round_id: null, current_round_block_id: null },
-      currentBlock: null,
-      runOfShow: [],
-    });
-    const html = render(createElement(ControlPage, { state, gameId: 1, run }));
-    expect(html).toContain('NO ROUND ACTIVE');
-    expect(html).toContain('START R04 · Finale');
-    expect(html).not.toContain('RUN OF SHOW');
-    expect(html).not.toContain('COMPLETE ROUND');
+  // Where are we in the evening, and what still needs building — the question the run
+  // of show cannot answer, because it only ever shows the live round.
+  it('lists every round in the game with the one action each needs', () => {
+    const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
+    expect(html).toContain('ROUNDS IN THIS GAME');
+    expect(html).toContain('2 ROUNDS');
+    expect(html).toContain('R03 · Kennisquiz');
+    expect(html).toContain('R04 · Finale');
+    // one EDIT per round, handing off to that round's own page
+    expect(html.match(/>EDIT</g)?.length).toBe(2);
+    // the live round can be completed; nothing else can
+    expect(html.match(/>COMPLETE ROUND</g)?.length).toBe(1);
+    expect(html).toContain('round-line is-active');
   });
 
-  it('says so plainly when there is no round and nothing to start', () => {
+  it('calls a completed round finished, and does not offer to start it', () => {
+    const state = adminState();
+    state.rounds[1] = { ...state.rounds[1], status: 'COMPLETED' };
+    const html = render(createElement(ControlPage, { state, gameId: 1, run }));
+    expect(html).toContain('FINISHED');
+    expect(html).not.toContain('>START<');
+    expect(html).toContain('>EDIT<'); // still inspectable
+  });
+
+  // start-round answers a second active round with a 409, so the button says so up
+  // front rather than offering an action that is going to fail.
+  it('blocks START while another round is live, and frees it once none is', () => {
+    const live = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
+    expect(live).toMatch(/<button [^>]*disabled[^>]*title="Complete R03 first"[^>]*>START<\/button>/);
+
+    const idle = render(createElement(ControlPage, {
+      state: adminState({ game: { ...adminState().game, current_round_id: null, current_round_block_id: null }, currentBlock: null, runOfShow: [] }),
+      gameId: 1, run,
+    }));
+    expect(idle).toContain('>START<');
+    expect(idle).not.toContain('disabled');
+    expect(idle).not.toContain('RUN OF SHOW');
+    expect(idle).not.toContain('COMPLETE ROUND');
+  });
+
+  it('says so plainly when the game has no rounds at all', () => {
     const state = adminState({
       game: { ...adminState().game, current_round_id: null, current_round_block_id: null },
       rounds: [], currentBlock: null, runOfShow: [],
     });
     const html = render(createElement(ControlPage, { state, gameId: 1, run }));
-    expect(html).toContain('No upcoming rounds');
+    expect(html).toContain('No rounds yet');
   });
 
   it('renders the Rounds index with the create form collapsed', () => {

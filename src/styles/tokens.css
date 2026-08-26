@@ -408,7 +408,6 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .control-side-column { min-width: 0; }
 .setup-flow { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; color: var(--secondary); }
 .setup-flow b { padding: 7px 11px; border-radius: 999px; background: var(--surface-soft); }
-.content-controls { display: flex; gap: 9px; flex-wrap: wrap; align-items: center; margin-top: 18px; }
 .market-line, .ledger-line { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 13px 0; border-bottom: 1px solid var(--border); }
 .market-line:last-child, .ledger-line:last-child { border-bottom: 0; }
 .market-line-copy { min-width: 0; line-height: 1.45; }
@@ -798,7 +797,6 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .active-market-stack { display: grid; gap: 0; }
 .card-title { margin: 3px 0 0; font-family: var(--display); font-size: 21px; }
 .control-main-column { min-width: 0; }
-.control-round-head { align-items: center; }
 .mobile-connect-title { font-size: 34px; }
 
 .round-list .round-card.round-active .btn-primary,
@@ -982,7 +980,6 @@ button.chip-blue:hover { background: var(--violet); }
 .graph-panel-admin .graph-empty { min-height: 240px; }
 .run-step-kicker, .run-step-label { display: block; }
 .step-position { align-self: center; font-size: 11px; font-weight: 800; letter-spacing: .08em; }
-.round-content-copy { margin: 6px 0 0; font-size: 12px; line-height: 1.5; }
 .round-content-edit { margin-top: 16px; }
 .row-end { display: flex; justify-content: flex-end; }
 .block-list .round-block-card { border-left-color: var(--block-accent, var(--orange)); }
@@ -1118,6 +1115,27 @@ button.chip-blue:hover { background: var(--violet); }
 @media (max-width: 900px) {
   .form-grid.triple { grid-template-columns: 1fr; }
 }
+
+/* Every round in the game, on the Control Center. Replaced the current-round and
+   this-round's-content cards — the run of show covers what is inside the live round. */
+.round-line-list { display: grid; gap: 8px; margin-top: 14px; }
+.round-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border-left: 8px solid var(--surface-soft);
+  background: var(--paper);
+}
+.round-line.is-active { border-left-color: var(--blue); background: var(--white); box-shadow: inset 0 0 0 1px var(--border); }
+.round-line-copy { min-width: 0; }
+.round-line-title { font-family: var(--display); font-size: 15px; font-weight: 700; line-height: 1.3; }
+.round-line-meta { font-size: 12px; }
+.round-line .status-pill { min-height: 28px; padding: 6px 12px; font-size: 10px; }
+.round-line-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
+.round-line-actions .btn-compact { min-height: 40px; padding: 9px 15px; font-size: 11px; }
 
 /* ============================================================
    PHONE PREVIEW — the real player app inside the Admin surface
