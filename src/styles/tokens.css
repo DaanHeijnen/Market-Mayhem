@@ -1070,3 +1070,12 @@ button.chip-blue:hover { background: var(--violet); }
 .media-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .type-note { margin: 14px 0 0; font-size: 12px; line-height: 1.5; }
 .block-thumb { display: block; max-width: 260px; max-height: 150px; margin-top: 12px; border-radius: 12px; object-fit: cover; }
+
+/* Big Screen scenes for picture and music rounds. Sized in vw like the other scenes,
+   because the projector canvas is a fixed 1920x1080 and never responsive. */
+.picture-scene, .music-scene { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1.5vh; }
+.picture-scene-image { max-width: 74vw; max-height: 58vh; border-radius: 1.4vw; object-fit: contain; }
+.music-scene-art { color: var(--violet); font-size: 18vw; line-height: 1; animation: gne-pulse 1.4s ease-in-out infinite; }
+.music-scene-player { width: 48vw; height: 4vh; min-height: 44px; }
+/* The answer, once the host reveals it. */
+.scene-reveal { margin-top: 1vh; padding: 1.2vh 3vw; border-radius: 999px; background: var(--lime); color: var(--ink); font: 700 3.4vw var(--display); }

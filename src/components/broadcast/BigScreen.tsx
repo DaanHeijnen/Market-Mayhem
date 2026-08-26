@@ -61,10 +61,42 @@ function Ticker({ items }: { items: any[] }) {
   return <div className="ticker"><div className="ticker-track">{[...labels, ...labels].map((x, i) => <span className="display" key={i}>{x}</span>)}</div></div>;
 }
 
+const mediaUrl = (key: string) => `/api/block-media?key=${encodeURIComponent(key)}`;
+
 function BlockScene({ block, round }: { block: any; round: any }) {
   if (block.type === 'DUOLINGO_QUESTION') return <DuolingoScene block={block} round={round} />;
-  const question = block.type === 'QUESTION';
-  return <Scene className={question ? 'question-scene' : 'text-scene'}><div className="scene-eyebrow">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'ROUND CONTENT'}</div><div className="scene-kicker">{question ? 'QUESTION' : 'ROUND NOTE'}</div>{block.title && <h1>{block.title}</h1>}{block.payload?.body && <p className="scene-body">{block.payload.body}</p>}</Scene>;
+  if (block.type === 'PICTURE') return <PictureScene block={block} round={round} />;
+  if (block.type === 'MUSIC') return <MusicScene block={block} round={round} />;
+  const kicker = ({ QUESTION: 'QUESTION', BUZZER: 'BUZZER ROUND', WAGER: 'WAGER ROUND' } as any)[block.type] || 'ROUND NOTE';
+  const question = block.type !== 'TEXT';
+  return <Scene className={question ? 'question-scene' : 'text-scene'}><div className="scene-eyebrow">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'ROUND CONTENT'}</div><div className="scene-kicker">{kicker}</div>{block.title && <h1>{block.title}</h1>}{block.payload?.body && <p className="scene-body">{block.payload.body}</p>}{block.payload?.correctAnswer && <div className="scene-reveal">{block.payload.correctAnswer}</div>}</Scene>;
+}
+
+// The title is the answer, so the server withholds it until reveal — which is why this
+// renders whatever it was given rather than deciding for itself.
+function PictureScene({ block, round }: { block: any; round: any }) {
+  return <Scene className="picture-scene">
+    <div className="scene-eyebrow">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'PICTURE ROUND'}</div>
+    <div className="scene-kicker">WHAT IS THIS?</div>
+    {block.payload?.imageKey
+      ? <img className="picture-scene-image" src={mediaUrl(block.payload.imageKey)} alt="" />
+      : <div className="scene-body">No image on this round yet.</div>}
+    {block.title && <div className="scene-reveal">{block.title}</div>}
+  </Scene>;
+}
+
+function MusicScene({ block, round }: { block: any; round: any }) {
+  return <Scene className="music-scene">
+    <div className="scene-eyebrow">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'MUSIC ROUND'}</div>
+    <div className="scene-kicker">NAME THAT SONG</div>
+    <div className="music-scene-art" aria-hidden="true">♫</div>
+    {block.payload?.audioKey
+      // Controls are shown rather than autoplaying: browsers block unprompted audio, so
+      // the host presses play once on the projector.
+      ? <audio className="music-scene-player" controls preload="auto" src={mediaUrl(block.payload.audioKey)} />
+      : <div className="scene-body">No audio on this round yet.</div>}
+    {block.title && <div className="scene-reveal">{block.title}</div>}
+  </Scene>;
 }
 
 function DuolingoScene({ block, round }: { block: any; round: any }) {
