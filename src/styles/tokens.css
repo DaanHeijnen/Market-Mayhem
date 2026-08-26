@@ -607,7 +607,11 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
   position: relative;
   isolation: isolate;
   height: 100vh;
-  padding: 4.45vh 3.33vw 64px;
+  /* The ticker is absolutely positioned at the bottom, so its 64px has to be
+     reserved here — plus a gap, or the panels sit flush against it. */
+  padding: 4.45vh 3.33vw calc(64px + 2.2vh);
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   background: var(--paper);
   color: var(--ink);
@@ -626,7 +630,9 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .screen-stat:nth-child(2) .muted { color: var(--dark-secondary); }
 .screen-stat .display { display: flex; align-items: center; gap: 8px; margin-top: 3px; font-family: var(--display); font-size: 1.6vw; color: #fff; }
 .screen-stat:nth-child(2) .display { color: var(--lime); }
-.exchange-dashboard-grid { display: grid; grid-template-columns: minmax(0,2.05fr) minmax(300px,.8fr); gap: 20px; height: calc(100vh - 205px); margin-top: 28px; }
+/* Fills what the header leaves, rather than a magic pixel height that did not know
+   about the ticker and ran the panels 36px underneath it. */
+.exchange-dashboard-grid { display: grid; grid-template-columns: minmax(0,2.05fr) minmax(300px,.8fr); gap: 20px; flex: 1; min-height: 0; margin-top: 28px; }
 .exchange-panel { min-width: 0; min-height: 0; padding: 2.8vh 2.1vw; border: 0; border-radius: 36px; background: var(--white); }
 .graph-panel { display: flex; flex-direction: column; background: var(--ink); color: #fff; }
 .graph-panel .muted { color: var(--dark-secondary); }
@@ -659,7 +665,9 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .graph-axis-label.positive { top: 4%; }
 .graph-axis-label.baseline { top: 46%; }
 .graph-axis-label.negative { bottom: 16%; }
-.graph-legend { display: grid; grid-template-columns: repeat(auto-fit,minmax(115px,1fr)); gap: 7px; margin-top: 6px; }
+/* max-content, not 1fr: with two players a fill pattern stretched each entry across
+   half the panel and threw the value far from the name it belongs to. */
+.graph-legend { display: grid; grid-template-columns: repeat(auto-fit,minmax(115px,max-content)); justify-content: start; gap: 7px 24px; margin-top: 6px; }
 .graph-legend > div { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 7px; align-items: center; color: var(--dark-secondary); font-size: .68vw; }
 .graph-legend b { overflow: hidden; color: #fff; text-overflow: ellipsis; white-space: nowrap; }
 .graph-legend strong { color: var(--lime); font-family: var(--display); }
@@ -722,10 +730,18 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .roulette-status span { color: #fff; font: 700 1.3vw var(--display); }
 .roulette-status b { color: #DBE2FF; font-size: .9vw; }
 .roulette-screen-grid { display: grid; grid-template-columns: minmax(300px,.85fr) minmax(540px,1.45fr); gap: 2.5vw; align-items: center; flex: 1; min-height: 0; }
-.roulette-board-wrap { min-width: 0; padding: 1.4vw; border-radius: 28px; background: var(--ink); }
-.roulette-screen .roulette-table { max-height: 75vh; }
-.roulette-screen .roulette-number-grid { grid-template-columns: 56px 1fr; }
-.roulette-screen .roulette-cell { min-height: 60px; }
+/* Stretches to the row and lays out table-then-caption, so the board is bounded by
+   the panel instead of overflowing it. `max-height` used to clamp the table's box
+   while its rows kept their intrinsic height, which put the last row of cells
+   outside the dark panel and off the bottom of the projector. overflow:hidden keeps
+   any remaining spill inside the rounded panel on a shorter canvas. */
+.roulette-board-wrap { min-width: 0; min-height: 0; align-self: stretch; display: grid; grid-template-rows: minmax(0,1fr) auto; padding: 1.4vw; border-radius: 28px; background: var(--ink); overflow: hidden; }
+.roulette-screen .roulette-table { min-height: 0; grid-template-rows: minmax(0,1fr) auto; }
+.roulette-screen .roulette-number-grid { grid-template-columns: 56px 1fr; min-height: 0; }
+/* Rows share the height that is actually available, with a legible floor. */
+.roulette-screen .roulette-numbers { grid-auto-rows: minmax(40px,1fr); min-height: 0; }
+.roulette-screen .roulette-outside-grid { grid-auto-rows: minmax(52px,1fr); }
+.roulette-screen .roulette-cell { min-height: 0; }
 .roulette-screen .roulette-cell-label { font-size: 1vw; }
 .roulette-screen .roulette-marker { min-width: 32px; min-height: 32px; font-size: .65vw; }
 .roulette-screen .roulette-marker small { max-width: 58px; font-size: .48vw; }
@@ -1141,22 +1157,30 @@ button.chip-blue:hover { background: var(--violet); }
    PHONE PREVIEW — the real player app inside the Admin surface
    ============================================================ */
 .phone-backdrop { z-index: 200; }
+/* 430px, not the design's 390: the frame's own 20px padding has to come off the top,
+   and the player app is authored for a 390px content box. At 390 the real components
+   were squeezed 40px narrower than any phone, which cut off the wallet tiles and put
+   a horizontal scrollbar under the modal. */
 .phone-frame {
-  width: min(390px, 100%);
+  width: min(430px, 100%);
   max-height: 92vh;
   padding: 20px;
   display: grid;
   gap: 14px;
   align-content: start;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   border-radius: 44px;
   background: var(--paper);
 }
 .phone-frame-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .phone-player-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
 .phone-player-tabs .chip { display: inline-flex; align-items: center; gap: 8px; }
-/* Keeps every .mobile-shell descendant rule while dropping the full-page geometry. */
-.phone-screen { width: 100%; min-height: 0; margin: 0; padding: 0; border-radius: 0; overflow: visible; }
+/* Keeps every .mobile-shell descendant rule while dropping the full-page geometry.
+   overflow stays hidden, as on a real phone: the wallet card's lime disc is
+   deliberately positioned outside the shell and must be clipped by it, not escape
+   into the frame and force it to scroll sideways. */
+.phone-screen { width: 100%; min-height: 0; margin: 0; padding: 0; border-radius: 0; overflow: hidden; }
 .phone-note { margin: 0; font-size: 12px; line-height: 1.5; }
 
 /* Player-submitted prediction requests (mobile) */

@@ -58,6 +58,10 @@ export function PhonePreview({ state: s, gameId, onClose }: { state: any; gameId
             </button>)}
           </div>
           {error && <p className="neg"><b>{error}</b></p>}
+          {/* Above the phone, not below it: the frame scrolls, and a note under the
+              whole player app is a note nobody reads. Chips can be dropped on the
+              roulette table locally, so the disabled PLACE button needs explaining. */}
+          <p className="muted phone-note">{note || 'Read-only preview — you can look around, but only the player can act on their own wallet.'}</p>
           {!data ? <p className="muted">Loading this player's phone…</p> : <div className="mobile-shell phone-screen">
             <MobileViews
               state={data}
@@ -71,7 +75,6 @@ export function PhonePreview({ state: s, gameId, onClose }: { state: any; gameId
               go={go}
             />
           </div>}
-          {note && <p className="muted phone-note">{note}</p>}
         </>}
     </div>
   </div>;

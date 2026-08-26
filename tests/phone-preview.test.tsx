@@ -68,6 +68,16 @@ describe('mobile views', () => {
 });
 
 describe('admin phone preview', () => {
+  // Chips can be dropped on the roulette table from local state, so the disabled
+  // submit control needs explaining before it is reached, not after it is clicked.
+  it('states that it is read-only above the phone, not after it', () => {
+    const html = render(createElement(PhonePreview, { state: adminState(), gameId: 1, onClose: noop }));
+    expect(html).toContain('Read-only preview');
+    // effects do not run here, so the phone slot holds its loading state — the note
+    // still has to come before it in document order
+    expect(html.indexOf('phone-note')).toBeLessThan(html.indexOf('Loading this player'));
+  });
+
   it('offers one tab per active player and nothing for deactivated ones', () => {
     const html = render(createElement(PhonePreview, { state: adminState(), gameId: 1, onClose: noop }));
     expect(html).toContain('PLAYER APP · READ-ONLY');
