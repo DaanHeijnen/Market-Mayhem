@@ -2,6 +2,7 @@ import { database, withTransaction } from './db';
 import { HttpError } from './http';
 import { incrementGameVersion } from './game-state';
 import { publicPredictionStatus } from './economy';
+import { orderRunOfShow } from './run-of-show';
 
 const ROULETTE_SPIN_MS = 5500;
 
@@ -153,7 +154,7 @@ export async function getAdminState(gameId: number) {
   const game = gameResult.rows[0];
   if (!game) throw new HttpError(404, 'Game not found');
 
-  const [rounds, blocks, groups, players, predictions, recent, roulette, screen] = await Promise.all([
+  const [rounds, blocks, groups, players, predictions, recent, roulette, screen, requests] = await Promise.all([
     pool.query('SELECT * FROM rounds WHERE game_night_id=$1 ORDER BY round_number,id', [gameId]),
     pool.query(
       `SELECT b.*,COUNT(a.id)::int AS answer_count
@@ -200,7 +201,17 @@ export async function getAdminState(gameId: number) {
        WHERE rg.game_night_id=$1 AND rg.round_block_id=$2 AND rg.status IN ('DRAFT','OPEN','LOCKED','SPINNING','RESULT')
        GROUP BY rg.id ORDER BY rg.id DESC LIMIT 1`, [gameId, game.current_round_block_id],
     ),
-    pool.query('SELECT mode,round_id,prediction_id,payload FROM screen_state WHERE game_night_id=$1', [gameId]),
+    pool.query(
+      `SELECT mode,round_id,prediction_id,payload,
+              staged_mode,staged_round_id,staged_prediction_id,staged_payload,
+              previous_mode,previous_round_id,previous_prediction_id,previous_payload
+       FROM screen_state WHERE game_night_id=$1`, [gameId],
+    ),
+    pool.query(
+      `SELECT r.id,r.player_id,r.question,r.status,r.reason,r.created_at,p.display_name
+       FROM prediction_requests r JOIN players p ON p.id=r.player_id
+       WHERE r.game_night_id=$1 ORDER BY r.created_at DESC,r.id DESC LIMIT 20`, [gameId],
+    ),
   ]);
 
   const normalizedBlocks = blocks.rows.map((b: any) => normalizeBlock(b, true));
@@ -216,14 +227,30 @@ export async function getAdminState(gameId: number) {
       current_screen_mode: game.current_screen_mode,
       game_state_version: Number(game.game_state_version),
     },
+    // Live, staged and previous presentation pointers, all from the one screen_state
+    // row. `staged` is what GO LIVE will promote; `previous` is what BACK TO RUN OF SHOW
+    // restores after a detour to the dashboard.
     screen: (() => {
       const row = screen.rows[0];
+      const slot = (mode: any, roundId: any, predictionId: any, payload: any) => ({
+        mode: mode || null,
+        roundId: Number(roundId || 0) || null,
+        predictionId: Number(predictionId || 0) || null,
+        blockId: Number(payload?.blockId || 0) || null,
+      });
       return {
-        mode: row?.mode || game.current_screen_mode,
-        predictionId: row?.prediction_id ? Number(row.prediction_id) : null,
-        blockId: Number(row?.payload?.blockId || 0) || null,
+        ...slot(row?.mode || game.current_screen_mode, row?.round_id, row?.prediction_id, row?.payload),
+        staged: slot(row?.staged_mode, row?.staged_round_id, row?.staged_prediction_id, row?.staged_payload),
+        previous: slot(row?.previous_mode, row?.previous_round_id, row?.previous_prediction_id, row?.previous_payload),
       };
     })(),
+    // Server-ordered so the strip the host sees and the pointer GO LIVE advances can
+    // never disagree. Computed from rows already fetched above — no extra query.
+    runOfShow: orderRunOfShow(blocks.rows, predictions.rows, game.current_round_id ? Number(game.current_round_id) : null),
+    predictionRequests: requests.rows.map((r: any) => ({
+      id: Number(r.id), playerId: Number(r.player_id), playerName: r.display_name,
+      question: r.question, status: r.status, reason: r.reason, createdAt: r.created_at,
+    })),
     rounds: rounds.rows.map((r: any) => ({
       ...r, id: Number(r.id), round_number: Number(r.round_number),
       blocks: normalizedBlocks.filter((b: any) => b.round_id === Number(r.id)),

@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import { HttpError } from './http';
+import { orderRunOfShow, nextStep } from './run-of-show';
 
 export const SCREEN_MODES = [
   'DASHBOARD',
@@ -30,10 +31,23 @@ export async function setScreenMode(
   gameId: number,
   mode: ScreenMode,
   actor: string,
-  options: { roundId?: number|null; blockId?: number|null; predictionId?: number|null; payload?: unknown } = {},
+  options: { roundId?: number|null; blockId?: number|null; predictionId?: number|null; payload?: unknown; remember?: boolean } = {},
 ) {
   const game = await client.query('SELECT id,current_round_id,current_round_block_id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
   if (!game.rows[0]) throw new HttpError(404, 'Game not found');
+
+  // `remember` is for the deliberate "show standings for a moment" detour, so
+  // BACK TO RUN OF SHOW can restore this exact presentation. It is opt-in because the
+  // other route to DASHBOARD is clearScreenIfReferences, which fires when the thing on
+  // screen was deleted — there is nothing there worth returning to.
+  if (options.remember) {
+    await client.query(
+      `UPDATE screen_state
+       SET previous_mode=mode,previous_round_id=round_id,previous_prediction_id=prediction_id,previous_payload=payload
+       WHERE game_night_id=$1`,
+      [gameId],
+    );
+  }
 
   let roundId = options.roundId ?? null;
   let predictionId = options.predictionId ?? null;
@@ -145,6 +159,149 @@ export async function setActiveRoundBlock(client: PoolClient, gameId: number, ro
   } else {
     await setScreenMode(client, gameId, 'ROUND_BLOCK', actor, { roundId, blockId });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Presenter model: stage a step, preview it, then push it live.
+// ---------------------------------------------------------------------------
+
+export type StagedItem =
+  | { kind: 'dashboard' }
+  | { kind: 'block'; roundId: number; blockId: number }
+  | { kind: 'prediction'; predictionId: number };
+
+/** Read the ordered run of show for the game's active round. */
+async function loadRunOfShow(client: PoolClient, gameId: number) {
+  const game = await client.query('SELECT current_round_id FROM game_nights WHERE id=$1', [gameId]);
+  const activeRoundId = Number(game.rows[0]?.current_round_id || 0) || null;
+  if (!activeRoundId) return [];
+  const [blocks, predictions] = await Promise.all([
+    client.query('SELECT id,round_id,type,title,sort_order FROM round_blocks WHERE game_night_id=$1 AND round_id=$2', [gameId, activeRoundId]),
+    client.query('SELECT id,round_id,status,question,display_number FROM predictions WHERE game_night_id=$1 AND round_id=$2', [gameId, activeRoundId]),
+  ]);
+  return orderRunOfShow(blocks.rows, predictions.rows, activeRoundId);
+}
+
+/**
+ * Record what the host intends to show next.
+ *
+ * Deliberately almost side-effect free: it validates that the target exists and belongs
+ * to this game, and nothing else. It does NOT require the round to be active, create a
+ * roulette game, or touch game_nights — staging must never change what the audience is
+ * looking at. All of that happens in promoteStaged, which reuses the existing guarded
+ * live transitions.
+ */
+export async function setStagedItem(client: PoolClient, gameId: number, item: StagedItem, actor: string) {
+  let mode: ScreenMode = 'DASHBOARD';
+  let roundId: number | null = null;
+  let predictionId: number | null = null;
+  let blockId: number | null = null;
+
+  if (item.kind === 'block') {
+    const block = await client.query(
+      'SELECT b.id,b.type FROM round_blocks b WHERE b.id=$1 AND b.round_id=$2 AND b.game_night_id=$3',
+      [item.blockId, item.roundId, gameId],
+    );
+    if (!block.rows[0]) throw new HttpError(404, 'Round block not found');
+    mode = block.rows[0].type === 'ROULETTE' ? 'ROULETTE' : 'ROUND_BLOCK';
+    roundId = item.roundId;
+    blockId = item.blockId;
+  }
+
+  if (item.kind === 'prediction') {
+    const prediction = await client.query('SELECT id,round_id,status FROM predictions WHERE id=$1 AND game_night_id=$2', [item.predictionId, gameId]);
+    if (!prediction.rows[0]) throw new HttpError(404, 'Prediction not found');
+    const status = prediction.rows[0].status;
+    // Staged mode is the mode this will go live as, so promoteStaged stays a dispatch.
+    mode = status === 'OPEN' ? 'PREDICTIONS_OPEN' : ['RESULT', 'SETTLED'].includes(status) ? 'PREDICTION_RESULT' : 'PREDICTION_LOCKED';
+    predictionId = item.predictionId;
+    roundId = prediction.rows[0].round_id ? Number(prediction.rows[0].round_id) : null;
+  }
+
+  await client.query(
+    `INSERT INTO screen_state(game_night_id,mode,staged_mode,staged_round_id,staged_prediction_id,staged_payload,updated_by)
+     VALUES($1,'DASHBOARD',$2,$3,$4,$5::jsonb,$6)
+     ON CONFLICT(game_night_id) DO UPDATE
+       SET staged_mode=EXCLUDED.staged_mode,staged_round_id=EXCLUDED.staged_round_id,
+           staged_prediction_id=EXCLUDED.staged_prediction_id,staged_payload=EXCLUDED.staged_payload,
+           updated_at=NOW(),updated_by=EXCLUDED.updated_by`,
+    [gameId, mode, roundId, predictionId, JSON.stringify({ blockId }), actor],
+  );
+}
+
+/**
+ * Promote the staged step to live, then advance the staged pointer to the next step so
+ * the preview pane is already showing what comes next — as the design's GO LIVE does.
+ *
+ * Blocks route through setActiveRoundBlock rather than setScreenMode so that all the
+ * existing guards still apply: an unfinished live question or roulette blocks the move,
+ * and a roulette block gets its game created.
+ */
+export async function promoteStaged(client: PoolClient, gameId: number, actor: string) {
+  const state = await client.query(
+    'SELECT staged_mode,staged_round_id,staged_prediction_id,staged_payload FROM screen_state WHERE game_night_id=$1 FOR UPDATE',
+    [gameId],
+  );
+  const row = state.rows[0];
+  if (!row?.staged_mode) throw new HttpError(409, 'Nothing is staged');
+
+  const stagedBlockId = Number(row.staged_payload?.blockId || 0) || null;
+  const stagedRoundId = Number(row.staged_round_id || 0) || null;
+  const stagedPredictionId = Number(row.staged_prediction_id || 0) || null;
+
+  if (row.staged_mode === 'DASHBOARD') {
+    await setScreenMode(client, gameId, 'DASHBOARD', actor);
+  } else if (stagedBlockId && stagedRoundId) {
+    await setActiveRoundBlock(client, gameId, stagedRoundId, stagedBlockId, actor);
+  } else if (stagedPredictionId) {
+    await setScreenMode(client, gameId, row.staged_mode as ScreenMode, actor, { predictionId: stagedPredictionId });
+  } else {
+    throw new HttpError(409, 'Staged item is incomplete');
+  }
+
+  const steps = await loadRunOfShow(client, gameId);
+  const liveKind = stagedBlockId ? 'block' : stagedPredictionId ? 'prediction' : null;
+  const liveId = stagedBlockId || stagedPredictionId || null;
+  const next = nextStep(steps, liveKind, liveId);
+  if (next) {
+    await setStagedItem(
+      client,
+      gameId,
+      next.kind === 'block' ? { kind: 'block', roundId: next.roundId, blockId: next.id } : { kind: 'prediction', predictionId: next.id },
+      actor,
+    );
+  }
+  return { liveKind, liveId, stagedNext: next };
+}
+
+/** Return to the presentation saved by the last `remember` detour to the dashboard. */
+export async function restorePreviousScreen(client: PoolClient, gameId: number, actor: string) {
+  const state = await client.query(
+    'SELECT previous_mode,previous_round_id,previous_prediction_id,previous_payload FROM screen_state WHERE game_night_id=$1 FOR UPDATE',
+    [gameId],
+  );
+  const row = state.rows[0];
+  if (!row?.previous_mode) throw new HttpError(409, 'There is no previous screen to return to');
+
+  const blockId = Number(row.previous_payload?.blockId || 0) || null;
+  const roundId = Number(row.previous_round_id || 0) || null;
+  const predictionId = Number(row.previous_prediction_id || 0) || null;
+
+  if (row.previous_mode === 'DASHBOARD') {
+    await setScreenMode(client, gameId, 'DASHBOARD', actor);
+  } else if (blockId && roundId) {
+    await setActiveRoundBlock(client, gameId, roundId, blockId, actor);
+  } else if (predictionId) {
+    await setScreenMode(client, gameId, row.previous_mode as ScreenMode, actor, { predictionId });
+  } else {
+    throw new HttpError(409, 'The previous screen can no longer be restored');
+  }
+
+  await client.query(
+    `UPDATE screen_state SET previous_mode=NULL,previous_round_id=NULL,previous_prediction_id=NULL,previous_payload='{}'::jsonb
+     WHERE game_night_id=$1`,
+    [gameId],
+  );
 }
 
 export async function clearScreenIfReferences(client: PoolClient, gameId: number, actor: string, refs: { roundId?: number; blockId?: number; predictionId?: number }) {
