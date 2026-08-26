@@ -815,15 +815,19 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
    Handbook refs: 02 COLOR, 04 SHAPE & RADIUS, 06 CARDS, 07 STATUS
    ============================================================ */
 
-/* Block-type accents. One class per accent so the palette stays tokenised. */
-.accent-muted   { --block-accent: var(--muted); }
-.accent-orange  { --block-accent: var(--orange); }
-.accent-violet  { --block-accent: var(--violet); }
-.accent-red     { --block-accent: var(--red); }
-.accent-cyan    { --block-accent: var(--cyan); }
-.accent-magenta { --block-accent: var(--magenta); }
-.accent-blue    { --block-accent: var(--blue); }
-.accent-green   { --block-accent: var(--green); }
+/* Block-type accents. One class per accent so the palette stays tokenised.
+   --block-accent-ink is the readable foreground when the accent is used as a fill,
+   following the handbook's flat-colour contrast rule: only the two lightest accents
+   (orange, cyan) take ink text; the rest take white. */
+.accent-muted   { --block-accent: var(--muted);   --block-accent-ink: #fff; }
+.accent-orange  { --block-accent: var(--orange);  --block-accent-ink: var(--ink); }
+.accent-violet  { --block-accent: var(--violet);  --block-accent-ink: #fff; }
+.accent-red     { --block-accent: var(--red);     --block-accent-ink: #fff; }
+.accent-cyan    { --block-accent: var(--cyan);    --block-accent-ink: var(--ink); }
+.accent-magenta { --block-accent: var(--magenta); --block-accent-ink: #fff; }
+.accent-blue    { --block-accent: var(--blue);    --block-accent-ink: #fff; }
+.accent-green   { --block-accent: var(--green);   --block-accent-ink: #fff; }
+.accent-ink     { --block-accent: var(--ink);     --block-accent-ink: #fff; }
 .accent-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--block-accent, var(--muted)); flex: 0 0 auto; }
 .accent-swatch { width: 28px; height: 28px; border-radius: 8px; background: var(--block-accent, var(--muted)); }
 
@@ -975,3 +979,67 @@ button.chip-blue:hover { background: var(--violet); }
 .prediction-meta-line { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 12px; font-size: 12px; }
 .prediction-meta-line b { color: var(--ink); font-weight: 800; }
 .lifecycle-hint { align-self: center; font-size: 12px; font-style: italic; }
+
+/* ============================================================
+   PRESENTER MODEL — live | staged pair (Control Center)
+   ============================================================ */
+.presenter-grid { display: grid; grid-template-columns: minmax(0,1.3fr) minmax(0,1fr); gap: 20px; align-items: start; }
+.presenter-col { min-width: 0; display: grid; gap: 14px; align-content: start; }
+.presenter-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* The live side shows the real projector output, scaled. The staged side cannot —
+   it is not on screen yet — so it renders the step's identity in its accent colour. */
+.staged-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  aspect-ratio: 16/9;
+  padding: 26px;
+  border: 3px solid transparent;
+  border-radius: 12px 44px 12px 44px;
+  background: var(--block-accent, var(--muted));
+  color: var(--block-accent-ink, #fff);
+}
+/* Dashed lime edge means "staged but not showing" — the whole point of the pane. */
+.staged-card.is-pending { border-color: var(--lime); border-style: dashed; }
+.staged-eyebrow { font-size: 11px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; opacity: .7; }
+.staged-title { margin-top: 10px; font-family: var(--display); font-size: 22px; font-weight: 700; line-height: 1.2; }
+.staged-sub { margin: 8px 0 0; font-size: 12px; line-height: 1.45; opacity: .8; }
+.staged-badge {
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.22);
+  color: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.staged-card.accent-orange .staged-badge, .staged-card.accent-cyan .staged-badge { background: rgba(20,18,15,.16); }
+.presenter-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.go-live-btn { width: 100%; min-height: 56px; font-size: 14px; }
+
+@media (max-width: 1100px) {
+  .presenter-grid { grid-template-columns: 1fr; }
+}
+
+/* Player prediction requests — pinned above the Control Center because someone is
+   waiting on the host to answer. Orange is the handbook's warm attention accent. */
+.request-panel { display: grid; gap: 14px; padding: 22px 26px; border-radius: 20px; background: var(--orange); color: #fff; }
+.request-panel .label { color: rgba(255,255,255,.9); }
+.request-row { display: grid; gap: 12px; padding: 16px 18px; border-radius: 16px; background: rgba(0,0,0,.16); }
+.request-player { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; opacity: .85; }
+.request-question { margin-top: 4px; font-family: var(--display); font-size: 17px; font-weight: 700; line-height: 1.3; }
+.request-deny { display: grid; gap: 10px; }
+.request-deny .field { background: #fff; border-color: #fff; color: var(--ink); }
+/* Outline buttons sitting on a saturated fill need white edges, not ink. */
+.btn-secondary.on-colour { border-color: #fff; color: #fff; }
+.btn-secondary.on-colour:hover:not(:disabled) { background: #fff; color: var(--ink); }
+
+/* Staged step in the run of show: lime edge, matching the staged preview card. */
+.run-step.is-staged { border-color: var(--lime); }
+.live-meta { align-self: center; font-size: 12px; }
+
+/* Header presentation toggle */
+.header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
