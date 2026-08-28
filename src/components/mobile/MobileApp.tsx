@@ -47,7 +47,9 @@ export function MobileApp({ gameId }: { gameId: number }) {
         ? <PredictionDetail state={s} prediction={currentPrediction} busy={busy} act={act} go={go} gameId={gameId} />
         : view === 'roulette'
           ? <RouletteView state={s} busy={busy} act={act} go={go} gameId={gameId} />
-          : <Home state={s} go={go} gameId={gameId} />;
+          : view === 'slot'
+            ? <SlotView state={s} busy={busy} act={act} go={go} gameId={gameId} />
+            : <Home state={s} go={go} gameId={gameId} />;
 
   return <Shell>{content}{(msg || error) && <div className="mobile-alert">{msg || error}</div>}</Shell>;
 }
@@ -65,6 +67,7 @@ function Home({ state: s, go, gameId }: { state: any; go: (x?: string) => void; 
       <div className="wallet-breakdown">
         <span>Prediction deposits <b>{s.player.lockedPrediction}</b></span>
         <span>Roulette locked <b>{s.player.lockedRoulette}</b></span>
+        <span>Slot series locked <b>{s.player.lockedSlot}</b></span>
         <span>Total player value <b>{s.player.totalValue}</b></span>
       </div>
     </Card>
@@ -74,6 +77,9 @@ function Home({ state: s, go, gameId }: { state: any; go: (x?: string) => void; 
       </button>
       <button className="btn btn-secondary big-mobile-btn" disabled={!s.rouletteAvailable && !s.roulette} onClick={() => go('/roulette')}>
         <span>ROULETTE</span><span className="button-count">{s.roulette?.status === 'OPEN' ? 'LIVE' : 'VIEW'}</span>
+      </button>
+      <button className="btn btn-secondary big-mobile-btn" disabled={!s.slot.available && !s.slot.session} onClick={() => go('/slot')}>
+        <span>SLOT MACHINE</span><span className="button-count">{s.slot.session ? `${s.slot.session.remainingSpins} LEFT` : s.slot.configured ? 'PLAY' : 'OFF'}</span>
       </button>
     </div>
     {!s.actionable && <Card><div className="display card-title">No live actions</div><p className="muted">Your wallet stays ready. Prediction participation is optional: doing nothing creates no transaction.</p></Card>}
@@ -221,6 +227,103 @@ function rouletteLabel(b: { betType: string; selection: string }) {
   if (b.selection === 'LOW') return '1–18';
   if (b.selection === 'HIGH') return '19–36';
   return b.selection;
+}
+
+/**
+ * Input and control only. The reels, the animation and the outcome reveal live
+ * on the Big Screen; the phone never draws a result and never renders one
+ * before the room has seen it.
+ */
+function SlotView({ state: s, busy, act, go, gameId }: { state: any; busy: boolean; act: (x: () => Promise<unknown>) => void; go: (x?: string) => void; gameId: number }) {
+  const slot = s.slot;
+  const session = slot.session;
+  const spin = slot.latestSpin;
+  const [stakePerSpin, setStakePerSpin] = useState<number>(slot.minimumStake);
+  const [spins, setSpins] = useState<number>(1);
+  const [commitKey, setCommitKey] = useState(() => crypto.randomUUID());
+
+  useEffect(() => { if (!session) setCommitKey(crypto.randomUUID()); }, [session?.id]);
+  useEffect(() => { setStakePerSpin(x => Math.min(Math.max(x, slot.minimumStake), slot.maximumStake)); }, [slot.minimumStake, slot.maximumStake]);
+  useEffect(() => { setSpins(x => Math.min(Math.max(x, 1), slot.maximumSpins)); }, [slot.maximumSpins]);
+
+  const totalStake = stakePerSpin * spins;
+  const affordable = totalStake <= s.player.balance;
+  const spinning = spin?.status === 'SPINNING';
+  const canCommit = slot.configured && !slot.blockedBy && affordable && stakePerSpin >= slot.minimumStake && stakePerSpin <= slot.maximumStake && spins >= 1 && spins <= slot.maximumSpins;
+
+  if (!session) return <>
+    <Back go={go} />
+    <Card className="slot-mobile-card">
+      <div className="row-between"><div className="label">SLOT MACHINE</div><span className={`pill status-pill ${slot.configured && !slot.blockedBy ? 'open' : 'neutral'}`}>{slot.blockedBy ? 'IN USE' : slot.configured ? 'READY' : 'OFFLINE'}</span></div>
+      <h1 className="display slot-mobile-title">Start a spin series</h1>
+      {!slot.configured && <div className="state-panel"><b>Slot machine unavailable</b><span>{slot.configurationMessage}</span></div>}
+      {slot.blockedBy && <div className="state-panel"><b>{slot.blockedBy} is playing</b><span>Only one series runs at a time. Try again when the reels are free.</span></div>}
+      {spin && <SlotSpinStatus spin={spin} closing />}
+
+      <label className="field-label">Stake per spin
+        <input className="field" type="number" min={slot.minimumStake} max={slot.maximumStake} value={stakePerSpin} onChange={e => setStakePerSpin(Number(e.target.value) || 0)} />
+      </label>
+      <div className="stake-bounds"><span>Min {slot.minimumStake}</span><span>Max {slot.maximumStake}</span></div>
+
+      <label className="field-label">Number of spins
+        <input className="field" type="number" min={1} max={slot.maximumSpins} value={spins} onChange={e => setSpins(Number(e.target.value) || 0)} />
+      </label>
+      <input className="stake-range" type="range" min={1} max={slot.maximumSpins} value={Math.min(Math.max(spins, 1), slot.maximumSpins)} onChange={e => setSpins(Number(e.target.value))} />
+      <div className="stake-bounds"><span>1 spin</span><span>Max {slot.maximumSpins} spins</span></div>
+
+      <div className="potential-card slot-total-card">
+        <span>Stake per spin</span><b>{stakePerSpin}</b>
+        <span>Number of spins</span><b>{spins}</b>
+        <span>Total stake</span><strong>{totalStake} coins</strong>
+      </div>
+      <div className="balance-inline"><span>Available balance</span><b><CoinIcon size={18} /> {s.player.balance}</b></div>
+      {!affordable && <p className="neg"><b>Your available balance does not cover this total stake.</b></p>}
+
+      <button className="btn btn-primary btn-full" disabled={busy || !canCommit} onClick={() => act(() => mutation('/api/commit-slot-bet', { gameId, stakePerSpin, spins }, true, commitKey))}>LOCK IN {totalStake} COINS</button>
+      <p className="muted microcopy">Once locked, the stake per spin and the number of spins cannot be changed. The full total is held until every spin is used.</p>
+    </Card>
+  </>;
+
+  const finished = session.remainingSpins === 0;
+  const spinKey = `slot-spin:${session.id}:${session.usedSpins}`;
+  const spinOfSession = spin && spin.sessionId === session.id ? spin : null;
+  const spinLabel = spinning && spinOfSession ? `${spinOfSession.spinNumber}/${session.totalSpins}` : `${session.currentSpin}/${session.totalSpins}`;
+  return <>
+    <Back go={go} />
+    <Card className="slot-mobile-card slot-mobile-active">
+      <div className="row-between"><div className="label">SLOT SERIES LOCKED</div><span className="pill status-pill open">SPIN {spinLabel}</span></div>
+      <h1 className="display slot-mobile-title">{spinning ? 'Watch the big screen' : finished ? 'Series finished' : 'Ready to spin'}</h1>
+
+      <div className="receipt-grid slot-receipt">
+        <span>Stake per spin</span><b>{session.stakePerSpin} coins</b>
+        <span>Remaining spins</span><b>{session.remainingSpins}</b>
+        <span>Total stake</span><b>{session.totalStake} coins</b>
+        <span>Still locked</span><b>{session.lockedValue} coins</b>
+      </div>
+
+      {spin && <SlotSpinStatus spin={spin} />}
+
+      <button
+        className="btn btn-lime btn-full slot-spin-button"
+        disabled={busy || spinning || finished || !slot.canSpin}
+        onClick={() => act(() => mutation('/api/spin-slot', { gameId }, true, spinKey))}
+      >{spinning ? 'SPINNING…' : finished ? 'NO SPINS LEFT' : 'SPIN'}</button>
+
+      {finished && <p className="muted microcopy">All spins are used. Go back and lock in a new series to play again.</p>}
+      <div className="live-question-wallet"><CoinIcon size={18} /> {s.player.balance} available</div>
+    </Card>
+  </>;
+}
+
+function SlotSpinStatus({ spin, closing = false }: { spin: any; closing?: boolean }) {
+  if (spin.status === 'SPINNING') {
+    return <div className="state-panel"><b>Reels are spinning…</b><span>The outcome appears on the big screen first.</span></div>;
+  }
+  const won = Number(spin.payoutAmount) > 0;
+  return <div className={`state-panel ${won ? 'settled' : ''}`}>
+    <b>{closing ? 'Last spin' : `Spin ${spin.spinNumber}`}: {spin.label} · {spin.payoutMultiplier}x</b>
+    <span>{won ? `Won ${spin.payoutAmount} coins on a ${spin.stake} stake.` : `No payout on this spin (${spin.stake} staked).`}</span>
+  </div>;
 }
 
 function LiveQuestionView({ state: s, block, busy, act, gameId }: { state: any; block: any; busy: boolean; act: (x: () => Promise<unknown>) => void; gameId: number }) {

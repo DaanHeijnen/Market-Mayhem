@@ -37,6 +37,15 @@ export default wrap(async request => {
     await client.query('DELETE FROM roulette_bets WHERE roulette_game_id IN (SELECT id FROM roulette_games WHERE game_night_id=$1)', [gameId]);
     await client.query('DELETE FROM bets WHERE prediction_id IN (SELECT id FROM predictions WHERE game_night_id=$1)', [gameId]);
     await client.query('DELETE FROM roulette_games WHERE game_night_id=$1', [gameId]);
+    await client.query('DELETE FROM slot_spins WHERE game_night_id=$1', [gameId]);
+    await client.query('DELETE FROM slot_sessions WHERE game_night_id=$1', [gameId]);
+    await client.query('DELETE FROM slot_outcomes WHERE game_night_id=$1', [gameId]);
+    await client.query('DELETE FROM slot_symbols WHERE game_night_id=$1', [gameId]);
+    await client.query(
+      `UPDATE slot_settings SET total_probability_pool=100,maximum_spins=20,minimum_stake=1,maximum_stake=500,updated_by=$2,updated_at=NOW()
+       WHERE game_night_id=$1`,
+      [gameId, admin.username],
+    );
     await client.query('DELETE FROM predictions WHERE game_night_id=$1', [gameId]);
     await client.query('DELETE FROM round_blocks WHERE game_night_id=$1', [gameId]);
     await client.query('DELETE FROM round_groups WHERE game_night_id=$1', [gameId]);

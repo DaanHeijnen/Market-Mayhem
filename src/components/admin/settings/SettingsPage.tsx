@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { RunMutation } from '../types';
 import { Card } from '../ui';
+import { SlotMachineSettings } from './SlotMachineSettings';
 
 export function SettingsPage({ state: s, run, onReset }: { state: any; run: RunMutation; onReset: () => void }) {
   const g = s.game;
@@ -28,6 +29,8 @@ export function SettingsPage({ state: s, run, onReset }: { state: any; run: RunM
       <button className="btn btn-primary" onClick={() => run('/api/update-settings', { ...form, maximumWalletPercentage: form.maximumWalletPercentage === '' ? null : Number(form.maximumWalletPercentage) })}>SAVE SETTINGS</button>
     </Card>
 
+    <SlotMachineSettings gameId={Number(g.id)} state={s} run={run} />
+
     <Card className="danger-card">
       <div className="label danger-text">DANGER ZONE</div>
       <h2 className="display">Delete Game Save</h2>
@@ -46,6 +49,7 @@ export function SettingsPage({ state: s, run, onReset }: { state: any; run: RunM
         <li>live-question answers and reward state</li>
         <li>predictions, deposits and payouts</li>
         <li>roulette games and bets</li>
+        <li>slot reel symbols, outcome distribution and spin series</li>
         <li>screen state and game settings</li>
       </ul>
       <p>Type exactly <b>yes delete</b> to continue.</p>

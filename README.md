@@ -1,6 +1,6 @@
 # Market Mayhem
 
-Market Mayhem is a private game-night economy with player wallets, prediction deposits, visual roulette, interactive round questions and a projector dashboard. React is the presentation layer; Netlify Functions and PostgreSQL own game state and every financial rule.
+Market Mayhem is a private game-night economy with player wallets, prediction deposits, visual roulette, a configurable slot machine, interactive round questions and a projector dashboard. React is the presentation layer; Netlify Functions and PostgreSQL own game state and every financial rule.
 
 ## Stack
 
@@ -29,7 +29,7 @@ Market Mayhem is a private game-night economy with player wallets, prediction de
 
 A reset/fresh game has no players, rounds, predictions or transactions.
 
-1. **Settings** — set game name, starting coins and optional maximum wallet percentage per prediction.
+1. **Settings** — set game name, starting coins, optional maximum wallet percentage per prediction, and the slot machine (reel symbols, outcome distribution, payouts, maximum spins).
 2. **Players** — create players and generate their single-use join links.
 3. **Rounds** — create rounds in any numbering scheme; execution does not assume `current + 1`.
 4. **Round Content** — add ordered `TEXT`, `QUESTION`, `DUOLINGO_QUESTION` and `ROULETTE` blocks.
@@ -157,18 +157,36 @@ Then open `http://localhost:8888/admin/1`.
 2. Import it into Netlify.
 3. Enable Netlify Database.
 4. Generate a hash with `npm run admin:hash`, then configure `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH` and `SESSION_SECRET`.
-5. Apply/deploy migrations through `0006_backlog_interactive_models.sql`.
+5. Apply/deploy migrations through `0007_slot_machine.sql`.
 6. Deploy.
 
 Previously deployed migrations are historical and are not rewritten.
 
+## Slot machine
+
+Three reels of twelve PNG symbols each, so the outcome space is exactly 12 x 12 x 12 = 1728 combinations. Nothing about it is hardcoded.
+
+**Settings → Slot machine** owns the configuration:
+
+- 12 PNG uploads per reel (upload, replace, remove, thumbnail preview, positions 1–12 labelled A–L). Images are stored in PostgreSQL and served by `/api/slot-symbol`, so they never inflate a polled snapshot.
+- a total probability pool, plus a number of chances and a payout multiplier per combination. The percentage is derived as `chances / total x 100` and updates while typing.
+- maximum spins per series and the minimum/maximum stake per spin.
+
+The distribution is only usable when all 36 symbols exist and the assigned chances equal the total exactly. Below the total is `CONFIGURATION NOT COMPLETE`, above it is `CONFIGURATION EXCEEDS TOTAL`, and both refuse every spin server-side.
+
+Player Mobile is input and control only: stake per spin, number of spins, total stake, **lock in**, then **SPIN**. It never renders reels and never learns an outcome before the Big Screen has shown it. The full series stake leaves the available wallet at lock-in, so `remaining spins x stake per spin` is real locked value.
+
+The game engine draws the complete outcome from the weighted table — never three independent reel rolls — decides the payout, decrements the remaining spins and stores the result before any animation starts. The Big Screen animates its reels towards that stored outcome and shows stake, current spin, remaining spins, outcome, payout multiplier, amount won and spin status.
+
+One series is live per game night, because one slot machine is presented on one Big Screen. Settings can cancel an abandoned series and refund the unspun stake.
+
 ## Delete Game Save
 
-Settings → Danger Zone → **DELETE GAME SAVE** requires exactly `yes delete` in both UI and backend. The transaction is scoped to the requested game ID and removes player/game economy, round content/groups/questions, predictions, roulette and screen state while preserving Admin sessions and the audit table. A final `GAME_RESET` audit record is written first.
+Settings → Danger Zone → **DELETE GAME SAVE** requires exactly `yes delete` in both UI and backend. The transaction is scoped to the requested game ID and removes player/game economy, round content/groups/questions, predictions, roulette, slot configuration/series and screen state while preserving Admin sessions and the audit table. A final `GAME_RESET` audit record is written first.
 
 ## Live updates
 
-Clients poll `/api/game-version` rather than constantly downloading full snapshots. A version change triggers a targeted Admin/player/screen refresh. Polls are deduplicated, stale snapshots use `AbortController`, hidden tabs are throttled and post-action refreshes are immediate. Mobile switches to the faster cadence only while the backend reports an actionable prediction, roulette market or live question.
+Clients poll `/api/game-version` rather than constantly downloading full snapshots. A version change triggers a targeted Admin/player/screen refresh. Polls are deduplicated, stale snapshots use `AbortController`, hidden tabs are throttled and post-action refreshes are immediate. Mobile switches to the faster cadence only while the backend reports an actionable prediction, roulette market, live question or slot series.
 
 ## Verification
 

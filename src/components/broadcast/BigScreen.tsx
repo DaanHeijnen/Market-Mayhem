@@ -3,6 +3,7 @@ import { useGamePolling } from '../../hooks/useGamePolling';
 import { RouletteTable, type RouletteMarker } from '../shared/RouletteTable';
 import { RouletteWheel } from '../shared/RouletteWheel';
 import { CoinIcon } from '../shared/CoinIcon';
+import { SlotMachine, useSlotRevealed } from '../shared/SlotMachine';
 
 const QUESTION_EMOJIS = ['🍆', '🌽', '🍑', '😳'] as const;
 const money = (n: number) => new Intl.NumberFormat().format(n);
@@ -15,16 +16,17 @@ export function BigScreen({ gameId }: { gameId: number }) {
   if (s.mode === 'PREDICTION_LOCKED' && s.prediction) return <PredictionScene p={s.prediction} phase="LOCKED" />;
   if (s.mode === 'PREDICTION_RESULT' && s.prediction) return <PredictionScene p={s.prediction} phase="RESULT" />;
   if (s.mode === 'ROULETTE') return <RouletteScene roulette={s.roulette} round={s.round} block={s.block} />;
-  return <Dashboard s={s} error={error} />;
+  return <Dashboard s={s} error={error} gameId={gameId} />;
 }
 
-function Dashboard({ s, error }: { s: any; error: string }) {
+function Dashboard({ s, error, gameId }: { s: any; error: string; gameId: number }) {
   return <div className="exchange-screen">
     <header className="exchange-header">
       <div><div className="label muted">MARKET MAYHEM · LIVE EXCHANGE</div><div className="display exchange-title">{s.round ? `R${String(s.round.number).padStart(2, '0')} · ${s.round.title}` : s.game.name}</div></div>
       <div className="screen-stats"><Stat label="MARKETS OPEN" value={s.marketsOpen} /><Stat label="TOTAL COINS IN PLAY" value={money(s.totalCoinsInPlay)} coin /></div>
     </header>
-    <div className="exchange-dashboard-grid">
+    <div className="exchange-dashboard-grid with-slot">
+      <SlotPanel slot={s.slot} gameId={gameId} />
       <section className="exchange-panel graph-panel">
         <div className="exchange-panel-title"><div><div className="label muted">PLAYER VALUE · ECONOMIC CHRONOLOGY</div><div className="display panel-title">LIVE VALUE GRAPH</div></div></div>
         <PlayerGraph players={s.leaderboard} />
@@ -39,6 +41,59 @@ function Dashboard({ s, error }: { s: any; error: string }) {
     <Ticker items={s.ticker} />
     {error && <div className="screen-error">LIVE CONNECTION INTERRUPTED</div>}
   </div>;
+}
+
+function SlotPanel({ slot, gameId }: { slot: any; gameId: number }) {
+  const spin = slot?.latestSpin || null;
+  const session = slot?.session || null;
+  const revealed = useSlotRevealed(spin);
+  const showResult = Boolean(spin && revealed);
+  const outcome = showResult ? spin.label : null;
+  const multiplier = showResult ? Number(spin.payoutMultiplier) : null;
+  const won = showResult ? Number(spin.payoutAmount) : null;
+
+  // While a spin is on the reels its own number is the one the room is watching;
+  // the session counter has already moved on.
+  const spinOfSession = spin && session && spin.sessionId === session.id ? spin : null;
+  const spinLabel = spinOfSession ? `${spinOfSession.spinNumber}/${session.totalSpins}`
+    : session ? `${session.currentSpin}/${session.totalSpins}`
+    : spin ? `${spin.spinNumber}` : '—';
+
+  const status = !slot?.configured ? 'NOT CONFIGURED'
+    : spin && !revealed ? 'SPINNING'
+    : session?.status === 'ACTIVE' ? 'READY TO SPIN'
+    : spin ? 'SERIES FINISHED'
+    : 'IDLE';
+  const tone = status === 'SPINNING' ? 'spinning' : status === 'NOT CONFIGURED' ? 'blocked' : status === 'READY TO SPIN' ? 'ready' : 'idle';
+
+  return <section className="exchange-panel slot-panel">
+    <div className="exchange-panel-title">
+      <div>
+        <div className="label muted">{session ? `${String(session.playerName).toUpperCase()} · SLOT MACHINE` : 'MARKET MAYHEM · SLOT MACHINE'}</div>
+        <div className="display panel-title">{outcome ? outcome : status === 'SPINNING' ? 'SPINNING…' : 'SLOT MACHINE'}</div>
+      </div>
+      <span className={`slot-status-pill tone-${tone}`}>{status}</span>
+    </div>
+
+    <div className="slot-stage">
+      <SlotMachine gameId={gameId} symbols={slot?.symbols || []} spin={spin} idle={!session && !spin} />
+    </div>
+
+    <div className="slot-readout">
+      <SlotStat label="STAKE" value={session ? session.stakePerSpin : spin ? spin.stake : '—'} />
+      <SlotStat label="SPIN" value={spinLabel} />
+      <SlotStat label="SPINS LEFT" value={session ? session.remainingSpins : 0} />
+      <SlotStat label="OUTCOME" value={outcome || '—'} accent />
+      <SlotStat label="PAYOUT" value={multiplier == null ? '—' : `${multiplier}x`} />
+      <SlotStat label="WON" value={won == null ? '—' : won} tone={won == null ? undefined : won > 0 ? 'pos' : 'neg'} />
+    </div>
+
+    {!slot?.configured && <div className="slot-panel-note">{slot?.configurationMessage || 'The slot machine is not configured yet.'}</div>}
+  </section>;
+}
+
+function SlotStat({ label, value, accent = false, tone }: { label: string; value: any; accent?: boolean; tone?: 'pos' | 'neg' }) {
+  return <div className={`slot-stat ${accent ? 'slot-stat-accent' : ''}`}><div className="label muted">{label}</div><b className={`display ${tone || ''}`}>{value}</b></div>;
 }
 
 function PlayerGraph({ players }: { players: any[] }) {
@@ -76,6 +131,9 @@ function Ticker({ items }: { items: any[] }) {
     const amount = `${t.amount > 0 ? '+' : ''}${t.amount}`;
     if (t.transaction_type === 'PREDICTION_DEPOSIT') return `${name} ${amount} AVAILABLE · PREDICTION #${t.prediction_number} DEPOSIT LOCKED`;
     if (t.transaction_type === 'ROULETTE_STAKE') return `${name} ${amount} AVAILABLE · ROULETTE #${t.roulette_game_id} CHIP LOCKED`;
+    if (t.transaction_type === 'SLOT_DEPOSIT') return `${name} ${amount} AVAILABLE · SLOT SERIES LOCKED`;
+    if (t.transaction_type === 'SLOT_PAYOUT') return `${name} ${amount} · SLOT PAYOUT`;
+    if (t.transaction_type === 'SLOT_REFUND') return `${name} ${amount} · SLOT SERIES REFUND`;
     const context = t.prediction_number ? `PREDICTION #${t.prediction_number}` : t.roulette_game_id ? `ROULETTE #${t.roulette_game_id}` : t.round_number ? `ROUND ${String(t.round_number).padStart(2, '0')}` : String(t.description).toUpperCase();
     return `${name} ${amount} · ${context}`;
   });
