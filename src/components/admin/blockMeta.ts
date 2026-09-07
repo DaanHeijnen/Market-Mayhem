@@ -3,14 +3,14 @@
 // tokens.css (design handbook 02 — COLOR).
 //
 // `available` marks the types the database accepts (round_blocks type CHECK). All
-// eight are permitted as of migration 0007; the flag stays so a future type can be
+// nine are permitted as of migration 0010; the flag stays so a future type can be
 // designed and described here before its migration lands.
 //
 // `interactive` marks the types with a phone-side flow and a live state machine.
 // BUZZER and WAGER are authorable and presentable but not interactive: the redesign
 // specifies no phone UI or live controls for them.
 
-export type BlockType = 'TEXT' | 'QUESTION' | 'DUOLINGO_QUESTION' | 'ROULETTE' | 'PICTURE' | 'MUSIC' | 'BUZZER' | 'WAGER';
+export type BlockType = 'TEXT' | 'QUESTION' | 'DUOLINGO_QUESTION' | 'ROULETTE' | 'PICTURE' | 'MUSIC' | 'BUZZER' | 'WAGER' | 'SLOTMACHINE';
 
 export type BlockMeta = { label: string; description: string; accent: string; available: boolean; interactive: boolean };
 
@@ -23,6 +23,7 @@ export const BLOCK_META: Record<BlockType, BlockMeta> = {
   MUSIC: { label: 'Music round', description: 'Play a song snippet — first to shout the right answer scores.', accent: 'magenta', available: true, interactive: false },
   BUZZER: { label: 'Buzzer round', description: 'Fastest phone tap wins the point — quickfire trivia.', accent: 'blue', available: true, interactive: false },
   WAGER: { label: 'Wager round', description: 'Players stake their own coins on how confident they are, then answer.', accent: 'green', available: true, interactive: false },
+  SLOTMACHINE: { label: 'Slotmachine', description: 'Players lock a run of spins from their phones; the reels spin on the big screen.', accent: 'lime', available: true, interactive: true },
 };
 
 const FALLBACK: BlockMeta = { label: 'Content block', description: '', accent: 'muted', available: false, interactive: false };

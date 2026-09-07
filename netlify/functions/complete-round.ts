@@ -2,6 +2,7 @@ import { requireAdmin, audit } from '../lib/auth';
 import { withTransaction } from '../lib/db';
 import { body, ok, intValue, HttpError } from '../lib/http';
 import { incrementGameVersion, setScreenMode } from '../lib/game-state';
+import { closeSlotSeriesForBlock } from '../lib/slot-state';
 import { wrap } from './_wrap';
 
 export default wrap(async request => {
@@ -39,6 +40,18 @@ export default wrap(async request => {
       [roundId],
     );
     if (liveRoulette.rows[0]) throw new HttpError(409, `Roulette #${liveRoulette.rows[0].id} is still ${liveRoulette.rows[0].status}`);
+
+    // Slotmachine series are closed out rather than blocking completion, and unspun
+    // spins are refunded. Same reasoning as changing content block: the host must be
+    // able to end the round even if a player locked twenty spins and wandered off, and
+    // no coins are lost by doing so.
+    const slotBlocks = await client.query(
+      "SELECT id FROM round_blocks WHERE round_id=$1 AND type='SLOTMACHINE' ORDER BY sort_order,id",
+      [roundId],
+    );
+    for (const slotBlock of slotBlocks.rows) {
+      await closeSlotSeriesForBlock(client, gameId, Number(slotBlock.id), admin.username, 'round completed');
+    }
 
     // Draft roulette games have no money attached and should not survive a
     // completed round as stray operational state.

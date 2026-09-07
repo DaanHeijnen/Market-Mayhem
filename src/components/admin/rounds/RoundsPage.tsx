@@ -7,7 +7,7 @@ import { MediaField } from './MediaField';
 
 const QUESTION_EMOJIS = ['🍆','🌽','🍑','😳'] as const;
 
-const blankBlock = { type: 'TEXT', title: '', body: '', answers: ['', '', '', ''], correctAnswerIndex: 0, rewardCoins: 10, imageKey: '', audioKey: '', audioName: '', correctAnswer: '' };
+const blankBlock = { type: 'TEXT', title: '', body: '', answers: ['', '', '', ''], correctAnswerIndex: 0, rewardCoins: 10, imageKey: '', audioKey: '', audioName: '', correctAnswer: '', maxSpins: 10, allowedPlayerIds: [] as number[] };
 
 export function RoundsPage({ state: s, gameId, roundId, run }: { state: any; gameId: number; roundId: number | null; run: RunMutation }) {
   const nav = useNavigate();
@@ -66,6 +66,7 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
       ...(blockForm.type === 'PICTURE' ? { imageKey: blockForm.imageKey || null } : {}),
       ...(blockForm.type === 'MUSIC' ? { audioKey: blockForm.audioKey || null, audioName: blockForm.audioName } : {}),
       ...(blockForm.type === 'WAGER' ? { correctAnswer: blockForm.correctAnswer } : {}),
+      ...(blockForm.type === 'SLOTMACHINE' ? { maxSpins: Number(blockForm.maxSpins) || 1, allowedPlayerIds: blockForm.allowedPlayerIds } : {}),
     };
     if (await run('/api/upsert-round-block', payload)) resetBlock();
   };
@@ -82,6 +83,8 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
       audioKey: block.payload?.audioKey || '',
       audioName: block.payload?.audioName || '',
       correctAnswer: block.payload?.correctAnswer || '',
+      maxSpins: block.payload?.maxSpins ?? 10,
+      allowedPlayerIds: Array.isArray(block.payload?.allowedPlayerIds) ? block.payload.allowedPlayerIds : [],
     });
   };
   const move = async (index: number, dir: -1 | 1) => {
@@ -113,7 +116,7 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
       <div className="form-grid compact">
         <label className="span-2">{blockForm.type === 'QUESTION' || blockForm.type === 'DUOLINGO_QUESTION' ? 'Question text' : blockForm.type === 'TEXT' ? 'Optional title' : 'Title'}<input className="field" value={blockForm.title} onChange={e => setBlockForm({ ...blockForm, title: e.target.value })} /></label>
       </div>
-      {['TEXT','QUESTION','PICTURE','MUSIC','BUZZER','WAGER'].includes(blockForm.type) && <label>{blockForm.type === 'TEXT' ? 'Body / instructions' : 'Optional supporting text'}<textarea className="field" rows={blockForm.type === 'TEXT' ? 4 : 2} value={blockForm.body} onChange={e => setBlockForm({ ...blockForm, body: e.target.value })} /></label>}
+      {['TEXT','QUESTION','PICTURE','MUSIC','BUZZER','WAGER','SLOTMACHINE'].includes(blockForm.type) && <label>{blockForm.type === 'TEXT' ? 'Body / instructions' : blockForm.type === 'SLOTMACHINE' ? 'Instructions shown on the players\u2019 phones' : 'Optional supporting text'}<textarea className="field" rows={blockForm.type === 'TEXT' ? 4 : 2} value={blockForm.body} onChange={e => setBlockForm({ ...blockForm, body: e.target.value })} /></label>}
 
       {blockForm.type === 'PICTURE' && <MediaField
         kind="image" gameId={gameId} value={blockForm.imageKey}
@@ -130,6 +133,35 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
       />}
 
       {blockForm.type === 'WAGER' && <label>Correct answer<input className="field" placeholder="Used to judge who wins their wager" value={blockForm.correctAnswer} onChange={e => setBlockForm({ ...blockForm, correctAnswer: e.target.value })} /></label>}
+
+      {/* Only this block's own settings. The reel artwork and the outcome distribution
+          are one machine shared by the whole night, so they live in Settings — this
+          links there rather than duplicating them per block. */}
+      {blockForm.type === 'SLOTMACHINE' && <div className="slot-block-editor">
+        <div className="form-grid compact">
+          <label>Maximum spins per series<input className="field" type="number" min="1" max="100" value={blockForm.maxSpins} onChange={e => setBlockForm({ ...blockForm, maxSpins: e.target.value })} /></label>
+        </div>
+        <SlotConfigNotice state={s} gameId={gameId} />
+        <div className="slot-participants">
+          <div className="label muted">WHO CAN PLAY {blockForm.allowedPlayerIds.length === 0 ? '· EVERYONE' : `· ${blockForm.allowedPlayerIds.length} SELECTED`}</div>
+          <p className="muted type-note">Leave all unchecked for everyone, which is the usual case.</p>
+          <div className="group-members">
+            {s.players.filter((player: any) => player.active).map((player: any) => {
+              const selected = blockForm.allowedPlayerIds.includes(player.id);
+              return <label key={player.id} className={`group-member ${selected ? 'selected' : ''}`}>
+                <input type="checkbox" checked={selected} onChange={() => setBlockForm({
+                  ...blockForm,
+                  allowedPlayerIds: selected
+                    ? blockForm.allowedPlayerIds.filter((id: number) => id !== player.id)
+                    : [...blockForm.allowedPlayerIds, player.id],
+                })} />
+                <span className="player-dot" style={{ background: player.public_color }} />
+                <span>{player.display_name}</span>
+              </label>;
+            })}
+          </div>
+        </div>
+      </div>}
 
       {['BUZZER','WAGER'].includes(blockForm.type) && <p className="muted type-note">
         {blockMeta(blockForm.type).label} content is authored and presented on the Big Screen, but has no phone-side flow yet — run it out loud and score with group or coin adjustments.
@@ -151,6 +183,10 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
         {block.type === 'PICTURE' && block.payload?.imageKey && <img className="block-thumb" src={`/api/block-media?key=${encodeURIComponent(block.payload.imageKey)}`} alt="" />}
         {block.type === 'MUSIC' && block.payload?.audioKey && <div className="media-audio"><audio controls preload="none" src={`/api/block-media?key=${encodeURIComponent(block.payload.audioKey)}`} /><span className="muted">{block.payload.audioName || 'Audio'}</span></div>}
         {block.type === 'WAGER' && block.payload?.correctAnswer && <p className="muted block-copy">Correct answer: <b>{block.payload.correctAnswer}</b></p>}
+        {block.type === 'SLOTMACHINE' && <p className="muted block-copy">
+          Max {block.payload?.maxSpins ?? 10} spins per series · {(block.payload?.allowedPlayerIds || []).length === 0 ? 'everyone plays' : `${block.payload.allowedPlayerIds.length} selected player${block.payload.allowedPlayerIds.length === 1 ? '' : 's'}`}
+          {s.slotConfig && !s.slotConfig.status.valid && <> · <b className="neg">machine not configured</b></>}
+        </p>}
 
         {/* Picture and music titles are the answer, so they are withheld from the
             projector until the host reveals them. */}
@@ -170,6 +206,25 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
     </div>}
 
     <RoundGroups state={s} round={round} run={run} groupName={groupName} setGroupName={setGroupName} />
+  </div>;
+}
+
+/**
+ * Whether the shared machine is usable, shown where the block is authored.
+ *
+ * Without this the Admin can build a perfectly good slot block, go live on it, and only
+ * then discover the distribution does not add up — the block is only half the setup.
+ */
+function SlotConfigNotice({ state: s, gameId }: { state: any; gameId: number }) {
+  const nav = useNavigate();
+  const status = s.slotConfig?.status;
+  if (!status) return null;
+  return <div className={`slot-config-notice ${status.valid ? 'is-valid' : 'is-invalid'}`}>
+    <div>
+      <b>{status.valid ? 'Slotmachine is configured' : 'Slotmachine needs setup'}</b>
+      <span className="muted">{status.reason} {status.symbolCount} of 36 symbols uploaded.</span>
+    </div>
+    <button className="btn btn-secondary btn-compact" onClick={() => nav(`/admin/${gameId}/settings`)}>OPEN SETTINGS</button>
   </div>;
 }
 

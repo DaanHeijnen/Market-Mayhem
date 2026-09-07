@@ -108,6 +108,21 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
         <span className="muted live-meta">{activeRoulette.bet_count} bets · {activeRoulette.total_stake} staked{activeRoulette.result_number != null ? ` · result ${activeRoulette.result_number}` : ''}</span>
       </>;
     }
+    if (liveBlock?.type === 'SLOTMACHINE') {
+      const slot = s.activeSlot;
+      const config = s.slotConfig?.status;
+      // There is no spin button here on purpose: players start their own spins from
+      // their phones. What the host needs is whether the machine is usable and who is
+      // mid-series, so this panel is status rather than controls.
+      if (!config?.valid) return <span className="neg live-meta"><b>Slotmachine unusable — {config?.reason || 'not configured'}</b></span>;
+      if (!slot) return <span className="muted live-meta">Slotmachine ready — players lock a series on their phones.</span>;
+      return <>
+        <span className="muted live-meta">
+          Max {slot.maxSpins} spins per series · {slot.participantCount === 0 ? 'everyone plays' : `${slot.participantCount} selected player${slot.participantCount === 1 ? '' : 's'}`}
+          {slot.lockedCoins > 0 ? ` · ${slot.lockedCoins} coins locked in unspun spins` : ''}
+        </span>
+      </>;
+    }
     if (livePrediction) {
       return <>
         {livePrediction.status === 'OPEN' && <button className="btn btn-secondary" onClick={() => run('/api/lock-prediction', { predictionId: livePrediction.id })}>LOCK NOW</button>}
@@ -175,6 +190,8 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
         </button>
       </div>
     </div>
+
+    {liveBlock?.type === 'SLOTMACHINE' && <SlotLivePanel slot={s.activeSlot} config={s.slotConfig?.status} activePlayers={activePlayers} />}
 
     {/* One ordered timeline for the round: content blocks, then its unresolved markets.
         Ordered by the server so this and GO LIVE can never disagree. */}
@@ -254,6 +271,63 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
       </div>
     </div>
   </div>;
+}
+
+/**
+ * What the slotmachine is doing right now.
+ *
+ * The host does not drive this game — players lock their own series and press their own
+ * SPIN — so the panel answers the questions they cannot see from the projector: is the
+ * machine even usable, who is mid-series, and what did the last spin pay.
+ */
+function SlotLivePanel({ slot, config, activePlayers }: { slot: any; config: any; activePlayers: any[] }) {
+  const series: any[] = slot?.activeSeries || [];
+  const last = slot?.lastSpin || null;
+
+  return <Card className="slot-live-panel">
+    <div className="row-between">
+      <div>
+        <div className="label muted">SLOTMACHINE · LIVE</div>
+        <h2 className="display card-heading">Players spin from their phones</h2>
+      </div>
+      <Status tone={config?.valid ? 'open' : 'danger'}>{config?.valid ? 'CONFIGURED' : 'NOT CONFIGURED'}</Status>
+    </div>
+
+    {!config?.valid && <p className="neg"><b>{config?.reason || 'Finish the slotmachine setup in Settings before running this block.'}</b></p>}
+
+    <div className="slot-live-stats">
+      <div><span className="label muted">ACTIVE SERIES</span><b>{series.length} of {activePlayers.length}</b></div>
+      <div><span className="label muted">LOCKED IN UNSPUN SPINS</span><b><CoinIcon size={16} /> {slot?.lockedCoins ?? 0}</b></div>
+      <div><span className="label muted">LAST OUTCOME</span><b>{last ? last.status === 'RESULT' ? last.outcome : 'spinning…' : '—'}</b></div>
+      <div><span className="label muted">LAST PAYOUT</span><b>{last && last.status === 'RESULT' ? `${last.payout} at ${Number(last.payoutMultiplier).toFixed(2).replace(/\.?0+$/, '')}x` : '—'}</b></div>
+    </div>
+
+    {series.length === 0
+      ? <div className="sub-empty">No player has locked a series yet.</div>
+      : <div className="round-content-summary">
+        {series.map(item => <div className="round-content-line" key={item.id}>
+          <span>
+            <span className="player-dot" style={{ background: item.playerColor }} />
+            <b>{item.playerName}</b> · {item.stakePerSpin} per spin · {item.spinsRemaining} of {item.totalSpins} spins left
+          </span>
+          <Status tone="open">ACTIVE</Status>
+        </div>)}
+      </div>}
+
+    {slot?.spins?.length > 0 && <div className="slot-live-history">
+      <div className="label muted">RECENT SPINS</div>
+      {slot.spins.map((spin: any) => <div className="ledger-line" key={spin.id}>
+        <span><b>{spin.playerName}</b> · spin {spin.spinNumber} · {spin.status === 'RESULT' ? spin.outcome : 'spinning…'}</span>
+        <b className={spin.status === 'RESULT' && spin.payout > 0 ? 'pos' : 'muted'}>
+          {spin.status === 'RESULT' ? spin.payout > 0 ? `+${spin.payout}` : '0' : '—'}
+        </b>
+      </div>)}
+    </div>}
+
+    <p className="muted microcopy">
+      Moving to the next content block ends every series and refunds spins nobody used, so nothing keeps running behind your back.
+    </p>
+  </Card>;
 }
 
 /**

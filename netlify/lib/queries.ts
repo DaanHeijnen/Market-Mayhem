@@ -4,6 +4,8 @@ import { incrementGameVersion } from './game-state';
 import { publicPredictionStatus } from './economy';
 import { orderRunOfShow } from './run-of-show';
 import { cooldownMinutesLeft, describeRequestStatus, requestsRemaining } from './prediction-requests';
+import { loadSlotConfig, slotBlockSettings } from './slot-state';
+import { describeSlotConfig, symbolLetter, SLOT_OUTCOME_LABELS, SLOT_SPIN_MS, type SlotOutcomeType } from './slotmachine';
 
 const ROULETTE_SPIN_MS = 5500;
 
@@ -12,10 +14,11 @@ export async function syncTimedState(gameId: number, knownDue = false) {
     const due = await database().pool.query(
       `SELECT
         EXISTS(SELECT 1 FROM predictions WHERE game_night_id=$1 AND status='OPEN' AND closes_at IS NOT NULL AND closes_at<=NOW()) AS prediction_due,
-        EXISTS(SELECT 1 FROM roulette_games WHERE game_night_id=$1 AND status='SPINNING' AND spun_at IS NOT NULL AND spun_at<=NOW()-($2::text||' milliseconds')::interval) AS roulette_due`,
-      [gameId, ROULETTE_SPIN_MS],
+        EXISTS(SELECT 1 FROM roulette_games WHERE game_night_id=$1 AND status='SPINNING' AND spun_at IS NOT NULL AND spun_at<=NOW()-($2::text||' milliseconds')::interval) AS roulette_due,
+        EXISTS(SELECT 1 FROM slot_spins WHERE game_night_id=$1 AND status='SPINNING' AND spun_at<=NOW()-($3::text||' milliseconds')::interval) AS slot_due`,
+      [gameId, ROULETTE_SPIN_MS, SLOT_SPIN_MS],
     );
-    if (!due.rows[0]?.prediction_due && !due.rows[0]?.roulette_due) return false;
+    if (!due.rows[0]?.prediction_due && !due.rows[0]?.roulette_due && !due.rows[0]?.slot_due) return false;
   }
 
   return withTransaction(async client => {
@@ -52,6 +55,17 @@ export async function syncTimedState(gameId: number, knownDue = false) {
       [gameId, ROULETTE_SPIN_MS],
     );
     if (spun.rowCount) changed = true;
+
+    // A slot spin's outcome was already final when it was written; this only ends the
+    // presentational SPINNING window so every surface can show the result together.
+    const slotRevealed = await client.query(
+      `UPDATE slot_spins SET status='RESULT'
+       WHERE game_night_id=$1 AND status='SPINNING' AND spun_at<=NOW()-($2::text||' milliseconds')::interval
+       RETURNING id`,
+      [gameId, SLOT_SPIN_MS],
+    );
+    if (slotRevealed.rowCount) changed = true;
+
     if (changed) await incrementGameVersion(client, gameId);
     return changed;
   });
@@ -80,16 +94,18 @@ export async function getGameVersion(gameId: number): Promise<GameVersion> {
       EXISTS(SELECT 1 FROM predictions p WHERE p.game_night_id=g.id AND p.status='OPEN' AND p.closes_at IS NOT NULL AND p.closes_at<=NOW()) AS prediction_due,
       EXISTS(SELECT 1 FROM roulette_games rg WHERE rg.game_night_id=g.id AND rg.status='SPINNING' AND rg.spun_at IS NOT NULL AND rg.spun_at<=NOW()-($2::text||' milliseconds')::interval) AS roulette_due,
       EXISTS(SELECT 1 FROM predictions p WHERE p.game_night_id=g.id AND p.status IN ('OPEN','LOCKED','RESULT')) AS market_live,
-      EXISTS(SELECT 1 FROM roulette_games rg WHERE rg.game_night_id=g.id AND rg.status IN ('OPEN','LOCKED','SPINNING','RESULT')) AS roulette_live
+      EXISTS(SELECT 1 FROM roulette_games rg WHERE rg.game_night_id=g.id AND rg.status IN ('OPEN','LOCKED','SPINNING','RESULT')) AS roulette_live,
+      EXISTS(SELECT 1 FROM slot_spins ss WHERE ss.game_night_id=g.id AND ss.status='SPINNING' AND ss.spun_at<=NOW()-($3::text||' milliseconds')::interval) AS slot_due,
+      EXISTS(SELECT 1 FROM slot_series sr WHERE sr.game_night_id=g.id AND sr.status='ACTIVE') AS slot_live
      FROM game_nights g WHERE g.id=$1`,
-    [gameId, ROULETTE_SPIN_MS],
+    [gameId, ROULETTE_SPIN_MS, SLOT_SPIN_MS],
   );
   const row = result.rows[0];
   if (!row) throw new HttpError(404, 'Game not found');
 
-  const idle = !row.current_round_id && !row.market_live && !row.roulette_live;
+  const idle = !row.current_round_id && !row.market_live && !row.roulette_live && !row.slot_live;
   let version = Number(row.game_state_version);
-  if (row.prediction_due || row.roulette_due) {
+  if (row.prediction_due || row.roulette_due || row.slot_due) {
     await syncTimedState(gameId, true);
     const refreshed = await database().pool.query('SELECT game_state_version FROM game_nights WHERE id=$1', [gameId]);
     version = Number(refreshed.rows[0].game_state_version);
@@ -172,7 +188,7 @@ export async function getAdminState(gameId: number) {
   const game = gameResult.rows[0];
   if (!game) throw new HttpError(404, 'Game not found');
 
-  const [rounds, blocks, groups, players, predictions, recent, roulette, screen, requests] = await Promise.all([
+  const [rounds, blocks, groups, players, predictions, recent, roulette, screen, requests, slotConfig, slotSeries, slotSpins] = await Promise.all([
     pool.query('SELECT * FROM rounds WHERE game_night_id=$1 ORDER BY round_number,id', [gameId]),
     pool.query(
       `SELECT b.*,COUNT(a.id)::int AS answer_count
@@ -230,6 +246,26 @@ export async function getAdminState(gameId: number) {
        FROM prediction_requests r JOIN players p ON p.id=r.player_id
        WHERE r.game_night_id=$1 ORDER BY r.created_at DESC,r.id DESC LIMIT 20`, [gameId],
     ),
+    // The slotmachine's game-wide configuration travels in every Admin snapshot: the
+    // Settings page edits it, and the Control Center needs its validity to tell the host
+    // whether the machine can be used at all.
+    loadSlotConfig(pool, gameId),
+    pool.query(
+      `SELECT sr.id,sr.player_id,sr.stake_per_spin,sr.total_spins,sr.spins_remaining,sr.total_stake,sr.status,sr.created_at,
+              p.display_name,p.public_color
+       FROM slot_series sr JOIN players p ON p.id=sr.player_id
+       WHERE sr.game_night_id=$1 AND sr.round_block_id=$2
+       ORDER BY CASE sr.status WHEN 'ACTIVE' THEN 0 ELSE 1 END,sr.id DESC LIMIT 20`,
+      [gameId, game.current_round_block_id],
+    ),
+    pool.query(
+      `SELECT ss.id,ss.player_id,ss.spin_number,ss.outcome_type,
+              ss.stake,ss.payout_multiplier,ss.payout,ss.status,ss.spun_at,p.display_name
+       FROM slot_spins ss JOIN players p ON p.id=ss.player_id
+       WHERE ss.game_night_id=$1 AND ss.round_block_id=$2
+       ORDER BY ss.spun_at DESC,ss.id DESC LIMIT 8`,
+      [gameId, game.current_round_block_id],
+    ),
   ]);
 
   const normalizedBlocks = blocks.rows.map((b: any) => normalizeBlock(b, true));
@@ -280,6 +316,49 @@ export async function getAdminState(gameId: number) {
     activePredictions: normalizedPredictions.filter((p: any) => ['OPEN','LOCKED','RESULT'].includes(p.status)),
     recentTransactions: recent.rows.map((r: any) => ({ ...r, id: Number(r.id), amount: Number(r.amount) })),
     activeRoulette: (() => { const r = roulette.rows[0]; return r ? { ...r, id: Number(r.id), round_id: r.round_id ? Number(r.round_id) : null, round_block_id: r.round_block_id ? Number(r.round_block_id) : null, result_number: r.status === 'SPINNING' || r.result_number == null ? null : Number(r.result_number), bet_count: Number(r.bet_count), total_stake: Number(r.total_stake) } : null; })(),
+    slotConfig,
+    // Live slotmachine picture for whatever block is current. Null-ish rather than
+    // absent when the current block is not a slotmachine, so the Control Center can key
+    // off the block type as it does for roulette.
+    activeSlot: (() => {
+      const currentBlock = normalizedBlocks.find((b: any) => b.id === Number(game.current_round_block_id)) || null;
+      if (!currentBlock || currentBlock.type !== 'SLOTMACHINE') return null;
+      const settings = slotBlockSettings(currentBlock.payload);
+      const series = slotSeries.rows.map((row: any) => ({
+        id: Number(row.id),
+        playerId: Number(row.player_id),
+        playerName: row.display_name,
+        playerColor: row.public_color,
+        stakePerSpin: Number(row.stake_per_spin),
+        totalSpins: Number(row.total_spins),
+        spinsRemaining: Number(row.spins_remaining),
+        totalStake: Number(row.total_stake),
+        status: row.status,
+      }));
+      const spins = slotSpins.rows.map((row: any) => ({
+        id: Number(row.id),
+        playerId: Number(row.player_id),
+        playerName: row.display_name,
+        spinNumber: Number(row.spin_number),
+        outcomeType: row.outcome_type as SlotOutcomeType,
+        outcome: SLOT_OUTCOME_LABELS[row.outcome_type as SlotOutcomeType] || row.outcome_type,
+        stake: Number(row.stake),
+        payoutMultiplier: Number(row.payout_multiplier),
+        payout: Number(row.payout),
+        status: row.status,
+        spunAt: row.spun_at,
+      }));
+      return {
+        blockId: currentBlock.id,
+        maxSpins: settings.maxSpins,
+        participantCount: settings.allowedPlayerIds.length,
+        activeSeries: series.filter(x => x.status === 'ACTIVE'),
+        series,
+        spins,
+        lastSpin: spins[0] || null,
+        lockedCoins: series.filter(x => x.status === 'ACTIVE').reduce((sum, x) => sum + x.stakePerSpin * x.spinsRemaining, 0),
+      };
+    })(),
   };
 }
 
@@ -295,17 +374,18 @@ export async function getPlayerState(gameId: number, playerId: number) {
        SELECT p.id,p.display_name,p.public_color,w.current_balance,g.game_state_version,g.maximum_wallet_percentage,
               p.starting_balance_snapshot::int AS starting_balance,
               COALESCE((SELECT SUM(b.stake) FROM bets b JOIN predictions pr ON pr.id=b.prediction_id WHERE b.player_id=p.id AND b.status='ACTIVE' AND pr.status IN ('OPEN','LOCKED','RESULT')),0)::int AS prediction_locked,
-              COALESCE((SELECT SUM(rb.stake) FROM roulette_bets rb JOIN roulette_games rg ON rg.id=rb.roulette_game_id WHERE rb.player_id=p.id AND rb.status='ACTIVE' AND rg.status IN ('OPEN','LOCKED','SPINNING','RESULT')),0)::int AS roulette_locked
+              COALESCE((SELECT SUM(rb.stake) FROM roulette_bets rb JOIN roulette_games rg ON rg.id=rb.roulette_game_id WHERE rb.player_id=p.id AND rb.status='ACTIVE' AND rg.status IN ('OPEN','LOCKED','SPINNING','RESULT')),0)::int AS roulette_locked,
+              COALESCE((SELECT SUM(sr.stake_per_spin*sr.spins_remaining) FROM slot_series sr WHERE sr.player_id=p.id AND sr.status='ACTIVE'),0)::int AS slot_locked
        FROM players p JOIN wallets w ON w.player_id=p.id JOIN game_nights g ON g.id=p.game_night_id
        WHERE p.game_night_id=$1 AND p.active=TRUE
      ), ranked AS (
-       SELECT *,DENSE_RANK() OVER (ORDER BY current_balance+prediction_locked+roulette_locked DESC) AS rank FROM values
+       SELECT *,DENSE_RANK() OVER (ORDER BY current_balance+prediction_locked+roulette_locked+slot_locked DESC) AS rank FROM values
      ) SELECT * FROM ranked WHERE id=$2`, [gameId, playerId],
   );
   const player = playerResult.rows[0];
   if (!player) throw new HttpError(404, 'Player not found');
 
-  const [ledger, predictions, roulette, interactive, myRequests] = await Promise.all([
+  const [ledger, predictions, roulette, interactive, myRequests, slotBlock, slotSeries] = await Promise.all([
     pool.query('SELECT id,amount,transaction_type,description,created_at,attributed_round_id,prediction_id,roulette_game_id,round_block_id FROM ledger_entries WHERE game_night_id=$1 AND player_id=$2 ORDER BY created_at DESC,id DESC LIMIT 12', [gameId, playerId]),
     pool.query(
       `SELECT p.id,p.display_number,p.question,p.status,p.probability_yes,p.yes_odds,p.no_odds,p.prediction_time_seconds,p.minimum_stake,p.maximum_stake,p.opened_at,p.closes_at,p.result,p.round_id,r.round_number,
@@ -336,6 +416,31 @@ export async function getPlayerState(gameId: number, playerId: number) {
       'SELECT id,question,status,reason,created_at FROM prediction_requests WHERE game_night_id=$1 AND player_id=$2 ORDER BY created_at DESC,id DESC',
       [gameId, playerId],
     ),
+    // The slotmachine only reaches a phone while its block is the live one and its round
+    // is active — the same gate the live question uses. That is what makes the controls
+    // appear and disappear with the block instead of living on a page of their own.
+    pool.query(
+      `SELECT b.id,b.round_id,b.title,b.payload,
+              COALESCE(sc.total_weight,0)::int AS total_weight,
+              COALESCE((SELECT SUM(o.weight) FROM slot_outcome_types o WHERE o.game_night_id=g.id),0)::int AS allocated_weight,
+              COALESCE((SELECT COUNT(*) FROM slot_reel_symbols s WHERE s.game_night_id=g.id),0)::int AS symbol_count
+       FROM game_nights g JOIN round_blocks b ON b.id=g.current_round_block_id
+       JOIN rounds r ON r.id=b.round_id
+       LEFT JOIN slot_configs sc ON sc.game_night_id=g.id
+       WHERE g.id=$1 AND b.type='SLOTMACHINE' AND r.status='ACTIVE'`, [gameId],
+    ),
+    pool.query(
+      `SELECT sr.id,sr.round_block_id,sr.stake_per_spin,sr.total_spins,sr.spins_remaining,sr.total_stake,sr.status,
+              ss.id AS spin_id,ss.spin_number,ss.outcome_type,
+              ss.payout_multiplier,ss.payout,ss.status AS spin_status,ss.spun_at
+       FROM slot_series sr
+       LEFT JOIN LATERAL (
+         SELECT * FROM slot_spins WHERE slot_series_id=sr.id ORDER BY spin_number DESC LIMIT 1
+       ) ss ON TRUE
+       WHERE sr.game_night_id=$1 AND sr.player_id=$2
+         AND sr.round_block_id=(SELECT current_round_block_id FROM game_nights WHERE id=$1)
+       ORDER BY CASE sr.status WHEN 'ACTIVE' THEN 0 ELSE 1 END,sr.id DESC LIMIT 1`, [gameId, playerId],
+    ),
   ]);
 
   const normalizedPredictions = predictions.rows.map((p: any) => ({
@@ -361,6 +466,58 @@ export async function getPlayerState(gameId: number, playerId: number) {
   } : null;
   const predictionLocked = Number(player.prediction_locked || 0);
   const rouletteLocked = Number(player.roulette_locked || 0);
+  const slotLocked = Number(player.slot_locked || 0);
+
+  // The phone is only ever a controller: it receives its own series, the limits it must
+  // respect and the last outcome as text. It never receives the reel strip or a
+  // forthcoming outcome — the reels exist only on the Big Screen.
+  const slotBlockRow = slotBlock.rows[0];
+  const slotSeriesRow = slotSeries.rows[0];
+  const slotmachine = slotBlockRow ? (() => {
+    // Same verdict the Admin sees, reached from aggregates this one query already
+    // returned rather than three more round trips on the hottest polling path.
+    const configStatus = describeSlotConfig({
+      totalWeight: Number(slotBlockRow.total_weight),
+      allocatedWeight: Number(slotBlockRow.allocated_weight),
+      symbolCount: Number(slotBlockRow.symbol_count),
+    });
+    const settings = slotBlockSettings(slotBlockRow.payload);
+    const allowed = settings.allowedPlayerIds.length === 0 || settings.allowedPlayerIds.includes(Number(player.id));
+    const series = slotSeriesRow && Number(slotSeriesRow.round_block_id) === Number(slotBlockRow.id) ? {
+      id: Number(slotSeriesRow.id),
+      stakePerSpin: Number(slotSeriesRow.stake_per_spin),
+      totalSpins: Number(slotSeriesRow.total_spins),
+      spinsRemaining: Number(slotSeriesRow.spins_remaining),
+      totalStake: Number(slotSeriesRow.total_stake),
+      status: slotSeriesRow.status,
+      lastSpin: slotSeriesRow.spin_id ? {
+        spinNumber: Number(slotSeriesRow.spin_number),
+        // Held back until the Big Screen animation has finished, so the phone cannot
+        // spoil the reels for the room. The phone shows the category name — never the
+        // field, which belongs on the projector.
+        outcome: slotSeriesRow.spin_status === 'RESULT'
+          ? SLOT_OUTCOME_LABELS[slotSeriesRow.outcome_type as SlotOutcomeType] || slotSeriesRow.outcome_type
+          : null,
+        payoutMultiplier: slotSeriesRow.spin_status === 'RESULT' ? Number(slotSeriesRow.payout_multiplier) : null,
+        payout: slotSeriesRow.spin_status === 'RESULT' ? Number(slotSeriesRow.payout) : null,
+        status: slotSeriesRow.spin_status,
+      } : null,
+    } : null;
+    return {
+      blockId: Number(slotBlockRow.id),
+      roundId: Number(slotBlockRow.round_id),
+      title: slotBlockRow.title || 'Slotmachine',
+      instructions: settings.instructions,
+      maxSpins: settings.maxSpins,
+      allowed,
+      // Whether the machine itself is configured. The phone needs it so INZET VASTZETTEN
+      // can explain why it is unavailable rather than failing on submit.
+      configValid: configStatus.valid,
+      configReason: configStatus.reason,
+      series: series && series.status === 'ACTIVE' ? series : null,
+      lastSeries: series,
+    };
+  })() : null;
 
   // The player's own prediction requests, plus how many they have left and whether they
   // are on cooldown. Computed here so the phone can explain the limits before the player
@@ -379,7 +536,8 @@ export async function getPlayerState(gameId: number, playerId: number) {
     },
     player: {
       id: Number(player.id), name: player.display_name, color: player.public_color, balance: Number(player.current_balance), startingBalance: Number(player.starting_balance), rank: Number(player.rank),
-      lockedPrediction: predictionLocked, lockedRoulette: rouletteLocked, totalValue: Number(player.current_balance) + predictionLocked + rouletteLocked,
+      lockedPrediction: predictionLocked, lockedRoulette: rouletteLocked, lockedSlot: slotLocked,
+      totalValue: Number(player.current_balance) + predictionLocked + rouletteLocked + slotLocked,
     },
     settings: { maximumWalletPercentage: player.maximum_wallet_percentage == null ? null : Number(player.maximum_wallet_percentage) },
     predictions: normalizedPredictions,
@@ -387,7 +545,9 @@ export async function getPlayerState(gameId: number, playerId: number) {
     roulette: currentRoulette,
     rouletteAvailable: currentRoulette?.status === 'OPEN',
     interactiveBlock,
-    actionable: normalizedPredictions.some((p: any) => p.status === 'OPEN') || currentRoulette?.status === 'OPEN' || interactiveBlock?.status === 'OPEN',
+    slotmachine,
+    actionable: normalizedPredictions.some((p: any) => p.status === 'OPEN') || currentRoulette?.status === 'OPEN' || interactiveBlock?.status === 'OPEN'
+      || Boolean(slotmachine?.allowed && slotmachine.configValid),
     recentLedger: ledger.rows.map((r: any) => ({ ...r, id: Number(r.id), amount: Number(r.amount) })),
   };
 }
@@ -407,10 +567,10 @@ export async function getScreenState(gameId: number) {
   const game = gameResult.rows[0];
   if (!game) throw new HttpError(404, 'Game not found');
   const screenMode = game.mode || game.current_screen_mode || 'DASHBOARD';
-  const blockId = ['ROUND_BLOCK','ROULETTE'].includes(screenMode) ? (Number(game.payload?.blockId || game.current_round_block_id || 0) || null) : null;
+  const blockId = ['ROUND_BLOCK','ROULETTE','SLOTMACHINE'].includes(screenMode) ? (Number(game.payload?.blockId || game.current_round_block_id || 0) || null) : null;
   const rouletteGameId = screenMode === 'ROULETTE' ? (Number(game.payload?.rouletteGameId || 0) || null) : null;
 
-  const [round, block, prediction, players, ledgerEvents, predictionEvents, rouletteEvents, ticker, totals, roulette, recentResults] = await Promise.all([
+  const [round, block, prediction, players, ledgerEvents, predictionEvents, rouletteEvents, ticker, totals, roulette, recentResults, slot, slotSpins] = await Promise.all([
     pool.query('SELECT id,round_number,title,status FROM rounds WHERE id=COALESCE($1::bigint,$2::bigint) AND game_night_id=$3', [game.screen_round_id, game.current_round_id, gameId]),
     blockId ? pool.query(
       `SELECT b.*,COUNT(a.id)::int AS answer_count FROM round_blocks b LEFT JOIN round_question_answers a ON a.round_block_id=b.id
@@ -421,7 +581,8 @@ export async function getScreenState(gameId: number) {
       `SELECT p.id,p.display_name,p.public_color,w.current_balance,
               p.starting_balance_snapshot::int AS starting_balance,
               COALESCE((SELECT SUM(b.stake) FROM bets b JOIN predictions pr ON pr.id=b.prediction_id WHERE b.player_id=p.id AND b.status='ACTIVE' AND pr.status IN ('OPEN','LOCKED','RESULT')),0)::int AS prediction_locked,
-              COALESCE((SELECT SUM(rb.stake) FROM roulette_bets rb JOIN roulette_games rg ON rg.id=rb.roulette_game_id WHERE rb.player_id=p.id AND rb.status='ACTIVE' AND rg.status IN ('OPEN','LOCKED','SPINNING','RESULT')),0)::int AS roulette_locked
+              COALESCE((SELECT SUM(rb.stake) FROM roulette_bets rb JOIN roulette_games rg ON rg.id=rb.roulette_game_id WHERE rb.player_id=p.id AND rb.status='ACTIVE' AND rg.status IN ('OPEN','LOCKED','SPINNING','RESULT')),0)::int AS roulette_locked,
+              COALESCE((SELECT SUM(sr.stake_per_spin*sr.spins_remaining) FROM slot_series sr WHERE sr.player_id=p.id AND sr.status='ACTIVE'),0)::int AS slot_locked
        FROM players p JOIN wallets w ON w.player_id=p.id WHERE p.game_night_id=$1 AND p.active=TRUE ORDER BY w.current_balance DESC,p.display_name`, [gameId],
     ),
     pool.query(
@@ -450,6 +611,7 @@ export async function getScreenState(gameId: number) {
       `SELECT COALESCE((SELECT SUM(w.current_balance) FROM wallets w JOIN players p ON p.id=w.player_id WHERE w.game_night_id=$1 AND p.active=TRUE),0)::int AS wallets,
               COALESCE((SELECT SUM(b.stake) FROM bets b JOIN predictions p ON p.id=b.prediction_id WHERE p.game_night_id=$1 AND b.status='ACTIVE' AND p.status IN ('OPEN','LOCKED','RESULT')),0)::int AS prediction_stakes,
               COALESCE((SELECT SUM(rb.stake) FROM roulette_bets rb JOIN roulette_games rg ON rg.id=rb.roulette_game_id WHERE rg.game_night_id=$1 AND rb.status='ACTIVE' AND rg.status IN ('OPEN','LOCKED','SPINNING','RESULT')),0)::int AS roulette_stakes,
+              COALESCE((SELECT SUM(sr.stake_per_spin*sr.spins_remaining) FROM slot_series sr WHERE sr.game_night_id=$1 AND sr.status='ACTIVE'),0)::int AS slot_stakes,
               (SELECT COUNT(*) FROM predictions WHERE game_night_id=$1 AND status='OPEN')::int + (SELECT COUNT(*) FROM roulette_games WHERE game_night_id=$1 AND status='OPEN')::int AS markets_open`, [gameId],
     ),
     screenMode === 'ROULETTE'
@@ -466,6 +628,19 @@ export async function getScreenState(gameId: number) {
        FROM predictions WHERE game_night_id=$1 AND status='SETTLED' AND result IN ('YES','NO')
        ORDER BY settled_at DESC NULLS LAST,id DESC LIMIT 6`, [gameId],
     ),
+    // The projector is the only surface that renders reels, so it is the only one that
+    // receives the reel strips.
+    screenMode === 'SLOTMACHINE' ? loadSlotConfig(pool, gameId) : Promise.resolve(null),
+    screenMode === 'SLOTMACHINE' && blockId
+      ? pool.query(
+        `SELECT ss.id,ss.spin_number,ss.outcome_type,ss.grid,ss.win_cells,
+                ss.stake,ss.payout_multiplier,ss.payout,ss.status,ss.spun_at,
+                p.display_name,p.public_color,
+                sr.id AS series_id,sr.stake_per_spin,sr.total_spins,sr.spins_remaining,sr.status AS series_status
+         FROM slot_spins ss JOIN players p ON p.id=ss.player_id JOIN slot_series sr ON sr.id=ss.slot_series_id
+         WHERE ss.round_block_id=$1 AND ss.game_night_id=$2
+         ORDER BY ss.spun_at DESC,ss.id DESC LIMIT 6`, [blockId, gameId])
+      : Promise.resolve({ rows: [] } as any),
   ]);
 
   type EconEvent = { playerId: number; delta: number; time: number; key: string };
@@ -492,7 +667,7 @@ export async function getScreenState(gameId: number) {
   const currentX = Math.max(1, events.length + 1);
   players.rows.forEach((p: any) => {
     const id = Number(p.id);
-    const currentValue = Number(p.current_balance) + Number(p.prediction_locked) + Number(p.roulette_locked);
+    const currentValue = Number(p.current_balance) + Number(p.prediction_locked) + Number(p.roulette_locked) + Number(p.slot_locked);
     const points = series.get(id)!;
     const last = points[points.length - 1];
     if (last.x < currentX || last.balance !== currentValue) points.push({ x: currentX, balance: currentValue });
@@ -501,8 +676,8 @@ export async function getScreenState(gameId: number) {
   // The exchange summary should be ordered by economic value, not merely by
   // spendable coins. Locked deposits remain part of a player's value.
   players.rows.sort((a: any, b: any) => {
-    const aValue = Number(a.current_balance) + Number(a.prediction_locked) + Number(a.roulette_locked);
-    const bValue = Number(b.current_balance) + Number(b.prediction_locked) + Number(b.roulette_locked);
+    const aValue = Number(a.current_balance) + Number(a.prediction_locked) + Number(a.roulette_locked) + Number(a.slot_locked);
+    const bValue = Number(b.current_balance) + Number(b.prediction_locked) + Number(b.roulette_locked) + Number(b.slot_locked);
     return bValue - aValue || String(a.display_name).localeCompare(String(b.display_name));
   });
 
@@ -517,13 +692,60 @@ export async function getScreenState(gameId: number) {
     prediction: pred ? { id: Number(pred.id), number: Number(pred.display_number), question: pred.question, status: pred.status, publicStatus: publicPredictionStatus(pred.status, pred.result), probabilityYes: Number(pred.probability_yes), yesOdds: Number(pred.yes_odds), noOdds: Number(pred.no_odds), result: pred.result, openedAt: pred.opened_at, closesAt: pred.closes_at } : null,
     leaderboard: players.rows.map((p: any) => ({
       id: Number(p.id), display_name: p.display_name, public_color: p.public_color,
-      current_balance: Number(p.current_balance) + Number(p.prediction_locked) + Number(p.roulette_locked),
+      current_balance: Number(p.current_balance) + Number(p.prediction_locked) + Number(p.roulette_locked) + Number(p.slot_locked),
       available_balance: Number(p.current_balance), starting_balance: Number(p.starting_balance), series: series.get(Number(p.id)) || [],
     })),
     ticker: ticker.rows.map((t: any) => ({ ...t, id: Number(t.id), amount: Number(t.amount) })),
     marketsOpen: Number(total.markets_open),
-    totalCoinsInPlay: Number(total.wallets) + Number(total.prediction_stakes) + Number(total.roulette_stakes),
+    totalCoinsInPlay: Number(total.wallets) + Number(total.prediction_stakes) + Number(total.roulette_stakes) + Number(total.slot_stakes),
     roulette: rouletteRow ? { ...rouletteRow, id: Number(rouletteRow.id), round_id: rouletteRow.round_id ? Number(rouletteRow.round_id) : null, round_block_id: rouletteRow.round_block_id ? Number(rouletteRow.round_block_id) : null, result_number: rouletteRow.result_number == null ? null : Number(rouletteRow.result_number), public_bets: rouletteRow.public_bets || [] } : null,
+    // The whole slotmachine scene. The projector is the only surface that draws the
+    // field, so it is the only one that receives it. `currentSpin.grid` is the outcome
+    // the server already committed, which is what the animation lands on, and
+    // `spinning` tells the projector to animate rather than reveal.
+    slotmachine: slot ? (() => {
+      const spins = slotSpins.rows.map((row: any) => ({
+        id: Number(row.id),
+        spinNumber: Number(row.spin_number),
+        outcomeType: row.outcome_type as SlotOutcomeType,
+        outcome: SLOT_OUTCOME_LABELS[row.outcome_type as SlotOutcomeType] || row.outcome_type,
+        // 3 rows x 3 cells of { position, mediaKey } — the artwork as it was at spin time.
+        grid: (Array.isArray(row.grid) ? row.grid : []).map((gridRow: any) =>
+          (Array.isArray(gridRow) ? gridRow : []).map((cell: any) => ({
+            position: Number(cell?.p ?? 0),
+            letter: symbolLetter(Number(cell?.p ?? 0)),
+            mediaKey: typeof cell?.k === 'string' ? cell.k : '',
+          }))),
+        winCells: (Array.isArray(row.win_cells) ? row.win_cells : []).map((cell: any) => [Number(cell?.[0]), Number(cell?.[1])]),
+        stake: Number(row.stake),
+        payoutMultiplier: Number(row.payout_multiplier),
+        payout: Number(row.payout),
+        status: row.status,
+        spinning: row.status === 'SPINNING',
+        spunAt: row.spun_at,
+        playerName: row.display_name,
+        playerColor: row.public_color,
+        seriesId: Number(row.series_id),
+        stakePerSpin: Number(row.stake_per_spin),
+        totalSpins: Number(row.total_spins),
+        spinsRemaining: Number(row.spins_remaining),
+        seriesStatus: row.series_status,
+      }));
+      return {
+        blockId,
+        configValid: slot.status.valid,
+        configReason: slot.status.reason,
+        // The twelve symbols, sent once. The projector uses them as the blur each reel
+        // spins through; the symbols it actually lands on come from the spin's own
+        // field, not from this strip.
+        strip: Array.from({ length: 12 }, (_, index) => {
+          const position = index + 1;
+          return { position, letter: symbolLetter(position), mediaKey: slot.symbolByPosition[position] || '' };
+        }),
+        currentSpin: spins[0] || null,
+        recentSpins: spins.slice(1),
+      };
+    })() : null,
     recentPredictionResults: recentResults.rows.map((r: any) => ({ id: Number(r.id), number: Number(r.display_number), question: r.question, result: r.result, yesOdds: Number(r.yes_odds), noOdds: Number(r.no_odds), settledAt: r.settled_at })),
   };
 }

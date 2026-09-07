@@ -27,6 +27,10 @@ export default wrap(async request => {
     );
     const rouletteHistory = await client.query('SELECT 1 FROM roulette_games WHERE round_block_id=$1 LIMIT 1', [blockId]);
     if (rouletteHistory.rows[0]) throw new HttpError(409, 'Roulette history must be preserved; keep this block');
+    // A slot series carries a real wallet movement, so once one exists the block is
+    // history and stays. An unused slot block deletes freely.
+    const slotHistory = await client.query('SELECT 1 FROM slot_series WHERE round_block_id=$1 LIMIT 1', [blockId]);
+    if (slotHistory.rows[0]) throw new HttpError(409, 'Slotmachine history must be preserved; keep this block');
     await clearScreenIfReferences(client, gameId, admin.username, { blockId });
     await client.query('UPDATE game_nights SET current_round_block_id=NULL WHERE id=$1 AND current_round_block_id=$2', [gameId, blockId]);
     await client.query('DELETE FROM round_blocks WHERE id=$1', [blockId]);

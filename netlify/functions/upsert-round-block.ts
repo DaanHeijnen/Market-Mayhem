@@ -3,11 +3,12 @@ import { withTransaction } from '../lib/db';
 import { body, ok, intValue, textValue, HttpError } from '../lib/http';
 import { incrementGameVersion } from '../lib/game-state';
 import { mediaKeyValue } from '../lib/media';
+import { SLOT_DEFAULT_MAX_SPINS, SLOT_MAX_SPINS_LIMIT } from '../lib/slotmachine';
 import { wrap } from './_wrap';
 
 // Must stay in step with round_blocks_type_check (migration 0007) and with
 // blockMeta.ts on the client, which generates the content picker from the same set.
-const TYPES = ['TEXT','QUESTION','ROULETTE','DUOLINGO_QUESTION','PICTURE','MUSIC','BUZZER','WAGER'] as const;
+const TYPES = ['TEXT','QUESTION','ROULETTE','DUOLINGO_QUESTION','PICTURE','MUSIC','BUZZER','WAGER','SLOTMACHINE'] as const;
 type BlockType = typeof TYPES[number];
 
 function optionalText(value: unknown, max: number) {
@@ -60,6 +61,22 @@ export default wrap(async request => {
     if (!title) throw new HttpError(400, 'Wager rounds require question text');
     payload = { body: bodyText, correctAnswer: optionalText(p.correctAnswer, 300) };
   }
+  if (type === 'SLOTMACHINE') {
+    // Per-block settings only. The reel artwork and the outcome distribution are
+    // game-wide and live in Settings, because the same machine is reused by every slot
+    // block in the night.
+    const maxSpins = p.maxSpins == null
+      ? SLOT_DEFAULT_MAX_SPINS
+      : intValue(p.maxSpins, 'maxSpins', { min: 1, max: SLOT_MAX_SPINS_LIMIT });
+    // An empty allowlist means everyone plays, which is the normal case. Player ids are
+    // checked against this game's roster below, so a stale id cannot silently lock
+    // someone out or let an outsider in.
+    if (p.allowedPlayerIds != null && !Array.isArray(p.allowedPlayerIds)) throw new HttpError(400, 'allowedPlayerIds must be an array');
+    const allowedPlayerIds = Array.isArray(p.allowedPlayerIds)
+      ? [...new Set(p.allowedPlayerIds.map((id: unknown, index: number) => intValue(id, `allowedPlayerIds[${index}]`, { min: 1 })))]
+      : [];
+    payload = { body: bodyText, maxSpins, allowedPlayerIds };
+  }
 
   return ok(await withTransaction(async client => {
     const game = await client.query('SELECT current_round_block_id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
@@ -67,6 +84,14 @@ export default wrap(async request => {
     const round = await client.query('SELECT status FROM rounds WHERE id=$1 AND game_night_id=$2 FOR UPDATE', [roundId, gameId]);
     if (!round.rows[0]) throw new HttpError(404, 'Round not found');
     if (round.rows[0].status === 'COMPLETED') throw new HttpError(409, 'Completed round content is read-only');
+
+    if (type === 'SLOTMACHINE') {
+      const allowed = payload.allowedPlayerIds as number[];
+      if (allowed.length) {
+        const known = await client.query('SELECT COUNT(*)::int AS n FROM players WHERE game_night_id=$1 AND id=ANY($2::bigint[])', [gameId, allowed]);
+        if (Number(known.rows[0].n) !== allowed.length) throw new HttpError(400, 'allowedPlayerIds contains a player from another game');
+      }
+    }
 
     let id = blockId;
     if (blockId) {
@@ -84,6 +109,8 @@ export default wrap(async request => {
         );
         const rouletteHistory = await client.query('SELECT id FROM roulette_games WHERE round_block_id=$1 LIMIT 1', [blockId]);
         if (rouletteHistory.rows[0]) throw new HttpError(409, 'A block with roulette history cannot change type');
+        const slotHistory = await client.query('SELECT id FROM slot_series WHERE round_block_id=$1 LIMIT 1', [blockId]);
+        if (slotHistory.rows[0]) throw new HttpError(409, 'A block with slotmachine history cannot change type');
       }
       await client.query(
         `UPDATE round_blocks SET type=$2,title=$3,payload=$4::jsonb,

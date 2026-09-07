@@ -19,7 +19,8 @@ flowchart LR
 Server reads also synchronize timed state:
 
 - expired `OPEN` predictions become `LOCKED`;
-- a stored roulette `SPINNING` result becomes `RESULT` after the presentation interval.
+- a stored roulette `SPINNING` result becomes `RESULT` after the presentation interval;
+- a slot spin becomes `RESULT` after `SLOT_SPIN_MS`, ending the reel-animation window.
 
 Bet endpoints independently re-check market state/deadline inside their transaction, so a stale client cannot place a late wager.
 
@@ -45,6 +46,8 @@ Round numbers are labels, not execution pointers. A partial unique database inde
 - `QUESTION`
 - `DUOLINGO_QUESTION`
 - `ROULETTE`
+- `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`
+- `SLOTMACHINE`
 
 `game_nights.current_round_block_id` is the operational content cursor. Previous/next controls are conveniences over block order; they never imply `round_number + 1`.
 
@@ -129,6 +132,64 @@ The SPIN command chooses `result_number` with server-side cryptographic randomne
 
 Batch chip placement is canonical and transactional. Public Big Screen roulette data contains only display name, public color, normalized bet type/selection and stake.
 
+## Slotmachine
+
+A `SLOTMACHINE` block is a round content type whose configuration is split by scope:
+
+- **game-wide, in Settings** — the symbol artwork (12 PNGs, shared by all three reels) and the chance/payout for each of the five outcome types. There is one machine for the night, so these are configured once and reused by every slot block.
+- **per block, in `round_blocks.payload`** — title, instruction text, `maxSpins` per series and an optional `allowedPlayerIds` allowlist (empty means everyone).
+
+Symbols are shared rather than per reel: migration `0010` gave each reel its own twelve uploads, which meant asking for 36 files for a machine whose reels look alike, so `0011` collapsed `slot_reel_symbols` to one row per position.
+
+Migration `0012` then removed the per-combination model entirely. `0010`/`0011` stored a chance and a payout for each specific symbol triple — up to 1728 rows, with `AAA` meaning three copies of one particular image. That is replaced by the five outcome types below, and the configuration no longer mentions images at all.
+
+Symbol artwork reuses the round-media path: `upload-block-media` with `kind=image` stores the file in Netlify Blobs and only the key is persisted, and `block-media` serves it. No second upload or storage mechanism was added.
+
+### Outcome selection
+
+The machine pays for **patterns, not pictures**. There are five fixed outcome types, each with an Admin-set chance and payout in `slot_outcome_types`:
+
+`NO_WIN`, `TWO_SPLIT` (`C D C` on the main row), `TWO_ADJACENT` (`C C D` / `D C C`), `THREE_LINE` (three alike on a payline), `THREE_ANYWHERE` (three alike off the paylines).
+
+The visible field is 3 rows × 3 reels. Paylines are the three rows and the two diagonals; columns are deliberately excluded, since a column is one reel. Row 1 is the main row and is what decides the two-alike categories. `TWO_ADJACENT` and `TWO_SPLIT` are separate categories precisely so side-by-side can out-pay split.
+
+A spin runs in two steps, both server-side:
+
+1. `pickOutcomeType` draws a category weighted-random from the configured chances.
+2. `generateGrid` builds a 3×3 field for that category, choosing the symbol and the positions at random from the twelve uploaded symbols.
+
+`generateGrid` constructs rather than rejection-samples blindly: it places the pattern, then fills the remaining cells under two constraints — a per-symbol cap of two occurrences (so a pair cannot become a loose triple) and a rule against completing a payline through the cell being filled. It then calls `classifyGrid` on its own result and retries if it does not match, and `slot-spin` re-derives the verdict a second time before paying. That double check is what makes the configured chances the chances players actually see: a spin drawn as `TWO_ADJACENT` can never also show three alike.
+
+`classifyGrid` is the arbiter and is a total function — every field maps to exactly one category, by precedence: three on a line, then a loose triple, then an adjacent pair on the main row, then a split pair, then no win. Precedence matters because a field can satisfy more than one description and only one of them can be paid.
+
+The payout comes from the drawn category, never from which symbols filled it. `winningCells` returns the cells the Big Screen highlights.
+
+Configuration validity has one definition, in `netlify/lib/slotmachine.ts`, reached by two routes that must not disagree: `evaluateSlotConfig` from the full configuration (Admin surfaces and every write path), and `describeSlotConfig` from SQL aggregates on the player snapshot's hottest query. A machine is valid when the total is above zero, the five chances sum to it exactly, and all twelve symbols have artwork — the last because the generator draws freely from the whole set. An invalid machine is still *saveable*, so the Admin can nudge numbers into place, but locking a series and spinning both refuse it.
+
+### Series and spins
+
+```mermaid
+stateDiagram-v2
+  [*] --> ACTIVE : lock series
+  ACTIVE --> ACTIVE : spin (spins_remaining - 1)
+  ACTIVE --> COMPLETED : last spin used
+  ACTIVE --> CANCELLED : block changed / round completed
+```
+
+Locking debits the **whole** total stake in one `SLOT_STAKE` entry, mirroring a prediction deposit rather than a roulette chip: the coins are committed to the machine and cannot be spent elsewhere between spins. The unspun remainder is logical locked value (`stake_per_spin x spins_remaining`) and counts toward total player value alongside prediction and roulette locks.
+
+Each spin is one transaction that chooses the outcome, writes `slot_spins`, credits any payout as `SLOT_PAYOUT` and decrements `spins_remaining`. The payout is credited with the decision rather than after the animation, so there is no unsettled money and no Admin settle step to forget — which is also why the host has no SPIN control: players start their own spins.
+
+Idempotency and concurrency are handled on three levels, so a double SPIN tap cannot produce two spins: `FOR UPDATE` on the series serialises concurrent requests, `UNIQUE (slot_series_id, idempotency_key)` answers a replay with the spin it already produced, and the decrement carries `WHERE spins_remaining > 0` behind a `>= 0` check constraint.
+
+`status='SPINNING'` is purely presentational. The outcome is final when the row is written; the same timed sync that reveals a roulette result flips the spin to `RESULT` after `SLOT_SPIN_MS`, which is what lets the phone and the Admin hold the outcome back until the projector's reels have landed.
+
+### Leaving a slotmachine block
+
+Changing content block or completing the round **closes every live series and refunds unused spins** (`closeSlotSeriesForBlock`), rather than blocking the move as an unfinished roulette does. That is a deliberate difference: a slot series is player-driven and there may be one per player, so blocking would let a player who locked twenty spins and wandered off hold the evening hostage. No coins are lost — only the unspun remainder is returned, and spins already taken keep their outcome and payout. The refund is idempotent through a partial unique index on `(slot_series_id, 'SLOT_REFUND')`.
+
+Because a deactivated player can no longer spin, `remove-player` refuses while they hold a live series and points the Admin at moving on to refund it.
+
 ## Projector state
 
 `screen_state` explicitly selects:
@@ -139,6 +200,9 @@ Batch chip placement is canonical and transactional. Public Big Screen roulette 
 - `PREDICTION_LOCKED`
 - `PREDICTION_RESULT`
 - `ROULETTE`
+- `SLOTMACHINE`
+
+Each block type has exactly one composition that can present it: `setScreenMode` refuses `ROUND_BLOCK` for a roulette or slotmachine block and refuses `SLOTMACHINE` for anything else, so the projector cannot be pointed at a slot block with the plain content scene.
 
 Opening a prediction does not touch `screen_state`; only explicit SHOW PREDICTION does. SHOW MAIN DASHBOARD is always available and changes presentation without changing underlying market state.
 
@@ -168,4 +232,4 @@ The exchange dashboard is derived from real financial chronology. Prediction/rou
 
 Admin sessions require `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH` and `SESSION_SECRET`. `ADMIN_PASSWORD_HASH` is a salted PBKDF2-HMAC-SHA256 value generated by `npm run admin:hash`; the plaintext Admin password is not stored in configuration. Player join tokens are single-use and raw values are never stored in the database. Raw session tokens live only in HttpOnly cookies; stored session digests are HMAC-protected.
 
-Game reset requires Admin authentication, game ID and exact server-side phrase `yes delete`. It is transactional, game-scoped, writes `GAME_RESET`, deletes game-owned operational/financial data and recreates dashboard state while leaving Admin sessions/audit history available.
+Game reset requires Admin authentication, game ID and exact server-side phrase `yes delete`. It is transactional, game-scoped, writes `GAME_RESET`, deletes game-owned operational/financial data — including slotmachine symbols, outcomes, series and spins — and recreates dashboard state while leaving Admin sessions/audit history available.

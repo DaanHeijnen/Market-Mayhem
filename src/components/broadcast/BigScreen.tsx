@@ -3,9 +3,13 @@ import { RouletteTable, type RouletteMarker } from '../shared/RouletteTable';
 import { RouletteWheel } from '../shared/RouletteWheel';
 import { CoinIcon } from '../shared/CoinIcon';
 import { PlayerValueGraph } from '../shared/PlayerValueGraph';
+import { SlotReels } from '../shared/SlotReels';
 
 const QUESTION_EMOJIS = ['🍆', '🌽', '🍑', '😳'] as const;
 const money = (n: number) => new Intl.NumberFormat().format(n);
+// Must match SLOT_SPIN_MS in netlify/lib/slotmachine.ts: the server flips a spin from
+// SPINNING to RESULT after that window, and the reels must have landed by then.
+const SLOT_SPIN_MS = 3200;
 
 export function BigScreen({ gameId }: { gameId: number }) {
   const { data: s, error } = useGamePolling<any>(gameId, 'screen', `/api/screen-state?gameId=${gameId}`);
@@ -15,6 +19,7 @@ export function BigScreen({ gameId }: { gameId: number }) {
   if (s.mode === 'PREDICTION_LOCKED' && s.prediction) return <PredictionScene p={s.prediction} phase="LOCKED" />;
   if (s.mode === 'PREDICTION_RESULT' && s.prediction) return <PredictionScene p={s.prediction} phase="RESULT" />;
   if (s.mode === 'ROULETTE') return <RouletteScene roulette={s.roulette} round={s.round} block={s.block} />;
+  if (s.mode === 'SLOTMACHINE') return <SlotScene slot={s.slotmachine} round={s.round} block={s.block} />;
   return <Dashboard s={s} error={error} />;
 }
 
@@ -121,6 +126,93 @@ function RouletteScene({ roulette: r, round, block }: { roulette: any; round: an
     <div className="roulette-screen-header"><div><div className="label muted">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'MARKET MAYHEM'}</div><h1 className="display">{block?.title || 'ROULETTE'}</h1></div><div className="roulette-status"><span>{r?.status || 'READY'}</span><b>{markers.length} chips</b></div></div>
     {!r ? <div className="screen-center-message">ROULETTE READY</div> : r.status === 'CANCELLED' ? <div className="screen-center-message">ROULETTE CANCELLED<small>Active stakes refunded</small></div> : <div className="roulette-screen-grid"><RouletteWheel status={r.status} resultNumber={r.result_number} /><div className="roulette-board-wrap"><RouletteTable markers={markers} disabled compact={false} /><div className="roulette-board-caption">{r.status === 'OPEN' ? 'BETTING OPEN · CHIPS UPDATE LIVE' : r.status === 'LOCKED' ? 'BETS LOCKED' : r.status === 'SPINNING' ? 'SPINNING…' : r.result_number != null ? `RESULT · ${r.result_number}` : 'ROULETTE'}</div></div></div>}
   </div>;
+}
+
+/**
+ * The slotmachine, on the projector.
+ *
+ * The only surface in the product that draws the field: phones are controllers and never
+ * show it. Everything here presents a decision the backend already made and stored —
+ * `currentSpin.grid` is the committed 3x3 field, `winCells` are the cells that form its
+ * winning pattern, and `spinning` only says whether the animation window has elapsed.
+ */
+function SlotScene({ slot, round, block }: { slot: any; round: any; block: any }) {
+  const spin = slot?.currentSpin || null;
+  // While the reels are still turning the numbers below them would give the result
+  // away — so the scene withholds them until the animation has landed, exactly as the
+  // roulette wheel withholds its winning number.
+  const spinning = Boolean(spin?.spinning);
+  const revealed = Boolean(spin) && !spinning;
+  const field = spin && Array.isArray(spin.grid) && spin.grid.length === 3 ? spin.grid : null;
+
+  return <div className="slot-screen">
+    <div className="slot-screen-header">
+      <div className="slot-screen-title">
+        <div className="label muted">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'MARKET MAYHEM'}</div>
+        <h1 className="display">{block?.title || 'SLOTMACHINE'}</h1>
+      </div>
+      <div className="slot-screen-player">
+        <span>{spin ? String(spin.playerName).toUpperCase() : 'WAITING FOR A PLAYER'}</span>
+        <b>{spin ? `SPIN ${spin.spinNumber} OF ${spin.totalSpins}` : 'LOCK A SERIES ON YOUR PHONE'}</b>
+      </div>
+    </div>
+
+    {!slot?.configValid
+      ? <div className="screen-center-message">SLOTMACHINE NOT CONFIGURED<small>{slot?.configReason || 'Finish the setup in Settings'}</small></div>
+      : <>
+        <SlotReels
+          field={field}
+          strip={slot.strip}
+          winCells={revealed ? (spin.winCells || []) : []}
+          spinning={spinning}
+          spinMs={SLOT_SPIN_MS}
+          spinId={spin?.id ?? null}
+        />
+
+        {/* The category is the headline: the payout belongs to the pattern, so naming
+            the pattern is what explains the win to the room. */}
+        <div className="slot-outcome-bar">
+          <div className={`slot-outcome ${revealed && spin.payout > 0 ? 'is-win' : ''}`}>
+            <span>UITKOMST</span>
+            <b>{spinning ? '· · ·' : revealed ? spin.outcome : '—'}</b>
+          </div>
+          <SlotStat label="INZET PER SPIN" value={spin ? spin.stakePerSpin : '—'} coin />
+          <SlotStat label="PAYOUT" value={spinning || !spin ? '—' : `${formatMultiplier(spin.payoutMultiplier)}x`} />
+          <SlotStat label="GEWONNEN" value={spinning || !spin ? '—' : spin.payout} coin highlight={revealed && spin.payout > 0} />
+          <SlotStat label="SPINS LEFT" value={spin ? spin.spinsRemaining : '—'} />
+        </div>
+
+        <div className="slot-screen-footer">
+          {spinning
+            ? 'SPINNING…'
+            : revealed
+              ? spin.payout > 0
+                ? `${String(spin.playerName).toUpperCase()} WINT ${spin.payout} COINS · ${String(spin.outcome).toUpperCase()}`
+                : `${String(spin.playerName).toUpperCase()} — GEEN WINST`
+              : 'CHOOSE YOUR STAKE AND SPINS ON YOUR PHONE'}
+        </div>
+
+        {slot.recentSpins.length > 0 && <div className="slot-history">
+          {slot.recentSpins.map((previous: any) => <div className={`slot-history-row ${previous.payout > 0 ? 'is-win' : ''}`} key={previous.id}>
+            <span>{String(previous.playerName).toUpperCase()}</span>
+            <b>{previous.status === 'RESULT' ? previous.outcome : '· · ·'}</b>
+            <em>{previous.status === 'RESULT' ? previous.payout > 0 ? `+${previous.payout}` : '—' : ''}</em>
+          </div>)}
+        </div>}
+      </>}
+  </div>;
+}
+
+function SlotStat({ label, value, coin = false, highlight = false }: { label: string; value: any; coin?: boolean; highlight?: boolean }) {
+  return <div className={`slot-stat ${highlight ? 'is-win' : ''}`}>
+    <span>{label}</span>
+    <b>{coin && typeof value === 'number' && <CoinIcon size={22} />}{value}</b>
+  </div>;
+}
+
+/** 3x rather than 3.000x — trailing zeros are noise at projector size. */
+function formatMultiplier(value: number) {
+  return Number(value).toFixed(2).replace(/\.?0+$/, '');
 }
 
 function Scene({ children, className = '' }: { children: any; className?: string }) { return <div className={`screen-scene ${className}`}>{children}</div>; }

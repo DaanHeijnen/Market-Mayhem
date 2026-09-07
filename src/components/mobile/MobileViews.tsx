@@ -27,6 +27,10 @@ export function MobileViews({ state: s, gameId, view, predictionId, busy, act, g
 }) {
   const currentPrediction = s.predictions.find((p: any) => p.id === predictionId);
   if (s.interactiveBlock) return <LiveQuestionView state={s} block={s.interactiveBlock} busy={busy} act={act} gameId={gameId} />;
+  // Backend-driven, like the live question above it: while a slotmachine block is the
+  // live content the phone becomes its controller, and it goes away again on its own
+  // when the Admin moves to the next block. There is no route to reach it by hand.
+  if (s.slotmachine) return <SlotControllerView state={s} slot={s.slotmachine} busy={busy} act={act} gameId={gameId} />;
   if (view === 'predictions') return <PredictionList state={s} go={go} busy={busy} act={act} gameId={gameId} />;
   if (view === 'prediction' && currentPrediction) return <PredictionDetail state={s} prediction={currentPrediction} busy={busy} act={act} go={go} gameId={gameId} />;
   if (view === 'roulette') return <RouletteView state={s} busy={busy} act={act} go={go} gameId={gameId} />;
@@ -49,6 +53,7 @@ function Home({ state: s, go, gameId }: { state: any; go: (x?: string) => void; 
       <div className="wallet-breakdown">
         <span>Prediction deposits <b>{s.player.lockedPrediction}</b></span>
         <span>Roulette locked <b>{s.player.lockedRoulette}</b></span>
+        <span>Slotmachine locked <b>{s.player.lockedSlot ?? 0}</b></span>
         <span>Total player value <b>{s.player.totalValue}</b></span>
       </div>
     </Card>
@@ -261,6 +266,132 @@ function LiveQuestionView({ state: s, block, busy, act, gameId }: { state: any; 
     {revealed && <Card className={block.isCorrect ? 'answer-correct' : 'answer-wrong'}><b>{block.isCorrect ? 'CORRECT' : 'NOT THIS TIME'}</b><span>{block.isCorrect && block.rewardCoins > 0 ? `+${block.rewardCoins} coins credited automatically.` : block.isCorrect ? 'Correct answer.' : 'No reward on this question.'}</span></Card>}
     <div className="live-question-wallet"><CoinIcon size={18} /> {s.player.balance} available</div>
   </div>;
+}
+
+/**
+ * The slotmachine controller.
+ *
+ * Deliberately shows no reels. The phone's whole job is choosing a stake and a number of
+ * spins, committing that series, and then firing spins — the machine itself is on the
+ * Big Screen, and this player is meant to be looking up at it.
+ *
+ * Two states: before the series is locked the stake and spin count are editable and the
+ * total is shown; after it is locked they are fixed and only SPIN remains, until the
+ * last spin is used and a new series can be started.
+ */
+function SlotControllerView({ state: s, slot, busy, act, gameId }: { state: any; slot: any; busy: boolean; act: (x: () => Promise<unknown>) => void; gameId: number }) {
+  const series = slot.series;
+  const [stakePerSpin, setStakePerSpin] = useState(5);
+  const [spins, setSpins] = useState(() => Math.min(5, slot.maxSpins));
+  const [lockKey, setLockKey] = useState(() => crypto.randomUUID());
+  const [spinKey, setSpinKey] = useState(() => crypto.randomUUID());
+
+  // A fresh key per series, so retrying a lock is idempotent but a genuinely new series
+  // is never mistaken for a replay of the previous one.
+  useEffect(() => { setLockKey(crypto.randomUUID()); }, [slot.blockId, series?.id]);
+  // A fresh key per remaining-spin count: the same key would be treated as a replay and
+  // return the previous spin instead of taking a new one.
+  useEffect(() => { setSpinKey(crypto.randomUUID()); }, [series?.id, series?.spinsRemaining]);
+
+  const affordableSpins = stakePerSpin > 0 ? Math.floor(s.player.balance / stakePerSpin) : 0;
+  const maxSpins = Math.max(0, Math.min(slot.maxSpins, affordableSpins));
+  useEffect(() => { setSpins(current => Math.max(1, Math.min(current, maxSpins || 1))); }, [maxSpins]);
+  const totalStake = stakePerSpin * spins;
+
+  const lastSpin = series?.lastSpin || slot.lastSeries?.lastSpin || null;
+  const spinning = lastSpin?.status === 'SPINNING';
+  const canLock = !busy && slot.configValid && slot.allowed && maxSpins > 0 && spins >= 1 && spins <= maxSpins && totalStake <= s.player.balance;
+
+  return <div className="slot-mobile">
+    <div className="slot-mobile-header">
+      <div className="label muted">SLOTMACHINE</div>
+      <span className={`pill status-pill ${series ? 'open' : 'neutral'}`}>{series ? 'SERIES LOCKED' : 'READY'}</span>
+    </div>
+    <h1 className="display slot-mobile-title">{slot.title}</h1>
+    {slot.instructions && <p className="muted slot-mobile-instructions">{slot.instructions}</p>}
+    <p className="muted slot-mobile-watch">Watch the reels on the big screen — this is your controller.</p>
+
+    {!slot.allowed
+      ? <Card><b>You are not taking part in this slotmachine.</b><span className="muted">The host chose which players play this one.</span></Card>
+      : !slot.configValid
+        ? <Card><b>The slotmachine is not ready yet.</b><span className="muted">{slot.configReason || 'The host is still setting it up.'}</span></Card>
+        : series
+          ? <>
+            <Card className="slot-locked-card">
+              <div className="slot-locked-title">INZET VASTGEZET</div>
+              <div className="slot-locked-grid">
+                <span>Stake per spin</span><b><CoinIcon size={16} /> {series.stakePerSpin}</b>
+                <span>Spins remaining</span><b>{series.spinsRemaining} of {series.totalSpins}</b>
+                <span>Total committed</span><b><CoinIcon size={16} /> {series.totalStake}</b>
+              </div>
+            </Card>
+            <button
+              className="btn btn-primary slot-spin-btn"
+              disabled={busy || spinning || series.spinsRemaining <= 0}
+              onClick={() => act(async () => {
+                await mutation('/api/slot-spin', { gameId, seriesId: series.id }, true, spinKey);
+                setSpinKey(crypto.randomUUID());
+              })}
+            >{spinning ? 'SPINNING…' : `SPIN · ${series.spinsRemaining} LEFT`}</button>
+            <SlotLastSpin spin={lastSpin} />
+          </>
+          : <>
+            {slot.lastSeries && <Card className="slot-series-done">
+              <b>SERIES FINISHED</b>
+              <span className="muted">{slot.lastSeries.status === 'CANCELLED' ? 'Unused spins were refunded.' : 'All spins used — lock a new series to keep playing.'}</span>
+            </Card>}
+            <Card className="slot-setup-card">
+              <label className="slot-field">
+                <span className="label muted">INZET PER SPIN</span>
+                <div className="slot-stake-picker">
+                  {[1, 5, 10, 25].map(value => <button key={value} className={`chip ${stakePerSpin === value ? 'selected' : ''}`} disabled={value > s.player.balance} onClick={() => setStakePerSpin(value)}>{value}</button>)}
+                  <input className="field slot-stake-input" type="number" min={1} max={Math.max(1, s.player.balance)} value={stakePerSpin} onChange={e => setStakePerSpin(Math.max(1, Number(e.target.value) || 1))} />
+                </div>
+              </label>
+
+              <label className="slot-field">
+                <span className="label muted">AANTAL SPINS · MAX {slot.maxSpins}</span>
+                <div className="slot-spin-picker">
+                  <button className="btn btn-secondary btn-compact" disabled={spins <= 1} onClick={() => setSpins(x => Math.max(1, x - 1))}>−</button>
+                  <b className="slot-spin-count">{spins}</b>
+                  <button className="btn btn-secondary btn-compact" disabled={spins >= maxSpins} onClick={() => setSpins(x => Math.min(maxSpins, x + 1))}>+</button>
+                </div>
+                <input className="stake-range" type="range" min={1} max={Math.max(1, maxSpins)} value={Math.min(spins, Math.max(1, maxSpins))} onChange={e => setSpins(Number(e.target.value))} />
+              </label>
+
+              <div className="slot-total-card">
+                <span>TOTALE INZET</span>
+                <strong><CoinIcon size={22} /> {totalStake}</strong>
+                <em className="muted">{s.player.balance} available</em>
+              </div>
+
+              <button className="btn btn-primary btn-full" disabled={!canLock} onClick={() => act(() => mutation('/api/slot-lock-series', { gameId, blockId: slot.blockId, stakePerSpin, spins }, true, lockKey))}>
+                INZET VASTZETTEN
+              </button>
+              {maxSpins === 0 && <p className="muted microcopy">Your wallet does not cover a spin at this stake — lower the stake per spin.</p>}
+              {maxSpins > 0 && <p className="muted microcopy">Once locked, the stake and spin count cannot be changed. Unused spins are refunded if the host moves on.</p>}
+            </Card>
+            <SlotLastSpin spin={lastSpin} />
+          </>}
+
+    <div className="live-question-wallet"><CoinIcon size={18} /> {s.player.balance} available</div>
+  </div>;
+}
+
+/**
+ * The last outcome, named. Withheld by the server until the reels have landed.
+ *
+ * The phone gets the category — "2 dezelfde naast elkaar" — and never the field itself:
+ * the 3x3 belongs on the projector, which is where the player should be looking.
+ */
+function SlotLastSpin({ spin }: { spin: any }) {
+  if (!spin) return null;
+  if (spin.status !== 'RESULT') return <Card className="slot-last-spin"><b>SPINNING…</b><span className="muted">Look at the big screen.</span></Card>;
+  const won = Number(spin.payout) > 0;
+  return <Card className={`slot-last-spin ${won ? 'is-win' : ''}`}>
+    <b className="slot-last-outcome">{spin.outcome}</b>
+    <span>{won ? `+${spin.payout} coins at ${Number(spin.payoutMultiplier).toFixed(2).replace(/\.?0+$/, '')}x` : 'Geen winst — no payout on this spin'}</span>
+  </Card>;
 }
 
 function Ledger({ state: s }: { state: any }) {

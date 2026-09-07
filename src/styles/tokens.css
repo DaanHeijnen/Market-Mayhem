@@ -850,6 +850,7 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .accent-magenta { --block-accent: var(--magenta); --block-accent-ink: #fff; }
 .accent-blue    { --block-accent: var(--blue);    --block-accent-ink: #fff; }
 .accent-green   { --block-accent: var(--green);   --block-accent-ink: #fff; }
+.accent-lime    { --block-accent: var(--lime);    --block-accent-ink: var(--ink); }
 .accent-ink     { --block-accent: var(--ink);     --block-accent-ink: #fff; }
 .accent-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--block-accent, var(--muted)); flex: 0 0 auto; }
 .accent-swatch { width: 28px; height: 28px; border-radius: 8px; background: var(--block-accent, var(--muted)); }
@@ -1040,7 +1041,8 @@ button.chip-blue:hover { background: var(--violet); }
   text-transform: uppercase;
   white-space: nowrap;
 }
-.staged-card.accent-orange .staged-badge, .staged-card.accent-cyan .staged-badge { background: rgba(20,18,15,.16); }
+.staged-card.accent-orange .staged-badge, .staged-card.accent-cyan .staged-badge,
+.staged-card.accent-lime .staged-badge { background: rgba(20,18,15,.16); }
 .presenter-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .go-live-btn { width: 100%; min-height: 56px; font-size: 14px; }
 
@@ -1189,3 +1191,320 @@ button.chip-blue:hover { background: var(--violet); }
 .request-mine-row:last-child { border-bottom: 0; }
 .request-mine-question { font-size: 13px; font-weight: 700; line-height: 1.4; }
 .request-mine-row .status-pill { justify-self: start; font-size: 10px; padding: 6px 12px; }
+
+
+/* ============================================================================
+   SLOTMACHINE
+   A round content block: reels on the projector, a controller on the phone, and
+   a configuration surface in Settings. Reuses the existing card, chip, pill and
+   accent vocabulary — the machine is playful but it is still Market Mayhem, so
+   there is no separate casino palette here.
+   ========================================================================= */
+
+/* --- Settings: symbol grid -------------------------------------------- */
+/* One shared set of twelve, so this is a single grid rather than three. */
+.slot-symbol-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+.slot-symbol-slot { display: grid; gap: 6px; }
+.slot-symbol-drop {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  border: 2px dashed #D7D1BC;
+  border-radius: var(--r-control);
+  background: var(--surface-soft);
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color .15s ease, background .15s ease;
+}
+.slot-symbol-drop:hover, .slot-symbol-drop.is-dragging { border-color: var(--blue); background: var(--white); }
+.slot-symbol-drop:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.slot-symbol-drop.has-file { border-style: solid; border-color: var(--border); background: var(--white); }
+.slot-symbol-drop img { width: 100%; height: 100%; object-fit: contain; padding: 6px; }
+.slot-symbol-placeholder { color: var(--muted); font-size: 22px; font-weight: 700; line-height: 1; }
+.slot-symbol-meta { display: flex; align-items: baseline; gap: 6px; font-size: 11px; }
+.slot-symbol-meta b { font-family: var(--display); font-variant-numeric: tabular-nums; }
+.slot-symbol-meta span { color: var(--muted); font-weight: 800; letter-spacing: .06em; }
+.slot-symbol-remove { margin-left: auto; padding: 0; color: var(--red); font-size: 11px; }
+.slot-symbol-error { font-size: 10px; line-height: 1.3; }
+
+/* --- Settings: outcome distribution ----------------------------------- */
+.slot-validity {
+  display: grid;
+  gap: 3px;
+  margin: 16px 0;
+  padding: 14px 18px;
+  border-left: 4px solid var(--warning);
+  border-radius: var(--r-control);
+  background: var(--surface-soft);
+  font-size: 13px;
+}
+.slot-validity.is-valid { border-left-color: var(--green); }
+.slot-validity span { font-size: 12px; line-height: 1.45; }
+/* Five fixed categories rather than a per-combination list. */
+.slot-outcome-table { margin: 16px 0 18px; }
+.slot-outcome-table table { width: 100%; }
+.slot-outcome-name { font-family: var(--display); font-size: 14px; }
+.slot-outcome-hint { margin-top: 3px; font-size: 11px; line-height: 1.45; }
+.slot-pattern-chip {
+  display: inline-block;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .1em;
+  white-space: nowrap;
+}
+.slot-num-input { width: 82px; min-height: 38px; padding: 7px 10px; text-align: right; }
+.slot-fixed-payout { font-family: var(--display); font-size: 13px; }
+
+/* --- Round builder: block settings ------------------------------------ */
+.slot-block-editor { display: grid; gap: 16px; margin-top: 16px; }
+.slot-config-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  border-left: 4px solid var(--warning);
+  border-radius: var(--r-control);
+  background: var(--surface-soft);
+}
+.slot-config-notice.is-valid { border-left-color: var(--green); }
+.slot-config-notice > div { display: grid; gap: 3px; font-size: 13px; }
+.slot-config-notice span { font-size: 12px; line-height: 1.45; }
+.slot-participants { display: grid; gap: 8px; }
+
+/* --- Control Center: live panel --------------------------------------- */
+.slot-live-panel { border-left: 4px solid var(--lime); }
+.slot-live-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+  margin: 18px 0;
+}
+.slot-live-stats > div { display: grid; gap: 4px; }
+.slot-live-stats b { display: flex; align-items: center; gap: 6px; font-family: var(--display); font-size: 19px; font-weight: 700; }
+.slot-live-history { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+
+/* --- Player Mobile: the controller ------------------------------------ */
+/* No reels here on purpose. The phone chooses a stake and fires spins; the
+   machine is on the projector, and the player should be looking at it. */
+.slot-mobile { display: grid; gap: 14px; }
+.slot-mobile-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.slot-mobile-title { margin: 0; font-size: 26px; line-height: 1.1; }
+.slot-mobile-instructions { margin: 0; font-size: 13px; line-height: 1.5; }
+.slot-mobile-watch { margin: 0; font-size: 12px; font-style: italic; }
+.slot-setup-card { display: grid; gap: 18px; }
+.slot-field { display: grid; gap: 9px; }
+.slot-stake-picker { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.slot-stake-picker .chip { min-width: 52px; justify-content: center; cursor: pointer; }
+.slot-stake-picker .chip.selected { background: var(--ink); color: #fff; }
+.slot-stake-picker .chip:disabled { opacity: .4; }
+.slot-stake-input { width: 92px; text-align: right; }
+.slot-spin-picker { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.slot-spin-picker .btn-compact { min-width: 56px; font-size: 20px; }
+.slot-spin-count { font-family: var(--display); font-size: 34px; font-variant-numeric: tabular-nums; }
+.slot-total-card {
+  display: grid;
+  gap: 4px;
+  padding: 18px 20px;
+  border-radius: var(--r-control);
+  background: var(--ink);
+  color: #fff;
+  text-align: center;
+}
+.slot-total-card > span { color: var(--dark-secondary); font-size: 11px; font-weight: 800; letter-spacing: .12em; }
+.slot-total-card strong { display: flex; align-items: center; justify-content: center; gap: 8px; font-family: var(--display); font-size: 36px; line-height: 1.1; }
+.slot-total-card em { color: var(--dark-muted); font-size: 12px; font-style: normal; }
+.slot-locked-card { border-left: 4px solid var(--lime); }
+.slot-locked-title { font-family: var(--display); font-size: 13px; font-weight: 800; letter-spacing: .12em; }
+.slot-locked-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 9px 16px;
+  margin-top: 14px;
+  font-size: 13px;
+}
+.slot-locked-grid b { display: flex; align-items: center; justify-content: flex-end; gap: 5px; font-family: var(--display); }
+.slot-spin-btn { width: 100%; min-height: 86px; font-family: var(--display); font-size: 22px; letter-spacing: .06em; }
+.slot-last-spin { display: grid; gap: 5px; text-align: center; }
+.slot-last-spin b { font-family: var(--display); font-size: 30px; letter-spacing: .1em; }
+/* A category name is words, not three letters, so it needs to wrap rather than track. */
+.slot-last-outcome { font-size: 19px !important; letter-spacing: .02em !important; line-height: 1.2; }
+.slot-last-spin span { color: var(--secondary); font-size: 13px; }
+.slot-last-spin.is-win { border-left: 4px solid var(--green); }
+.slot-last-spin.is-win b { color: var(--green); }
+.slot-series-done { display: grid; gap: 4px; }
+
+/* --- Big Screen: the machine ------------------------------------------ */
+.slot-screen {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 4vh 5vw;
+  background: var(--paper);
+  color: var(--ink);
+  overflow: hidden;
+}
+.slot-screen::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  width: 360px;
+  height: 360px;
+  right: -120px;
+  top: -140px;
+  border-radius: 50%;
+  background: var(--lime);
+}
+.slot-screen::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  width: 340px;
+  height: 340px;
+  left: -130px;
+  bottom: -150px;
+  border-radius: 50%;
+  background: var(--violet);
+}
+.slot-screen-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+.slot-screen-title { padding: 16px 28px; border-radius: 999px; background: var(--ink); color: #fff; }
+.slot-screen-title .muted { color: var(--dark-secondary); }
+.slot-screen-title h1 { margin: .4vh 0 0; font-size: 2.8vw; line-height: 1.05; }
+.slot-screen-player { display: grid; gap: 4px; padding: 16px 26px; border-radius: 24px; background: var(--blue); color: #fff; text-align: right; }
+.slot-screen-player span { font: 700 1.5vw var(--display); }
+.slot-screen-player b { color: #DBE2FF; font-size: .95vw; font-weight: 700; letter-spacing: .06em; }
+
+/* Three reels, each a window onto a scrolling strip. The strip is translated by
+   SlotReels; the geometry lives here so it scales to any projector. */
+.slot-reels {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.2vw;
+  flex: 1;
+  min-height: 0;
+  /* A square field, so every cell is square and a whole symbol fits in it without
+     being letterboxed into a thin strip. The height comes from the flex track and the
+     width follows from it; max-width keeps a very tall window from overflowing. */
+  aspect-ratio: 1 / 1;
+  width: auto;
+  max-width: min(64vw, 1000px);
+  margin: 2vh auto;
+  padding: 1.2vw;
+  border-radius: 2vw;
+  background: var(--white);
+  box-shadow: inset 0 0 0 .5vh var(--ink);
+}
+.slot-reel {
+  position: relative;
+  min-height: 0;
+  border-radius: 1.2vw;
+  background: var(--surface-soft);
+  overflow: hidden;
+}
+/* Height and translateY come from SlotReels: the strip is as tall as its cell count
+   divided by the three symbols visible at a time, so each cell is exactly a third of
+   the reel.
+   `grid-auto-rows: 1fr` is what makes that true. Without it the rows are auto-sized,
+   so each one grows to its image's intrinsic height, the strip's own height is ignored
+   and the symbols render several times too large and bleed across cell boundaries. */
+.slot-reel-strip {
+  position: absolute;
+  inset: 0 0 auto;
+  display: grid;
+  grid-auto-rows: 1fr;
+  will-change: transform;
+}
+/* `display: grid` centres the letter fallback; the image is positioned instead. */
+.slot-cell { position: relative; display: grid; place-items: center; min-height: 0; overflow: hidden; }
+/* The whole symbol has to be visible, never cropped and never spilling out of its cell.
+   Absolutely positioned rather than laid out as a grid item, because a percentage height
+   on a grid item inside this percentage-height strip resolves as indefinite — which is
+   what let a tall symbol render taller than its cell. Against a positioned containing
+   block the percentages do resolve, so the box is definitely 84% of the cell and
+   `contain` letterboxes the whole image inside it. */
+.slot-cell img {
+  position: absolute;
+  inset: 4%;
+  width: 92%;
+  height: 92%;
+  object-fit: contain;
+}
+.slot-cell-letter { color: var(--muted); font: 700 3.2vw var(--display); }
+/* Highlight overlay across all three reels, so a diagonal reads as one shape. Laid out
+   on the same 3x3 the reels produce: gaps come from the container's column gap, rows
+   split the reel height into thirds. */
+.slot-win-overlay {
+  position: absolute;
+  inset: 1.2vw;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  column-gap: 1.2vw;
+  pointer-events: none;
+}
+.slot-win-cell { border-radius: 1vw; transition: background .25s ease, box-shadow .25s ease; }
+/* The main row is where a pair pays, so it stays faintly marked even with no win. */
+.slot-win-cell.is-main-row { box-shadow: inset 0 0 0 .25vh rgba(20,18,15,.12); }
+.slot-win-cell.is-win {
+  background: rgba(223,242,76,.34);
+  box-shadow: inset 0 0 0 .45vh var(--lime);
+  animation: gne-pulse 1.1s ease-in-out infinite;
+}
+.slot-reels.is-spinning .slot-win-cell.is-main-row { box-shadow: inset 0 0 0 .25vh rgba(61,90,254,.28); }
+
+.slot-outcome-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) repeat(4, minmax(0, 1fr));
+  gap: 1.2vw;
+  align-items: stretch;
+}
+.slot-outcome, .slot-stat {
+  display: grid;
+  gap: .4vh;
+  align-content: center;
+  padding: 1.6vh 1.4vw;
+  border-radius: 1.2vw;
+  background: var(--white);
+  box-shadow: inset 0 0 0 2px var(--border);
+}
+.slot-outcome { background: var(--ink); color: #fff; box-shadow: none; text-align: center; }
+.slot-outcome > span { color: var(--dark-secondary); font-size: .8vw; font-weight: 800; letter-spacing: .14em; }
+.slot-outcome > b { font: 700 2.1vw var(--display); letter-spacing: .02em; line-height: 1.1; }
+.slot-outcome.is-win { background: var(--lime); color: var(--ink); }
+.slot-outcome.is-win > span { color: rgba(20,18,15,.7); }
+.slot-stat > span { color: var(--muted); font-size: .75vw; font-weight: 800; letter-spacing: .12em; }
+.slot-stat > b { display: flex; align-items: center; gap: .5vw; font: 700 2vw var(--display); line-height: 1; }
+.slot-stat.is-win > b { color: var(--green); }
+
+.slot-screen-footer {
+  margin-top: 2vh;
+  text-align: center;
+  font: 700 1.9vw var(--display);
+  letter-spacing: .06em;
+}
+.slot-history { display: flex; justify-content: center; gap: 1.2vw; margin-top: 1.6vh; flex-wrap: wrap; }
+.slot-history-row {
+  display: flex;
+  align-items: baseline;
+  gap: .7vw;
+  padding: .9vh 1.2vw;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  font-size: .85vw;
+}
+.slot-history-row b { font-family: var(--display); font-size: 1.1vw; letter-spacing: .08em; }
+.slot-history-row em { color: var(--muted); font-size: .85vw; font-style: normal; }
+.slot-history-row.is-win { background: var(--lime); }
+.slot-history-row.is-win em { color: var(--ink); font-weight: 800; }

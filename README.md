@@ -29,12 +29,12 @@ Market Mayhem is a private game-night economy with player wallets, prediction de
 
 A reset/fresh game has no players, rounds, predictions or transactions.
 
-1. **Settings** — set game name, starting coins and optional maximum wallet percentage per prediction.
+1. **Settings** — set game name, starting coins, optional maximum wallet percentage per prediction, and the slotmachine's reel symbols and outcome odds.
 2. **Players** — create players and generate their single-use join links.
 3. **Rounds** — create rounds in any numbering scheme; execution does not assume `current + 1`.
-4. **Round Content** — add ordered blocks: `TEXT`, `QUESTION`, `DUOLINGO_QUESTION`, `ROULETTE`, `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`.
+4. **Round Content** — add ordered blocks: `TEXT`, `QUESTION`, `DUOLINGO_QUESTION`, `ROULETTE`, `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`, `SLOTMACHINE`.
 5. **Predictions** — set probability, market-specific duration and min/max deposit, then optionally schedule to a round.
-6. **Control Center** — run the round, move through content, operate live questions/roulette, adjust coins and control the projector.
+6. **Control Center** — run the round, move through content, operate live questions/roulette, watch slotmachine series, adjust coins and control the projector.
 
 ## Predictions
 
@@ -80,6 +80,71 @@ State is:
 
 The server selects and stores the winning number before the animation starts. The Big Screen wheel animates toward that stored value; the frontend never chooses the financial result. Public-safe player chips (name, color, position, stake) are shown on the projector. Cancellation is available before the spin starts and refunds active stakes; once the server-selected spin begins, the result must be settled.
 
+## Slotmachine
+
+A `SLOTMACHINE` round block. Not a page and not a permanent dashboard feature: it is content inside a round, added in the Round Content Builder, reorderable among other blocks, and live only while the Admin has that block active.
+
+Where each part lives:
+
+| Surface | Role |
+| --- | --- |
+| Round block | decides *when* the slotmachine is active |
+| Player Mobile | input and control only — **no reels** |
+| Backend | rules, randomiser, money and outcome |
+| Big Screen | the visual machine |
+
+### Settings (game-wide)
+
+One machine serves the whole night, so its symbols and odds are configured once in **Settings**:
+
+- **Symbols** — 12 PNGs, uploaded once and shared by all three reels. Each can be uploaded, replaced, removed and previewed, labelled by position 1–12 (shown as A–L). All twelve are required, because the machine draws freely from the whole set.
+- **Kansen** — a chance and a payout multiplier for each of five fixed outcome types. Percentage is shown automatically as `chance ÷ total × 100`.
+
+The chances belong to **patterns, not to pictures**. There is no table of specific symbol combinations: `AAA` is not "three copies of one particular image", it is "three alike", whichever symbol fills it.
+
+| Uitkomsttype | Pattern | Chance | Payout |
+| --- | --- | --- | --- |
+| Geen winst | `A B C` | set by Admin | always 0x |
+| 2 dezelfde gesplitst | `C D C` | set by Admin | set by Admin |
+| 2 dezelfde naast elkaar | `C C D` or `D C C` | set by Admin | set by Admin |
+| 3 dezelfde op lijn | `A A A` on a payline | set by Admin | set by Admin |
+| 3 dezelfde ergens zichtbaar | three alike, off the paylines | set by Admin | set by Admin |
+
+Two alike side by side is a separate category from two alike split, so `C C D` can pay more than `C D C`. `Geen winst` is pinned at 0x in the UI and by a database constraint.
+
+The visible field is **3 rows × 3 reels**. The paylines are the three rows and the two diagonals — columns are not paylines, since a column is a single reel. The middle row is the *hoofdrij*: it is the row that decides the two-alike categories.
+
+The configuration is **valid** only when the chances sum to exactly the total and all twelve symbols have artwork. An incomplete distribution still saves — you can nudge the numbers into place — but the block refuses to run until it is valid, and Settings, the block editor and the Control Center all say why. A fresh game is seeded with `60 / 20 / 10 / 7 / 3` at `0 / 1.4 / 1.8 / 3 / 5x`, so it starts valid and playable.
+
+### Per-block settings
+
+On the block itself: title, instruction text for phones, **maximum spins per series**, and optionally which players take part (leave all unchecked for everyone).
+
+### Playing
+
+Player Mobile becomes the controller automatically while the block is live:
+
+1. choose **inzet per spin**
+2. choose **aantal spins** (capped by the block maximum and by their wallet)
+3. see **totale inzet** = stake per spin × spins
+4. **INZET VASTZETTEN** — commits the series; stake and spin count are now frozen
+5. **SPIN** — once per remaining spin
+
+The whole total is debited at lock, like a prediction deposit, so committed coins cannot be spent elsewhere between spins. Unused spins are refunded if the series is cancelled.
+
+On each spin the server works in **two steps**:
+
+1. **Which kind of outcome falls** — one of the five categories, drawn weighted-random from the configured chances.
+2. **What that looks like** — a 3×3 field built to match that category, with the symbols and positions chosen at random.
+
+It then re-classifies the finished field and refuses to pay anything that does not match the category it drew. So a spin drawn as "two alike side by side" can never turn out to also show three alike, and the configured percentages are the percentages players actually see. The payout comes from the category, never from which symbols happened to fill it.
+
+The Big Screen shows the full 3×3 field, highlights the cells that form the winning pattern, and names the category (`2 DEZELFDE NAAST ELKAAR`, `3 DEZELFDE OP LIJN`, …) alongside the current player, stake per spin, current spin, spins remaining, payout multiplier, amount won and spin status. Phones show the category name only — never the field.
+
+### Ending safely
+
+Moving to the next content block, or completing the round, closes every live series and refunds spins nobody used — so no slotmachine session keeps running behind the Admin's back. Nothing is lost: spins already taken keep their outcome and payout.
+
 ## Live Duolingo questions
 
 `DUOLINGO_QUESTION` is separate from a static `QUESTION` block. Admin configures question text, four answer texts, one correct answer and a reward. The four player controls always use:
@@ -101,7 +166,7 @@ Group scoring may be applied retroactively after a round is completed. It change
 ## Wallet and ledger rules
 
 - Available wallet balance never goes below zero.
-- Locked prediction/roulette stakes are unavailable for spending but remain part of total player value until resolved.
+- Locked prediction/roulette stakes, and a slotmachine series' unspun spins, are unavailable for spending but remain part of total player value until resolved.
 - Every money movement is ledger-backed in the same PostgreSQL transaction.
 - Old ledger rows are never edited; corrections are compensating entries.
 - Manual and group adjustments require a reason.
@@ -119,9 +184,9 @@ The default projector is an exchange-style dashboard based on real data only:
 - current round, markets open and total coins in play
 - real public-safe transaction ticker
 
-`total coins in play = available wallets + unresolved prediction deposits + unresolved roulette stakes`.
+`total coins in play = available wallets + unresolved prediction deposits + unresolved roulette stakes + unspun slotmachine spins`.
 
-The projector can also present round blocks, an explicitly featured prediction, and roulette. Control Center contains the exact `/screen/:gameId` preview plus a persistent **SHOW MAIN DASHBOARD** action.
+The projector can also present round blocks, an explicitly featured prediction, roulette, and the slotmachine. Control Center contains the exact `/screen/:gameId` preview plus a persistent **SHOW MAIN DASHBOARD** action.
 
 ## Design system
 
@@ -177,7 +242,7 @@ Notes that save time:
 2. Import it into Netlify.
 3. Enable Netlify Database.
 4. Generate a hash with `npm run admin:hash`, then configure `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH` and `SESSION_SECRET`.
-5. Apply/deploy migrations through `0009_prediction_requests.sql`.
+5. Apply/deploy migrations through `0012_slot_outcome_types.sql`.
 6. Deploy.
 
 Previously deployed migrations are historical and are not rewritten.
