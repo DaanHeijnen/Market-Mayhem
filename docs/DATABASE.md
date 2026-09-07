@@ -33,6 +33,12 @@ erDiagram
   predictions ||--o{ ledger_entries : attributes
   round_groups ||--o{ ledger_entries : attributes
   round_blocks ||--o{ ledger_entries : attributes
+  round_blocks ||--o{ pak_een_zes_games : runs
+  pak_een_zes_games ||--o{ pak_een_zes_participants : orders
+  pak_een_zes_games ||--o{ pak_een_zes_predictions : collects
+  pak_een_zes_games ||--o{ pak_een_zes_draws : records
+  players ||--o{ pak_een_zes_predictions : submits
+  players ||--o{ pak_een_zes_draws : draws
   game_nights ||--|| screen_state : broadcasts
 ```
 
@@ -60,7 +66,7 @@ Manual/group reasons are stored as exact descriptions. Corrections create new le
 
 `rounds` have `UPCOMING`, `ACTIVE`, `COMPLETED`. A partial unique index from migration 0004 enforces at most one active round per game.
 
-`round_blocks` has game/round/type/order/title/JSON payload plus interactive timestamps/status. Migration 0006 expanded allowed types to `TEXT`, `QUESTION`, `DUOLINGO_QUESTION`, `ROULETTE`; migration 0007 adds `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`; migration 0010 adds `SLOTMACHINE`.
+`round_blocks` has game/round/type/order/title/JSON payload plus interactive timestamps/status. Migration 0006 expanded allowed types to `TEXT`, `QUESTION`, `DUOLINGO_QUESTION`, `ROULETTE`; migration 0007 adds `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`; migration 0010 adds `SLOTMACHINE`; migration 0013 adds `PAK_EEN_ZES`.
 
 Payload keys for the types added by 0007. Media blocks store only a Netlify Blobs **key**, never the bytes — the payload travels in every admin-state snapshot, so embedding a file would bloat each poll response:
 
@@ -71,6 +77,7 @@ Payload keys for the types added by 0007. Media blocks store only a Netlify Blob
 Payload keys for the type added by 0010:
 
 - `SLOTMACHINE` — `maxSpins` (per series), `allowedPlayerIds` (empty array means everyone), plus `body` as the instruction text shown on phones. The reel artwork and the outcome distribution are **not** here: they are game-wide and live in their own tables.
+- `PAK_EEN_ZES` — `body` only, as the instruction text shown on phones. There is nothing else to author: the deck is a fixed 52 cards, the game ends on the fourth six, every active player takes part, and the turn order is frozen when the host starts.
 
 `BUZZER` and `WAGER` are authorable and presentable but have no phone-side interaction and no live state machine, matching the Admin UX redesign, which specifies none for them. `blockMeta.ts` marks this with `interactive: false`.
 
@@ -98,6 +105,17 @@ Migration 0010 adds five tables, split by what each thing is scoped to.
 - `SLOT_REFUND` — the unspun remainder, when a series is closed by a block change or round completion.
 
 Deleting a round block or a round is refused once slot series exist, the same rule roulette history has. Player rows cascade, so deactivation (not deletion) remains the route for leaving history intact.
+
+## Pak een Zes
+
+Migration 0013 adds four tables. No money is involved, so there is no wallet or ledger participation — but every table exists so a scoring pass can be added later without replaying the evening.
+
+- `pak_een_zes_games` — one game per block: `status` (`READY`/`PREDICTING`/`LOCKED`/`DRAWING`/`FINISHED`/`CANCELLED`) and `turn_index`, which walks the turn order and wraps. A partial unique index allows only one live game per block, so re-showing a block cannot silently start a second one.
+- `pak_een_zes_participants` — the turn order, frozen at START. Stored rather than derived so a player joining or leaving mid-game cannot reshuffle whose turn it is. Unique on both `(game, player)` and `(game, turn_order)`.
+- `pak_een_zes_predictions` — four ordered picks per player, **one row per slot**, keyed `(game, player, slot)`. Per slot precisely because duplicates are allowed: `Daan, Twan, Daan, Bas` must stay four picks rather than collapse to three names, and picking yourself is allowed so there is no constraint against it. An extra index on `(game, predicted_player_id)` answers "who did people back?" for scoring without a scan.
+- `pak_een_zes_draws` — every card that left the deck, in order, with who drew it. Three unique constraints carry the game's guarantees: `(game, rank, suit)` means a card leaves the deck exactly once, `(game, draw_number)` keeps the sequence honest, and `(game, idempotency_key)` answers a double-tapped KAART PAKKEN with the card it already produced. A CHECK ties `is_six` to `rank = '6'`, so a six event can never be recorded against a non-six. A partial index on `(game_night_id, player_id) WHERE is_six` is what makes the scoring question — who drew a six, which suit, on which draw, how often — cheap.
+
+The drawn rows *are* the deck's history: what remains is derived from them, never from a shuffled list held in memory.
 
 ## Screen state
 
@@ -171,5 +189,6 @@ Migration 0006 adds market-owned:
 - `0010_slotmachine.sql`: slotmachine configuration/series/spin tables, slot ledger attribution, `SLOTMACHINE` added to `round_blocks.type` and to the live/staged/previous `screen_state` mode constraints. Opens by dropping the abandoned `0007_slot_machine` schema, which collides with it by name.
 - `0011_shared_slot_symbols.sql`: collapses `slot_reel_symbols` from 3 x 12 to one shared set of 12, so each symbol is uploaded once instead of three times.
 - `0012_slot_outcome_types.sql`: replaces per-combination chances with the five fixed outcome types, drops `slot_outcomes`, and adds `outcome_type` / `grid` / `win_cells` to `slot_spins`. Payouts now belong to patterns rather than to particular images.
+- `0013_pak_een_zes.sql`: Pak een Zes games, participants, predictions and draws, plus `PAK_EEN_ZES` added to `round_blocks.type` and to the live/staged/previous `screen_state` mode constraints.
 
 Unrelated legacy schema (`teams`, `players.team_id`, avatar/admin-note fields, codewords/timers, session `last_seen_at`, correction link) remains for upgrade safety even though current production UI does not use it.

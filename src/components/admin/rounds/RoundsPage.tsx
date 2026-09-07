@@ -116,7 +116,7 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
       <div className="form-grid compact">
         <label className="span-2">{blockForm.type === 'QUESTION' || blockForm.type === 'DUOLINGO_QUESTION' ? 'Question text' : blockForm.type === 'TEXT' ? 'Optional title' : 'Title'}<input className="field" value={blockForm.title} onChange={e => setBlockForm({ ...blockForm, title: e.target.value })} /></label>
       </div>
-      {['TEXT','QUESTION','PICTURE','MUSIC','BUZZER','WAGER','SLOTMACHINE'].includes(blockForm.type) && <label>{blockForm.type === 'TEXT' ? 'Body / instructions' : blockForm.type === 'SLOTMACHINE' ? 'Instructions shown on the players\u2019 phones' : 'Optional supporting text'}<textarea className="field" rows={blockForm.type === 'TEXT' ? 4 : 2} value={blockForm.body} onChange={e => setBlockForm({ ...blockForm, body: e.target.value })} /></label>}
+      {['TEXT','QUESTION','PICTURE','MUSIC','BUZZER','WAGER','SLOTMACHINE','PAK_EEN_ZES'].includes(blockForm.type) && <label>{blockForm.type === 'TEXT' ? 'Body / instructions' : ['SLOTMACHINE','PAK_EEN_ZES'].includes(blockForm.type) ? 'Instructions shown on the players\u2019 phones' : 'Optional supporting text'}<textarea className="field" rows={blockForm.type === 'TEXT' ? 4 : 2} value={blockForm.body} onChange={e => setBlockForm({ ...blockForm, body: e.target.value })} /></label>}
 
       {blockForm.type === 'PICTURE' && <MediaField
         kind="image" gameId={gameId} value={blockForm.imageKey}
@@ -163,6 +163,12 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
         </div>
       </div>}
 
+      {blockForm.type === 'PAK_EEN_ZES' && <p className="muted type-note">
+        Nothing else to configure: the deck is a fixed 52 cards, the game ends when all four sixes are out, and every
+        active player takes a turn. You open the predictions, close them and start the game from the Control Center;
+        the turn order is fixed when you start.
+      </p>}
+
       {['BUZZER','WAGER'].includes(blockForm.type) && <p className="muted type-note">
         {blockMeta(blockForm.type).label} content is authored and presented on the Big Screen, but has no phone-side flow yet — run it out loud and score with group or coin adjustments.
       </p>}
@@ -183,6 +189,9 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
         {block.type === 'PICTURE' && block.payload?.imageKey && <img className="block-thumb" src={`/api/block-media?key=${encodeURIComponent(block.payload.imageKey)}`} alt="" />}
         {block.type === 'MUSIC' && block.payload?.audioKey && <div className="media-audio"><audio controls preload="none" src={`/api/block-media?key=${encodeURIComponent(block.payload.audioKey)}`} /><span className="muted">{block.payload.audioName || 'Audio'}</span></div>}
         {block.type === 'WAGER' && block.payload?.correctAnswer && <p className="muted block-copy">Correct answer: <b>{block.payload.correctAnswer}</b></p>}
+        {block.type === 'PAK_EEN_ZES' && <p className="muted block-copy">
+          Predict four names, then draw cards until all four sixes are out · run it from the Control Center
+        </p>}
         {block.type === 'SLOTMACHINE' && <p className="muted block-copy">
           Max {block.payload?.maxSpins ?? 10} spins per series · {(block.payload?.allowedPlayerIds || []).length === 0 ? 'everyone plays' : `${block.payload.allowedPlayerIds.length} selected player${block.payload.allowedPlayerIds.length === 1 ? '' : 's'}`}
           {s.slotConfig && !s.slotConfig.status.valid && <> · <b className="neg">machine not configured</b></>}

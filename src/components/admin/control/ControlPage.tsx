@@ -62,6 +62,7 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
   const goLive = () => run('/api/go-live', {});
   const rouletteAction = (action: string) => activeRoulette && run('/api/roulette-action', { rouletteGameId: activeRoulette.id, action }, true);
   const questionAction = (action: string) => liveBlock && run('/api/question-action', { blockId: liveBlock.id, action });
+  const pezAction = (action: string) => liveBlock && run('/api/pak-een-zes-action', { blockId: liveBlock.id, action });
 
   const adjust = async () => {
     if (adjusting) return;
@@ -121,6 +122,24 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
           Max {slot.maxSpins} spins per series · {slot.participantCount === 0 ? 'everyone plays' : `${slot.participantCount} selected player${slot.participantCount === 1 ? '' : 's'}`}
           {slot.lockedCoins > 0 ? ` · ${slot.lockedCoins} coins locked in unspun spins` : ''}
         </span>
+      </>;
+    }
+    if (liveBlock?.type === 'PAK_EEN_ZES') {
+      const pez = s.pakEenZes;
+      const status = pez?.status || 'READY';
+      const awaiting = pez?.awaitingPrediction || [];
+      return <>
+        {status === 'READY' && <button className="btn btn-blue" onClick={() => pezAction('OPEN_PREDICTIONS')}>OPEN VOORSPELLINGEN</button>}
+        {status === 'PREDICTING' && <button className="btn btn-secondary" onClick={() => pezAction('CLOSE_PREDICTIONS')}>SLUIT VOORSPELLINGEN</button>}
+        {status === 'LOCKED' && <button className="btn btn-success" onClick={() => pezAction('START')}>START HET SPEL</button>}
+        {status === 'DRAWING' && <span className="muted live-meta">
+          {pez?.currentPlayer ? `${pez.currentPlayer.name} is aan de beurt` : 'Waiting for a turn'} · {pez?.drawnCount ?? 0}/52 kaarten · {pez?.sixesFound ?? 0}/4 zessen
+        </span>}
+        {status === 'FINISHED' && <span className="muted live-meta">Alle vier de zessen gevonden · {pez?.drawnCount ?? 0} kaarten getrokken</span>}
+        {status === 'PREDICTING' && <span className="muted live-meta">
+          {pez?.predictionCount ?? 0} of {pez?.activePlayerCount ?? 0} predicted
+          {awaiting.length > 0 ? ` · still missing: ${awaiting.map((a: any) => a.name).join(', ')}` : ' · everyone is in'}
+        </span>}
       </>;
     }
     if (livePrediction) {
@@ -192,6 +211,8 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
     </div>
 
     {liveBlock?.type === 'SLOTMACHINE' && <SlotLivePanel slot={s.activeSlot} config={s.slotConfig?.status} activePlayers={activePlayers} />}
+
+    {liveBlock?.type === 'PAK_EEN_ZES' && <PakEenZesLivePanel game={s.pakEenZes} />}
 
     {/* One ordered timeline for the round: content blocks, then its unresolved markets.
         Ordered by the server so this and GO LIVE can never disagree. */}
@@ -326,6 +347,67 @@ function SlotLivePanel({ slot, config, activePlayers }: { slot: any; config: any
 
     <p className="muted microcopy">
       Moving to the next content block ends every series and refunds spins nobody used, so nothing keeps running behind your back.
+    </p>
+  </Card>;
+}
+
+/**
+ * What Pak een Zes is doing right now.
+ *
+ * The host drives the phases but not the cards, so this answers what they cannot see
+ * from the projector: who has not predicted yet (they are allowed to close without
+ * those people, so the names matter), whose turn it is, and which sixes are out.
+ */
+function PakEenZesLivePanel({ game }: { game: any }) {
+  const status = game?.status || 'READY';
+  const awaiting: any[] = game?.awaitingPrediction || [];
+  const sixes: any[] = game?.sixes || [];
+  const tone = status === 'DRAWING' ? 'open' : status === 'FINISHED' ? 'success' : status === 'PREDICTING' ? 'warning' : 'neutral';
+
+  return <Card className="pez-live-panel">
+    <div className="row-between">
+      <div>
+        <div className="label muted">PAK EEN ZES · LIVE</div>
+        <h2 className="display card-heading">Players draw their own cards</h2>
+      </div>
+      <Status tone={tone as any}>{status}</Status>
+    </div>
+
+    <div className="pez-live-stats">
+      <div><span className="label muted">AAN DE BEURT</span><b>{status === 'DRAWING' ? (game?.currentPlayer?.name || '—') : '—'}</b></div>
+      <div><span className="label muted">KAARTEN GETROKKEN</span><b>{game?.drawnCount ?? 0} / 52</b></div>
+      <div><span className="label muted">ZESSEN GEVONDEN</span><b>{game?.sixesFound ?? 0} / 4</b></div>
+      <div><span className="label muted">VOORSPELLINGEN</span><b>{game?.predictionCount ?? 0} / {game?.activePlayerCount ?? 0}</b></div>
+    </div>
+
+    {/* Closing predictions without everyone is allowed, so name who would be left out
+        rather than only counting them. */}
+    {['PREDICTING', 'LOCKED'].includes(status) && <div className="pez-awaiting">
+      <div className="label muted">{awaiting.length === 0 ? 'EVERYONE HAS PREDICTED' : 'STILL TO PREDICT'}</div>
+      {awaiting.length > 0 && <div className="pez-awaiting-names">
+        {awaiting.map(player => <span key={player.playerId}>{player.name}</span>)}
+      </div>}
+    </div>}
+
+    {sixes.length > 0 && <div className="pez-live-sixes">
+      <div className="label muted">ZESSEN</div>
+      {sixes.map(six => <div className="ledger-line" key={six.id}>
+        <span><b>{six.label}</b> · {six.playerName}</span>
+        <b className="muted">trek {six.drawNumber}</b>
+      </div>)}
+    </div>}
+
+    {game?.recentDraws?.length > 0 && <div className="pez-live-sixes">
+      <div className="label muted">LAATSTE KAARTEN</div>
+      {game.recentDraws.map((draw: any) => <div className="ledger-line" key={draw.id}>
+        <span>{draw.playerName} · {draw.label}</span>
+        <b className={draw.isSix ? 'pos' : 'muted'}>{draw.isSix ? 'ZES' : ''}</b>
+      </div>)}
+    </div>}
+
+    <p className="muted microcopy">
+      The server decides both the card and whose turn it is — a phone can only ask. Moving to the next content block
+      stops the game, and its predictions and draws are kept for scoring later.
     </p>
   </Card>;
 }

@@ -4,6 +4,7 @@ import { RouletteWheel } from '../shared/RouletteWheel';
 import { CoinIcon } from '../shared/CoinIcon';
 import { PlayerValueGraph } from '../shared/PlayerValueGraph';
 import { SlotReels } from '../shared/SlotReels';
+import { CardDeck, PlayingCard } from '../shared/PlayingCard';
 
 const QUESTION_EMOJIS = ['🍆', '🌽', '🍑', '😳'] as const;
 const money = (n: number) => new Intl.NumberFormat().format(n);
@@ -20,6 +21,7 @@ export function BigScreen({ gameId }: { gameId: number }) {
   if (s.mode === 'PREDICTION_RESULT' && s.prediction) return <PredictionScene p={s.prediction} phase="RESULT" />;
   if (s.mode === 'ROULETTE') return <RouletteScene roulette={s.roulette} round={s.round} block={s.block} />;
   if (s.mode === 'SLOTMACHINE') return <SlotScene slot={s.slotmachine} round={s.round} block={s.block} />;
+  if (s.mode === 'PAK_EEN_ZES') return <PakEenZesScene game={s.pakEenZes} round={s.round} block={s.block} />;
   return <Dashboard s={s} error={error} />;
 }
 
@@ -213,6 +215,106 @@ function SlotStat({ label, value, coin = false, highlight = false }: { label: st
 /** 3x rather than 3.000x — trailing zeros are noise at projector size. */
 function formatMultiplier(value: number) {
   return Number(value).toFixed(2).replace(/\.?0+$/, '');
+}
+
+/**
+ * Pak een Zes, on the projector.
+ *
+ * Three faces of the same scene, driven entirely by the server's status: counting
+ * predictions before the game, the deck and the turn during it, and the four sixes
+ * afterwards. A six gets its own celebration because that is the moment the room is
+ * waiting for.
+ */
+function PakEenZesScene({ game, round, block }: { game: any; round: any; block: any }) {
+  const status = game?.status || 'READY';
+  const last = game?.lastDraw || null;
+  const finished = status === 'FINISHED';
+  // The last card being a six is the celebration trigger — but only while the game runs,
+  // so the final summary is not permanently flashing.
+  const celebrating = Boolean(last?.isSix) && !finished;
+
+  return <div className={`pez-screen ${celebrating ? 'is-celebrating' : ''}`}>
+    <div className="pez-header">
+      <div className="pez-title">
+        <div className="label muted">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'MARKET MAYHEM'}</div>
+        <h1 className="display">{block?.title || 'PAK EEN ZES'}</h1>
+      </div>
+      <div className="pez-status">
+        <span>{PEZ_STATUS_LABELS[status] || status}</span>
+        <b>{game ? `${game.sixesFound} / 4 ZESSEN` : 'NOG NIET GESTART'}</b>
+      </div>
+    </div>
+
+    {status === 'READY' && <div className="screen-center-message">PAK EEN ZES<small>De host opent zo de voorspellingen</small></div>}
+
+    {(status === 'PREDICTING' || status === 'LOCKED') && <div className="pez-predicting">
+      <div className="pez-big-question">Wie trekken volgens jou een zes?</div>
+      <div className="pez-prediction-count">
+        <b>{game?.predictionCount ?? 0}</b>
+        <span>van {game?.activePlayerCount ?? 0} spelers hebben voorspeld</span>
+      </div>
+      <div className="pez-footer">
+        {status === 'PREDICTING' ? 'VUL JE VOORSPELLING IN OP JE TELEFOON' : 'VOORSPELLINGEN GESLOTEN · DE HOST START HET SPEL'}
+      </div>
+    </div>}
+
+    {status === 'DRAWING' && <div className="pez-playing">
+      <div className="pez-turn">
+        <div className="label muted">AAN DE BEURT</div>
+        <div className="display pez-turn-name">{game?.currentPlayer ? String(game.currentPlayer.name).toUpperCase() : '—'}</div>
+      </div>
+
+      <div className="pez-table">
+        <CardDeck cardsRemaining={game?.cardsRemaining ?? 52} drawing />
+        <div className="pez-last">
+          {last
+            ? <>
+              <PlayingCard rank={last.rank} suit={last.suit} six={last.isSix} />
+              <div className="pez-last-who">{String(last.playerName).toUpperCase()}</div>
+            </>
+            : <div className="pez-last-empty">NOG GEEN KAART</div>}
+        </div>
+      </div>
+
+      {celebrating && <div className="pez-six-banner">
+        <b>ZES!</b>
+        <span>{String(last.playerName).toUpperCase()} HEEFT EEN ZES GETROKKEN</span>
+      </div>}
+
+      <div className="pez-meta">
+        <PezStat label="KAARTEN GETROKKEN" value={`${game?.drawnCount ?? 0} / 52`} />
+        <PezStat label="ZESSEN GEVONDEN" value={`${game?.sixesFound ?? 0} / 4`} />
+        <PezStat label="LAATSTE KAART" value={last ? last.label : '—'} />
+      </div>
+
+      {!celebrating && <div className="pez-footer">DRUK OP KAART PAKKEN OP JE TELEFOON</div>}
+    </div>}
+
+    {finished && <div className="pez-finished">
+      <div className="display pez-finished-title">ALLE VIER DE ZESSEN GEVONDEN</div>
+      <div className="pez-six-list">
+        {(game?.sixes || []).map((six: any) => <div className="pez-six-row" key={six.id}>
+          <PlayingCard rank={six.rank} suit={six.suit} size="small" six />
+          <span>{String(six.playerName).toUpperCase()}</span>
+          <em>trek {six.drawNumber}</em>
+        </div>)}
+      </div>
+      <div className="pez-footer">{game?.drawnCount ?? 0} kaarten getrokken</div>
+    </div>}
+  </div>;
+}
+
+const PEZ_STATUS_LABELS: Record<string, string> = {
+  READY: 'KLAAR OM TE STARTEN',
+  PREDICTING: 'VOORSPELLEN',
+  LOCKED: 'VOORSPELLINGEN GESLOTEN',
+  DRAWING: 'KAARTEN TREKKEN',
+  FINISHED: 'AFGEROND',
+  CANCELLED: 'GESTOPT',
+};
+
+function PezStat({ label, value }: { label: string; value: any }) {
+  return <div className="pez-stat"><span>{label}</span><b>{value}</b></div>;
 }
 
 function Scene({ children, className = '' }: { children: any; className?: string }) { return <div className={`screen-scene ${className}`}>{children}</div>; }

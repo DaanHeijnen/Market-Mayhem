@@ -31,6 +31,16 @@ export default wrap(async request => {
     // history and stays. An unused slot block deletes freely.
     const slotHistory = await client.query('SELECT 1 FROM slot_series WHERE round_block_id=$1 LIMIT 1', [blockId]);
     if (slotHistory.rows[0]) throw new HttpError(409, 'Slotmachine history must be preserved; keep this block');
+    // An unplayed game carries nothing worth keeping; one with draws or predictions is
+    // the record a later scoring pass reads, so the block stays.
+    await client.query(
+      `DELETE FROM pak_een_zes_games g WHERE g.round_block_id=$1
+       AND NOT EXISTS(SELECT 1 FROM pak_een_zes_draws d WHERE d.pak_een_zes_game_id=g.id)
+       AND NOT EXISTS(SELECT 1 FROM pak_een_zes_predictions p WHERE p.pak_een_zes_game_id=g.id)`,
+      [blockId],
+    );
+    const pakHistory = await client.query('SELECT 1 FROM pak_een_zes_games WHERE round_block_id=$1 LIMIT 1', [blockId]);
+    if (pakHistory.rows[0]) throw new HttpError(409, 'Pak een Zes history must be preserved; keep this block');
     await clearScreenIfReferences(client, gameId, admin.username, { blockId });
     await client.query('UPDATE game_nights SET current_round_block_id=NULL WHERE id=$1 AND current_round_block_id=$2', [gameId, blockId]);
     await client.query('DELETE FROM round_blocks WHERE id=$1', [blockId]);

@@ -8,7 +8,7 @@ import { wrap } from './_wrap';
 
 // Must stay in step with round_blocks_type_check (migration 0007) and with
 // blockMeta.ts on the client, which generates the content picker from the same set.
-const TYPES = ['TEXT','QUESTION','ROULETTE','DUOLINGO_QUESTION','PICTURE','MUSIC','BUZZER','WAGER','SLOTMACHINE'] as const;
+const TYPES = ['TEXT','QUESTION','ROULETTE','DUOLINGO_QUESTION','PICTURE','MUSIC','BUZZER','WAGER','SLOTMACHINE','PAK_EEN_ZES'] as const;
 type BlockType = typeof TYPES[number];
 
 function optionalText(value: unknown, max: number) {
@@ -77,6 +77,12 @@ export default wrap(async request => {
       : [];
     payload = { body: bodyText, maxSpins, allowedPlayerIds };
   }
+  if (type === 'PAK_EEN_ZES') {
+    // Nothing to configure but the instruction text: the deck is a fixed 52 cards, the
+    // game ends on the fourth six, and everyone active takes part. The turn order is
+    // frozen when the host starts, not authored here.
+    payload = { body: bodyText };
+  }
 
   return ok(await withTransaction(async client => {
     const game = await client.query('SELECT current_round_block_id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
@@ -111,6 +117,16 @@ export default wrap(async request => {
         if (rouletteHistory.rows[0]) throw new HttpError(409, 'A block with roulette history cannot change type');
         const slotHistory = await client.query('SELECT id FROM slot_series WHERE round_block_id=$1 LIMIT 1', [blockId]);
         if (slotHistory.rows[0]) throw new HttpError(409, 'A block with slotmachine history cannot change type');
+        // An unplayed game holds nothing worth keeping; one with draws or predictions is
+        // the record a later scoring pass reads, so that block cannot change type.
+        await client.query(
+          `DELETE FROM pak_een_zes_games g WHERE g.round_block_id=$1
+           AND NOT EXISTS(SELECT 1 FROM pak_een_zes_draws d WHERE d.pak_een_zes_game_id=g.id)
+           AND NOT EXISTS(SELECT 1 FROM pak_een_zes_predictions p WHERE p.pak_een_zes_game_id=g.id)`,
+          [blockId],
+        );
+        const pakHistory = await client.query('SELECT id FROM pak_een_zes_games WHERE round_block_id=$1 LIMIT 1', [blockId]);
+        if (pakHistory.rows[0]) throw new HttpError(409, 'A block with Pak een Zes history cannot change type');
       }
       await client.query(
         `UPDATE round_blocks SET type=$2,title=$3,payload=$4::jsonb,

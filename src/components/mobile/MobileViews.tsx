@@ -31,6 +31,9 @@ export function MobileViews({ state: s, gameId, view, predictionId, busy, act, g
   // live content the phone becomes its controller, and it goes away again on its own
   // when the Admin moves to the next block. There is no route to reach it by hand.
   if (s.slotmachine) return <SlotControllerView state={s} slot={s.slotmachine} busy={busy} act={act} gameId={gameId} />;
+  // Backend-driven for the same reason: the live block owns the phone, and Pak een Zes
+  // goes away again on its own when the host moves on.
+  if (s.pakEenZes) return <PakEenZesView state={s} game={s.pakEenZes} busy={busy} act={act} gameId={gameId} />;
   if (view === 'predictions') return <PredictionList state={s} go={go} busy={busy} act={act} gameId={gameId} />;
   if (view === 'prediction' && currentPrediction) return <PredictionDetail state={s} prediction={currentPrediction} busy={busy} act={act} go={go} gameId={gameId} />;
   if (view === 'roulette') return <RouletteView state={s} busy={busy} act={act} go={go} gameId={gameId} />;
@@ -392,6 +395,101 @@ function SlotLastSpin({ spin }: { spin: any }) {
     <b className="slot-last-outcome">{spin.outcome}</b>
     <span>{won ? `+${spin.payout} coins at ${Number(spin.payoutMultiplier).toFixed(2).replace(/\.?0+$/, '')}x` : 'Geen winst — no payout on this spin'}</span>
   </Card>;
+}
+
+/**
+ * Pak een Zes on the phone: predict, then take your turn.
+ *
+ * Two phases, both driven by the server's status. During PREDICTING the player names
+ * four people — the same person may be named more than once, and naming yourself is
+ * allowed, so the four fields are independent and nothing is filtered out. During
+ * DRAWING there is one big button, enabled only when the server says it is your turn.
+ *
+ * The phone never sees the deck or the card before the projector does.
+ */
+function PakEenZesView({ state: s, game, busy, act, gameId }: { state: any; game: any; busy: boolean; act: (x: () => Promise<unknown>) => void; gameId: number }) {
+  const players: Array<{ id: number; name: string }> = game.players || [];
+  // Start from a saved prediction if there is one, so re-opening shows what was sent.
+  const [picks, setPicks] = useState<Array<number | ''>>(() =>
+    game.myPicks?.length === 4 ? [...game.myPicks] : ['', '', '', '']);
+  const [drawKey, setDrawKey] = useState(() => crypto.randomUUID());
+  // A fresh key per draw count: reusing one would be treated as a replay and hand back
+  // the previous card instead of taking a new one.
+  useEffect(() => { setDrawKey(crypto.randomUUID()); }, [game.blockId, game.drawnCount, game.status]);
+
+  const complete = picks.every(p => p !== '');
+  const setPick = (index: number, value: string) =>
+    setPicks(current => current.map((p, i) => i === index ? (value === '' ? '' : Number(value)) : p));
+
+  return <div className="pez-mobile">
+    <div className="pez-mobile-header">
+      <div className="label muted">PAK EEN ZES</div>
+      <span className={`pill status-pill ${game.drawing ? 'open' : game.predicting ? 'warning' : 'neutral'}`}>
+        {game.predicting ? 'VOORSPELLEN' : game.drawing ? 'KAARTEN' : game.finished ? 'KLAAR' : 'WACHTEN'}
+      </span>
+    </div>
+    <h1 className="display pez-mobile-title">{game.title}</h1>
+    {game.instructions && <p className="muted pez-mobile-instructions">{game.instructions}</p>}
+
+    {game.status === 'READY' && <Card><b>Nog even wachten.</b><span className="muted">De host opent zo de voorspellingen.</span></Card>}
+
+    {game.predicting && <>
+      <Card className="pez-predict-card">
+        <div className="display pez-question">Wie trekken volgens jou een zes?</div>
+        <p className="muted microcopy">Je mag dezelfde speler meerdere keren kiezen, en jezelf ook.</p>
+        {[0, 1, 2, 3].map(index => <label className="pez-pick" key={index}>
+          <span className="pez-pick-number">{index + 1}</span>
+          <select className="field" value={picks[index]} onChange={e => setPick(index, e.target.value)}>
+            <option value="">Kies speler</option>
+            {players.map(player => <option key={player.id} value={player.id}>{player.name}</option>)}
+          </select>
+        </label>)}
+        <button
+          className="btn btn-primary btn-full"
+          disabled={busy || !complete}
+          onClick={() => act(() => mutation('/api/pak-een-zes-predict', { gameId, blockId: game.blockId, picks }))}
+        >VOORSPELLING OPSLAAN</button>
+      </Card>
+      {game.hasPredicted && <Card className="pez-saved"><b>✓ VOORSPELLING OPGESLAGEN</b><span className="muted">Je kunt hem nog aanpassen tot de host de voorspellingen sluit.</span></Card>}
+    </>}
+
+    {game.status === 'LOCKED' && <Card>
+      <b>Voorspellingen gesloten.</b>
+      <span className="muted">{game.hasPredicted ? 'Jouw voorspelling is opgeslagen.' : 'Je hebt deze ronde niet voorspeld.'}</span>
+    </Card>}
+
+    {game.drawing && <>
+      {game.isMyTurn
+        ? <>
+          <Card className="pez-your-turn"><b>JIJ BENT AAN DE BEURT</b><span className="muted">Kijk naar het grote scherm.</span></Card>
+          <button
+            className="btn btn-primary pez-draw-btn"
+            disabled={busy}
+            onClick={() => act(async () => {
+              await mutation('/api/pak-een-zes-draw', { gameId, blockId: game.blockId }, true, drawKey);
+              setDrawKey(crypto.randomUUID());
+            })}
+          >{busy ? 'PAKKEN…' : 'KAART PAKKEN'}</button>
+        </>
+        : <Card className="pez-waiting">
+          <div className="label muted">AAN DE BEURT</div>
+          <b className="pez-waiting-name">{game.currentPlayer ? game.currentPlayer.name : '—'}</b>
+          <span className="muted">Wachten op je beurt.</span>
+        </Card>}
+    </>}
+
+    {game.finished && <Card className="pez-saved"><b>ALLE VIER DE ZESSEN ZIJN GEVONDEN</b><span className="muted">Bekijk het overzicht op het grote scherm.</span></Card>}
+
+    {game.turnOrder?.length > 0 && game.drawing && <Card>
+      <div className="label muted">SPEELVOLGORDE</div>
+      <div className="pez-order">
+        {game.turnOrder.map((player: any) => <span
+          key={player.id}
+          className={`pez-order-name ${game.currentPlayer?.id === player.id ? 'is-current' : ''}`}
+        >{player.name}</span>)}
+      </div>
+    </Card>}
+  </div>;
 }
 
 function Ledger({ state: s }: { state: any }) {

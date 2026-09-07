@@ -3,6 +3,7 @@ import { withTransaction } from '../lib/db';
 import { body, ok, intValue, HttpError } from '../lib/http';
 import { incrementGameVersion, setScreenMode } from '../lib/game-state';
 import { closeSlotSeriesForBlock } from '../lib/slot-state';
+import { closePakEenZesForBlock } from '../lib/pak-een-zes-state';
 import { wrap } from './_wrap';
 
 export default wrap(async request => {
@@ -51,6 +52,17 @@ export default wrap(async request => {
     );
     for (const slotBlock of slotBlocks.rows) {
       await closeSlotSeriesForBlock(client, gameId, Number(slotBlock.id), admin.username, 'round completed');
+    }
+
+    // A Pak een Zes in progress is closed rather than blocking completion. Nothing
+    // financial is at stake, and its draws and predictions are preserved so a later
+    // scoring pass still has the full record.
+    const pakBlocks = await client.query(
+      "SELECT id FROM round_blocks WHERE round_id=$1 AND type='PAK_EEN_ZES' ORDER BY sort_order,id",
+      [roundId],
+    );
+    for (const pakBlock of pakBlocks.rows) {
+      await closePakEenZesForBlock(client, gameId, Number(pakBlock.id));
     }
 
     // Draft roulette games have no money attached and should not survive a

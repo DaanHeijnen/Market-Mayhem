@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { HttpError } from './http';
 import { orderRunOfShow, nextStep } from './run-of-show';
 import { closeSlotSeriesForBlock } from './slot-state';
+import { closePakEenZesForBlock } from './pak-een-zes-state';
 
 export const SCREEN_MODES = [
   'DASHBOARD',
@@ -11,6 +12,7 @@ export const SCREEN_MODES = [
   'PREDICTION_RESULT',
   'ROULETTE',
   'SLOTMACHINE',
+  'PAK_EEN_ZES',
 ] as const;
 export type ScreenMode = typeof SCREEN_MODES[number];
 
@@ -62,7 +64,7 @@ export async function setScreenMode(
     roundId = null;
     predictionId = null;
   }
-  if (mode === 'ROUND_BLOCK' || mode === 'ROULETTE' || mode === 'SLOTMACHINE') {
+  if (mode === 'ROUND_BLOCK' || mode === 'ROULETTE' || mode === 'SLOTMACHINE' || mode === 'PAK_EEN_ZES') {
     if (!roundId || !blockId) throw new HttpError(400, 'roundId and blockId are required');
     if (Number(game.rows[0].current_round_id || 0) !== roundId) throw new HttpError(409, 'Only the active round can be presented');
     const block = await client.query(
@@ -74,9 +76,10 @@ export async function setScreenMode(
     if (block.rows[0].status !== 'ACTIVE') throw new HttpError(409, 'Only an active round can present content');
     if (mode === 'ROULETTE' && block.rows[0].type !== 'ROULETTE') throw new HttpError(409, 'ROULETTE mode requires a roulette block');
     if (mode === 'SLOTMACHINE' && block.rows[0].type !== 'SLOTMACHINE') throw new HttpError(409, 'SLOTMACHINE mode requires a slotmachine block');
+    if (mode === 'PAK_EEN_ZES' && block.rows[0].type !== 'PAK_EEN_ZES') throw new HttpError(409, 'PAK_EEN_ZES mode requires a Pak een Zes block');
     // Each block type has exactly one composition that can present it, so the projector
     // can never be pointed at a slot block with the plain content scene.
-    if (mode === 'ROUND_BLOCK' && ['ROULETTE', 'SLOTMACHINE'].includes(block.rows[0].type)) throw new HttpError(409, `${block.rows[0].type} blocks must use ${block.rows[0].type} mode`);
+    if (mode === 'ROUND_BLOCK' && ['ROULETTE', 'SLOTMACHINE', 'PAK_EEN_ZES'].includes(block.rows[0].type)) throw new HttpError(409, `${block.rows[0].type} blocks must use ${block.rows[0].type} mode`);
     predictionId = null;
   }
   if (mode.startsWith('PREDICTION')) {
@@ -137,6 +140,11 @@ export async function setActiveRoundBlock(client: PoolClient, gameId: number, ro
     // A slotmachine series is refunded and closed rather than blocking the move. See
     // closeSlotSeriesForBlock for why moving on must stay possible.
     await closeSlotSeriesForBlock(client, gameId, previousBlockId, actor, 'content block changed');
+
+    // Same for a Pak een Zes: no money is involved, but leaving it in DRAWING would keep
+    // a turn indicator live on somebody's phone for a game nobody is watching. The draws
+    // and predictions are kept — cancelling must not erase history.
+    await closePakEenZesForBlock(client, gameId, previousBlockId);
   }
 
   await client.query('UPDATE game_nights SET current_round_block_id=$2,updated_at=NOW() WHERE id=$1', [gameId, blockId]);
@@ -189,6 +197,16 @@ export async function setActiveRoundBlock(client: PoolClient, gameId: number, ro
       await closeSlotSeriesForBlock(client, gameId, blockId, actor, 'slotmachine block reactivated');
     }
     await setScreenMode(client, gameId, 'SLOTMACHINE', actor, { roundId, blockId });
+  } else if (block.rows[0].type === 'PAK_EEN_ZES') {
+    // The game row is created by the host's first action, not here, so an unplayed block
+    // carries no state. Re-entering the block starts clean — but re-activating the block
+    // that is already live must be a no-op, for the same reason as the slotmachine
+    // branch above: a dashboard detour and back routes through here with the same
+    // blockId, and cancelling there would kill a game mid-play.
+    if (previousBlockId !== blockId) {
+      await closePakEenZesForBlock(client, gameId, blockId);
+    }
+    await setScreenMode(client, gameId, 'PAK_EEN_ZES', actor, { roundId, blockId });
   } else {
     await setScreenMode(client, gameId, 'ROUND_BLOCK', actor, { roundId, blockId });
   }
@@ -236,7 +254,10 @@ export async function setStagedItem(client: PoolClient, gameId: number, item: St
       [item.blockId, item.roundId, gameId],
     );
     if (!block.rows[0]) throw new HttpError(404, 'Round block not found');
-    mode = block.rows[0].type === 'ROULETTE' ? 'ROULETTE' : block.rows[0].type === 'SLOTMACHINE' ? 'SLOTMACHINE' : 'ROUND_BLOCK';
+    mode = block.rows[0].type === 'ROULETTE' ? 'ROULETTE'
+      : block.rows[0].type === 'SLOTMACHINE' ? 'SLOTMACHINE'
+        : block.rows[0].type === 'PAK_EEN_ZES' ? 'PAK_EEN_ZES'
+          : 'ROUND_BLOCK';
     roundId = item.roundId;
     blockId = item.blockId;
   }

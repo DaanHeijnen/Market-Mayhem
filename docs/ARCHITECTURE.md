@@ -22,6 +22,8 @@ Server reads also synchronize timed state:
 - a stored roulette `SPINNING` result becomes `RESULT` after the presentation interval;
 - a slot spin becomes `RESULT` after `SLOT_SPIN_MS`, ending the reel-animation window.
 
+A live Pak een Zes also keeps clients on the fast poll tier, so every surface updates within one interval of each card.
+
 Bet endpoints independently re-check market state/deadline inside their transaction, so a stale client cannot place a late wager.
 
 ## Settings
@@ -48,6 +50,7 @@ Round numbers are labels, not execution pointers. A partial unique database inde
 - `ROULETTE`
 - `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`
 - `SLOTMACHINE`
+- `PAK_EEN_ZES`
 
 `game_nights.current_round_block_id` is the operational content cursor. Previous/next controls are conveniences over block order; they never imply `round_number + 1`.
 
@@ -190,6 +193,46 @@ Changing content block or completing the round **closes every live series and re
 
 Because a deactivated player can no longer spin, `remove-player` refuses while they hold a live series and points the Admin at moving on to refund it.
 
+## Pak een Zes
+
+A `PAK_EEN_ZES` block: predictions, then turn-based card draws. No money is involved, so there is no wallet or ledger participation — but everything is recorded, because this step deliberately builds no scoring and a points system has to be addable later without replaying the evening.
+
+```mermaid
+stateDiagram-v2
+  [*] --> READY
+  READY --> PREDICTING : open predictions
+  PREDICTING --> LOCKED : close predictions
+  LOCKED --> DRAWING : start
+  DRAWING --> DRAWING : draw a card
+  DRAWING --> FINISHED : fourth six drawn
+  READY --> CANCELLED
+  PREDICTING --> CANCELLED
+  LOCKED --> CANCELLED
+  DRAWING --> CANCELLED
+```
+
+The machine runs forwards only. Closing before starting is what makes "who has not predicted yet" a meaningful question — once cards are out, a late prediction would be about something already happening. The host is explicitly not required to wait for everyone, which is why the Admin panel names the missing players rather than only counting them.
+
+### Predictions
+
+Four ordered picks per player, one row per slot in `pak_een_zes_predictions`. Duplicates and self-picks are allowed and must survive: the per-slot shape is what keeps `Daan, Twan, Daan, Bas` as four picks instead of collapsing to three names. `validatePrediction` therefore never de-duplicates. A prediction only counts as submitted once all four slots are in, which is what makes the "still to predict" list trustworthy.
+
+### Turn order
+
+Frozen at START from the players active at that moment and stored in `pak_een_zes_participants`, ordered by display name. Storing it rather than deriving it is deliberate: a player joining or being deactivated mid-game must not reshuffle whose turn it is. `turn_index` walks the order and wraps, because the game ends when the sixes run out rather than after one lap.
+
+### Drawing
+
+The server owns both halves — which card, and whose turn. `playerAtTurn` is the same function the player snapshot uses to decide whether to enable the button, so the button and the server's enforcement cannot disagree; a request from anyone else gets a 403.
+
+The remaining deck is derived from the rows already drawn rather than from a shuffled list held anywhere, so there is no in-memory state to fall out of step and a replay cannot resurrect a card. `UNIQUE (pak_een_zes_game_id, rank, suit)` makes "no repeats" a database guarantee rather than an application promise.
+
+Double-tap protection has three layers: `FOR UPDATE` on the game row serialises concurrent requests, `UNIQUE (game, idempotency_key)` answers a replay with the card it already produced, and the turn advances exactly once inside the same transaction. The game flips to `FINISHED` in that same transaction the moment the fourth six is out.
+
+### Leaving the block
+
+Changing content block or completing the round **cancels** a live game (`closePakEenZesForBlock`) rather than blocking the move. Nothing financial is at stake, but leaving it in `DRAWING` would keep a turn indicator live on somebody's phone for a game nobody is watching. Draws and predictions are kept — cancelling must never erase the record. A finished game is left alone, and re-activating the block that is already live is a no-op so a dashboard detour and back cannot kill a game mid-play.
+
 ## Projector state
 
 `screen_state` explicitly selects:
@@ -201,6 +244,7 @@ Because a deactivated player can no longer spin, `remove-player` refuses while t
 - `PREDICTION_RESULT`
 - `ROULETTE`
 - `SLOTMACHINE`
+- `PAK_EEN_ZES`
 
 Each block type has exactly one composition that can present it: `setScreenMode` refuses `ROUND_BLOCK` for a roulette or slotmachine block and refuses `SLOTMACHINE` for anything else, so the projector cannot be pointed at a slot block with the plain content scene.
 
@@ -232,4 +276,4 @@ The exchange dashboard is derived from real financial chronology. Prediction/rou
 
 Admin sessions require `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH` and `SESSION_SECRET`. `ADMIN_PASSWORD_HASH` is a salted PBKDF2-HMAC-SHA256 value generated by `npm run admin:hash`; the plaintext Admin password is not stored in configuration. Player join tokens are single-use and raw values are never stored in the database. Raw session tokens live only in HttpOnly cookies; stored session digests are HMAC-protected.
 
-Game reset requires Admin authentication, game ID and exact server-side phrase `yes delete`. It is transactional, game-scoped, writes `GAME_RESET`, deletes game-owned operational/financial data — including slotmachine symbols, outcomes, series and spins — and recreates dashboard state while leaving Admin sessions/audit history available.
+Game reset requires Admin authentication, game ID and exact server-side phrase `yes delete`. It is transactional, game-scoped, writes `GAME_RESET`, deletes game-owned operational/financial data — including slotmachine symbols, outcomes, series and spins, and Pak een Zes games, predictions, participants and draws — and recreates dashboard state while leaving Admin sessions/audit history available.

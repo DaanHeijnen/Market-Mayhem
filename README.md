@@ -32,7 +32,7 @@ A reset/fresh game has no players, rounds, predictions or transactions.
 1. **Settings** — set game name, starting coins, optional maximum wallet percentage per prediction, and the slotmachine's reel symbols and outcome odds.
 2. **Players** — create players and generate their single-use join links.
 3. **Rounds** — create rounds in any numbering scheme; execution does not assume `current + 1`.
-4. **Round Content** — add ordered blocks: `TEXT`, `QUESTION`, `DUOLINGO_QUESTION`, `ROULETTE`, `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`, `SLOTMACHINE`.
+4. **Round Content** — add ordered blocks: `TEXT`, `QUESTION`, `DUOLINGO_QUESTION`, `ROULETTE`, `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`, `SLOTMACHINE`, `PAK_EEN_ZES`.
 5. **Predictions** — set probability, market-specific duration and min/max deposit, then optionally schedule to a round.
 6. **Control Center** — run the round, move through content, operate live questions/roulette, watch slotmachine series, adjust coins and control the projector.
 
@@ -145,6 +145,41 @@ The Big Screen shows the full 3×3 field, highlights the cells that form the win
 
 Moving to the next content block, or completing the round, closes every live series and refunds spins nobody used — so no slotmachine session keeps running behind the Admin's back. Nothing is lost: spins already taken keep their outcome and payout.
 
+## Pak een Zes
+
+A `PAK_EEN_ZES` round block. Everyone predicts who will draw a six, then players take turns pulling cards from a real 52-card deck until all four sixes are out.
+
+No coins are involved — this step deliberately builds **no scoring**. What it does do is record everything a points system would need later.
+
+### The host's flow
+
+From the Control Center, while the block is live:
+
+1. **OPEN VOORSPELLINGEN** — phones switch to the prediction form.
+2. Players fill in four names. The panel shows how many are in and **names who is still missing**.
+3. **SLUIT VOORSPELLINGEN** — the window closes. Waiting for everyone is *not* required, which is exactly why the missing names are listed.
+4. **START HET SPEL** — this freezes the turn order from the players active at that moment, so someone joining later cannot reshuffle whose turn it is.
+
+State is `READY → PREDICTING → LOCKED → DRAWING → FINISHED`, and it only runs forwards.
+
+### Predicting
+
+Four ordered picks per player. **The same person may be named more than once, and picking yourself is allowed** — so `Daan, Twan, Daan, Bas` is a valid prediction and is stored as four picks, not three names. Re-submitting replaces the whole prediction while the window is open.
+
+### Drawing
+
+Whoever is up gets one big **KAART PAKKEN** button; everyone else sees whose turn it is. The server decides both the card and the turn — a phone can only ask. The remaining deck is derived from the rows already drawn rather than a shuffled list held in memory, and a unique constraint on `(game, rank, suit)` makes "no repeats" a database guarantee. A double tap cannot take two cards: the game row is locked, and a replayed request is answered with the card it already produced.
+
+A six is a moment: the projector calls it out by name. The game ends the instant the fourth six is out, whatever is left in the deck, and the Big Screen then lists all four with who drew them. A player can draw more than one six.
+
+### What is stored for later scoring
+
+- every prediction, per slot, duplicates intact
+- every card drawn, in order, with who drew it
+- `is_six` on each draw, constrained so it can never disagree with the rank
+
+Which player drew a six, which suit, on which draw, and how often the same player did it are all one query away.
+
 ## Live Duolingo questions
 
 `DUOLINGO_QUESTION` is separate from a static `QUESTION` block. Admin configures question text, four answer texts, one correct answer and a reward. The four player controls always use:
@@ -186,7 +221,7 @@ The default projector is an exchange-style dashboard based on real data only:
 
 `total coins in play = available wallets + unresolved prediction deposits + unresolved roulette stakes + unspun slotmachine spins`.
 
-The projector can also present round blocks, an explicitly featured prediction, roulette, and the slotmachine. Control Center contains the exact `/screen/:gameId` preview plus a persistent **SHOW MAIN DASHBOARD** action.
+The projector can also present round blocks, an explicitly featured prediction, roulette, the slotmachine, and Pak een Zes. Control Center contains the exact `/screen/:gameId` preview plus a persistent **SHOW MAIN DASHBOARD** action.
 
 ## Design system
 
@@ -242,7 +277,7 @@ Notes that save time:
 2. Import it into Netlify.
 3. Enable Netlify Database.
 4. Generate a hash with `npm run admin:hash`, then configure `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH` and `SESSION_SECRET`.
-5. Apply/deploy migrations through `0012_slot_outcome_types.sql`.
+5. Apply/deploy migrations through `0013_pak_een_zes.sql`.
 6. Deploy.
 
 Previously deployed migrations are historical and are not rewritten.

@@ -1508,3 +1508,210 @@ button.chip-blue:hover { background: var(--violet); }
 .slot-history-row em { color: var(--muted); font-size: .85vw; font-style: normal; }
 .slot-history-row.is-win { background: var(--lime); }
 .slot-history-row.is-win em { color: var(--ink); font-weight: 800; }
+
+
+/* ============================================================================
+   PAK EEN ZES
+   A round content block: predictions on phones, a deck on the projector. Reuses
+   the existing card, pill, status and accent vocabulary — the card faces are the
+   only new shape, and they stay on the paper/ink palette rather than importing a
+   casino look.
+   ========================================================================= */
+
+/* --- Card faces (shared) ---------------------------------------------- */
+.playing-card {
+  position: relative;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--ink);
+  border-radius: 1vw;
+  background: var(--white);
+  box-shadow: 0 1vh 3vh rgba(20,18,15,.18);
+}
+.playing-card-large { width: 16vh; height: 23vh; border-radius: 1.6vh; }
+.playing-card-small { width: 7vh; height: 10vh; border-radius: .9vh; border-width: 1.5px; box-shadow: none; }
+.playing-card.is-red { color: var(--red); }
+.playing-card.is-black { color: var(--ink); }
+/* The card the whole game is hunting for. */
+.playing-card.is-six { border-color: var(--lime); box-shadow: 0 0 0 .6vh var(--lime), 0 1vh 3vh rgba(20,18,15,.2); }
+.playing-card-pip { font-size: 9vh; line-height: 1; }
+.playing-card-small .playing-card-pip { font-size: 4vh; }
+.playing-card-corner {
+  position: absolute;
+  top: .8vh;
+  left: 1vh;
+  font: 800 2.6vh var(--display);
+}
+.playing-card-corner-flip { top: auto; left: auto; right: 1vh; bottom: .8vh; transform: rotate(180deg); }
+.playing-card-small .playing-card-corner { font-size: 1.4vh; top: .4vh; left: .5vh; }
+.playing-card-small .playing-card-corner-flip { top: auto; left: auto; right: .5vh; bottom: .4vh; }
+
+/* The face-down pile, thinning as the deck empties. */
+.card-deck { position: relative; width: 16vh; height: 23vh; }
+.card-deck-layer {
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--ink);
+  border-radius: 1.6vh;
+  background: repeating-linear-gradient(45deg, var(--ink) 0 6px, var(--ink-2) 6px 12px);
+}
+.card-deck-count {
+  position: absolute;
+  right: -1.2vh;
+  bottom: -1.2vh;
+  display: grid;
+  place-items: center;
+  min-width: 5vh;
+  padding: .6vh 1.2vh;
+  border-radius: 999px;
+  background: var(--lime);
+  color: var(--ink);
+  font: 800 2vh var(--display);
+}
+.card-deck.is-drawing .card-deck-layer:last-of-type { animation: gne-pulse 1.6s ease-in-out infinite; }
+
+/* --- Big Screen -------------------------------------------------------- */
+.pez-screen {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 4vh 5vw;
+  background: var(--paper);
+  color: var(--ink);
+  overflow: hidden;
+}
+.pez-screen::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  width: 360px;
+  height: 360px;
+  right: -120px;
+  top: -140px;
+  border-radius: 50%;
+  background: var(--cyan);
+}
+.pez-screen::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  width: 340px;
+  height: 340px;
+  left: -130px;
+  bottom: -150px;
+  border-radius: 50%;
+  background: var(--lime);
+}
+.pez-screen.is-celebrating::before { background: var(--lime); }
+.pez-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+.pez-title { padding: 16px 28px; border-radius: 999px; background: var(--ink); color: #fff; }
+.pez-title .muted { color: var(--dark-secondary); }
+.pez-title h1 { margin: .4vh 0 0; font-size: 2.8vw; line-height: 1.05; }
+.pez-status { display: grid; gap: 4px; padding: 16px 26px; border-radius: 24px; background: var(--blue); color: #fff; text-align: right; }
+.pez-status span { font: 700 1.4vw var(--display); }
+.pez-status b { color: #DBE2FF; font-size: .95vw; letter-spacing: .06em; }
+
+.pez-predicting { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3vh; }
+.pez-big-question { max-width: 70vw; font: 700 4.4vw var(--display); line-height: 1.1; text-align: center; }
+.pez-prediction-count { display: grid; place-items: center; gap: .6vh; }
+.pez-prediction-count b { font: 700 9vw var(--display); line-height: 1; }
+.pez-prediction-count span { color: var(--secondary); font-size: 1.4vw; }
+
+.pez-playing { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2.4vh; min-height: 0; }
+.pez-turn { text-align: center; }
+.pez-turn-name { font-size: 3.6vw; line-height: 1.05; }
+.pez-table { display: flex; align-items: center; justify-content: center; gap: 6vw; }
+.pez-last { display: grid; place-items: center; gap: 1vh; }
+.pez-last-who { font: 800 1.3vw var(--display); letter-spacing: .08em; }
+.pez-last-empty {
+  display: grid;
+  place-items: center;
+  width: 16vh;
+  height: 23vh;
+  border: 2px dashed var(--muted);
+  border-radius: 1.6vh;
+  color: var(--muted);
+  font-size: 1vw;
+  text-align: center;
+}
+.pez-six-banner {
+  display: grid;
+  place-items: center;
+  gap: .4vh;
+  padding: 2vh 5vw;
+  border-radius: 2vw;
+  background: var(--lime);
+  color: var(--ink);
+  animation: gne-pulse 1.1s ease-in-out infinite;
+}
+.pez-six-banner b { font: 700 5vw var(--display); line-height: 1; letter-spacing: .04em; }
+.pez-six-banner span { font: 800 1.5vw var(--display); letter-spacing: .06em; }
+
+.pez-meta { display: flex; gap: 1.4vw; }
+.pez-stat {
+  display: grid;
+  gap: .4vh;
+  padding: 1.4vh 1.6vw;
+  border-radius: 1.2vw;
+  background: var(--white);
+  box-shadow: inset 0 0 0 2px var(--border);
+  text-align: center;
+}
+.pez-stat span { color: var(--muted); font-size: .75vw; font-weight: 800; letter-spacing: .12em; }
+.pez-stat b { font: 700 1.8vw var(--display); }
+
+.pez-finished { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3vh; }
+.pez-finished-title { font-size: 3.6vw; text-align: center; }
+.pez-six-list { display: grid; gap: 1.4vh; }
+.pez-six-row { display: flex; align-items: center; gap: 2vw; }
+.pez-six-row span { font: 700 2.2vw var(--display); }
+.pez-six-row em { color: var(--muted); font-size: 1.1vw; font-style: normal; }
+.pez-footer { margin-top: 1vh; text-align: center; font: 700 1.7vw var(--display); letter-spacing: .06em; }
+
+/* --- Player Mobile ----------------------------------------------------- */
+.pez-mobile { display: grid; gap: 14px; }
+.pez-mobile-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pez-mobile-title { margin: 0; font-size: 26px; line-height: 1.1; }
+.pez-mobile-instructions { margin: 0; font-size: 13px; line-height: 1.5; }
+.pez-predict-card { display: grid; gap: 12px; }
+.pez-question { font-size: 20px; line-height: 1.25; }
+/* Four independent fields: the same name may be picked more than once, so nothing here
+   removes an already-chosen player from the other lists. */
+.pez-pick { display: flex; align-items: center; gap: 10px; }
+.pez-pick-number {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--ink);
+  color: #fff;
+  font: 800 14px var(--display);
+}
+.pez-pick .field { flex: 1; min-width: 0; }
+.pez-saved { display: grid; gap: 4px; }
+.pez-your-turn { display: grid; gap: 4px; border-left: 4px solid var(--lime); }
+.pez-draw-btn { width: 100%; min-height: 96px; font-family: var(--display); font-size: 24px; letter-spacing: .06em; }
+.pez-waiting { display: grid; gap: 4px; text-align: center; }
+.pez-waiting-name { font-family: var(--display); font-size: 28px; }
+.pez-order { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.pez-order-name { padding: 6px 12px; border-radius: 999px; background: var(--surface-soft); font-size: 12px; }
+.pez-order-name.is-current { background: var(--ink); color: #fff; font-weight: 800; }
+
+/* --- Control Center ---------------------------------------------------- */
+.pez-live-panel { border-left: 4px solid var(--cyan); }
+.pez-live-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+  margin: 18px 0;
+}
+.pez-live-stats > div { display: grid; gap: 4px; }
+.pez-live-stats b { font-family: var(--display); font-size: 19px; font-weight: 700; }
+.pez-awaiting { margin-top: 6px; }
+.pez-awaiting-names { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.pez-awaiting-names span { padding: 6px 12px; border-radius: 999px; background: var(--surface-soft); font-size: 12px; }
+.pez-live-sixes { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }

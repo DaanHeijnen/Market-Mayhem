@@ -5,6 +5,8 @@ import { publicPredictionStatus } from './economy';
 import { orderRunOfShow } from './run-of-show';
 import { cooldownMinutesLeft, describeRequestStatus, requestsRemaining } from './prediction-requests';
 import { loadSlotConfig, slotBlockSettings } from './slot-state';
+import { loadPakEenZesGame, pakEenZesBlockSettings } from './pak-een-zes-state';
+import { playerAtTurn } from './pak-een-zes';
 import { describeSlotConfig, symbolLetter, SLOT_OUTCOME_LABELS, SLOT_SPIN_MS, type SlotOutcomeType } from './slotmachine';
 
 const ROULETTE_SPIN_MS = 5500;
@@ -96,14 +98,15 @@ export async function getGameVersion(gameId: number): Promise<GameVersion> {
       EXISTS(SELECT 1 FROM predictions p WHERE p.game_night_id=g.id AND p.status IN ('OPEN','LOCKED','RESULT')) AS market_live,
       EXISTS(SELECT 1 FROM roulette_games rg WHERE rg.game_night_id=g.id AND rg.status IN ('OPEN','LOCKED','SPINNING','RESULT')) AS roulette_live,
       EXISTS(SELECT 1 FROM slot_spins ss WHERE ss.game_night_id=g.id AND ss.status='SPINNING' AND ss.spun_at<=NOW()-($3::text||' milliseconds')::interval) AS slot_due,
-      EXISTS(SELECT 1 FROM slot_series sr WHERE sr.game_night_id=g.id AND sr.status='ACTIVE') AS slot_live
+      EXISTS(SELECT 1 FROM slot_series sr WHERE sr.game_night_id=g.id AND sr.status='ACTIVE') AS slot_live,
+      EXISTS(SELECT 1 FROM pak_een_zes_games pz WHERE pz.game_night_id=g.id AND pz.status IN ('PREDICTING','LOCKED','DRAWING')) AS pak_live
      FROM game_nights g WHERE g.id=$1`,
     [gameId, ROULETTE_SPIN_MS, SLOT_SPIN_MS],
   );
   const row = result.rows[0];
   if (!row) throw new HttpError(404, 'Game not found');
 
-  const idle = !row.current_round_id && !row.market_live && !row.roulette_live && !row.slot_live;
+  const idle = !row.current_round_id && !row.market_live && !row.roulette_live && !row.slot_live && !row.pak_live;
   let version = Number(row.game_state_version);
   if (row.prediction_due || row.roulette_due || row.slot_due) {
     await syncTimedState(gameId, true);
@@ -188,7 +191,7 @@ export async function getAdminState(gameId: number) {
   const game = gameResult.rows[0];
   if (!game) throw new HttpError(404, 'Game not found');
 
-  const [rounds, blocks, groups, players, predictions, recent, roulette, screen, requests, slotConfig, slotSeries, slotSpins] = await Promise.all([
+  const [rounds, blocks, groups, players, predictions, recent, roulette, screen, requests, slotConfig, slotSeries, slotSpins, pakEenZes] = await Promise.all([
     pool.query('SELECT * FROM rounds WHERE game_night_id=$1 ORDER BY round_number,id', [gameId]),
     pool.query(
       `SELECT b.*,COUNT(a.id)::int AS answer_count
@@ -266,6 +269,11 @@ export async function getAdminState(gameId: number) {
        ORDER BY ss.spun_at DESC,ss.id DESC LIMIT 8`,
       [gameId, game.current_round_block_id],
     ),
+    // Null unless the current block is a Pak een Zes, so the Control Center can key off
+    // the block type the same way it does for roulette and the slotmachine.
+    game.current_round_block_id
+      ? loadPakEenZesGame(pool, gameId, Number(game.current_round_block_id))
+      : Promise.resolve(null),
   ]);
 
   const normalizedBlocks = blocks.rows.map((b: any) => normalizeBlock(b, true));
@@ -317,6 +325,26 @@ export async function getAdminState(gameId: number) {
     recentTransactions: recent.rows.map((r: any) => ({ ...r, id: Number(r.id), amount: Number(r.amount) })),
     activeRoulette: (() => { const r = roulette.rows[0]; return r ? { ...r, id: Number(r.id), round_id: r.round_id ? Number(r.round_id) : null, round_block_id: r.round_block_id ? Number(r.round_block_id) : null, result_number: r.status === 'SPINNING' || r.result_number == null ? null : Number(r.result_number), bet_count: Number(r.bet_count), total_stake: Number(r.total_stake) } : null; })(),
     slotConfig,
+    // What the host needs while a Pak een Zes runs: whose turn it is, how far the deck
+    // has gone, which sixes are out and who is still missing a prediction.
+    pakEenZes: (() => {
+      if (!pakEenZes) return null;
+      const currentBlock = normalizedBlocks.find((b: any) => b.id === Number(game.current_round_block_id)) || null;
+      if (!currentBlock || currentBlock.type !== 'PAK_EEN_ZES') return null;
+      const activePlayers = players.rows.filter((p: any) => p.active);
+      const predicted = new Set(pakEenZes.predictedPlayerIds);
+      return {
+        ...pakEenZes,
+        blockId: currentBlock.id,
+        // Named rather than counted: the host is explicitly allowed to close without
+        // everyone, so they need to see who they are closing without.
+        awaitingPrediction: activePlayers
+          .filter((p: any) => !predicted.has(Number(p.id)))
+          .map((p: any) => ({ playerId: Number(p.id), name: p.display_name })),
+        sixesFound: pakEenZes.sixes.length,
+        activePlayerCount: activePlayers.length,
+      };
+    })(),
     // Live slotmachine picture for whatever block is current. Null-ish rather than
     // absent when the current block is not a slotmachine, so the Control Center can key
     // off the block type as it does for roulette.
@@ -385,7 +413,7 @@ export async function getPlayerState(gameId: number, playerId: number) {
   const player = playerResult.rows[0];
   if (!player) throw new HttpError(404, 'Player not found');
 
-  const [ledger, predictions, roulette, interactive, myRequests, slotBlock, slotSeries] = await Promise.all([
+  const [ledger, predictions, roulette, interactive, myRequests, slotBlock, slotSeries, pakBlock, pakMine, pakRoster] = await Promise.all([
     pool.query('SELECT id,amount,transaction_type,description,created_at,attributed_round_id,prediction_id,roulette_game_id,round_block_id FROM ledger_entries WHERE game_night_id=$1 AND player_id=$2 ORDER BY created_at DESC,id DESC LIMIT 12', [gameId, playerId]),
     pool.query(
       `SELECT p.id,p.display_number,p.question,p.status,p.probability_yes,p.yes_odds,p.no_odds,p.prediction_time_seconds,p.minimum_stake,p.maximum_stake,p.opened_at,p.closes_at,p.result,p.round_id,r.round_number,
@@ -440,6 +468,46 @@ export async function getPlayerState(gameId: number, playerId: number) {
        WHERE sr.game_night_id=$1 AND sr.player_id=$2
          AND sr.round_block_id=(SELECT current_round_block_id FROM game_nights WHERE id=$1)
        ORDER BY CASE sr.status WHEN 'ACTIVE' THEN 0 ELSE 1 END,sr.id DESC LIMIT 1`, [gameId, playerId],
+    ),
+    // Like the live question and the slotmachine, Pak een Zes only reaches a phone while
+    // its block is the live one and its round is active — that is what makes the
+    // controls appear and disappear with the block rather than living on a page.
+    pool.query(
+      `SELECT b.id,b.round_id,b.title,b.payload,
+              pz.id AS pak_game_id,pz.status,pz.turn_index
+       FROM game_nights g JOIN round_blocks b ON b.id=g.current_round_block_id
+       JOIN rounds r ON r.id=b.round_id
+       LEFT JOIN LATERAL (
+         SELECT id,status,turn_index FROM pak_een_zes_games
+         WHERE game_night_id=g.id AND round_block_id=b.id ORDER BY id DESC LIMIT 1
+       ) pz ON TRUE
+       WHERE g.id=$1 AND b.type='PAK_EEN_ZES' AND r.status='ACTIVE'`, [gameId],
+    ),
+    // The player's own four picks, in slot order. Duplicates survive because the rows
+    // are per slot, so "Daan, Twan, Daan, Bas" comes back as four picks.
+    pool.query(
+      `SELECT pr.slot,pr.predicted_player_id
+       FROM pak_een_zes_predictions pr
+       JOIN pak_een_zes_games pz ON pz.id=pr.pak_een_zes_game_id
+       WHERE pz.game_night_id=$1 AND pr.player_id=$2
+         AND pz.round_block_id=(SELECT current_round_block_id FROM game_nights WHERE id=$1)
+       ORDER BY pr.slot`, [gameId, playerId],
+    ),
+    // Two things in one read: every name the picker can offer, and the frozen turn order
+    // with it. `turn_order` is null for anyone who is not a participant, which only
+    // happens if they joined after the host started.
+    pool.query(
+      `SELECT pl.id,pl.display_name,pl.public_color,pt.turn_order
+       FROM players pl
+       LEFT JOIN pak_een_zes_participants pt
+         ON pt.player_id=pl.id
+         AND pt.pak_een_zes_game_id=(
+           SELECT id FROM pak_een_zes_games
+           WHERE game_night_id=$1 AND round_block_id=(SELECT current_round_block_id FROM game_nights WHERE id=$1)
+           ORDER BY id DESC LIMIT 1
+         )
+       WHERE pl.game_night_id=$1 AND pl.active=TRUE
+       ORDER BY pl.display_name,pl.id`, [gameId],
     ),
   ]);
 
@@ -519,6 +587,46 @@ export async function getPlayerState(gameId: number, playerId: number) {
     };
   })() : null;
 
+  // The phone is a controller here too: predict during the prediction phase, then a
+  // single big KAART PAKKEN when it is your turn. It never learns the deck or the next
+  // card — the card is revealed on the projector.
+  const pakRow = pakBlock.rows[0];
+  const pakEenZes = pakRow ? (() => {
+    const settings = pakEenZesBlockSettings(pakRow.payload);
+    const status = pakRow.status || 'READY';
+    const picks = pakMine.rows.map((r: any) => Number(r.predicted_player_id));
+    const roster = pakRoster.rows.map((r: any) => ({
+      id: Number(r.id),
+      name: r.display_name,
+      color: r.public_color,
+      turnOrder: r.turn_order == null ? null : Number(r.turn_order),
+    }));
+    // The turn is resolved with the same function the draw endpoint uses, so the button
+    // the phone enables and the turn the server enforces cannot disagree.
+    const order = roster
+      .filter((r: any) => r.turnOrder != null)
+      .sort((a: any, b: any) => (a.turnOrder as number) - (b.turnOrder as number));
+    const currentPlayer = status === 'DRAWING' ? playerAtTurn(order, Number(pakRow.turn_index || 0)) : null;
+    return {
+      blockId: Number(pakRow.id),
+      roundId: Number(pakRow.round_id),
+      title: pakRow.title || 'Pak een Zes',
+      instructions: settings.instructions,
+      status,
+      predicting: status === 'PREDICTING',
+      drawing: status === 'DRAWING',
+      finished: status === 'FINISHED',
+      // Four picks only count as a saved prediction once all four are in.
+      myPicks: picks.length === 4 ? picks : [],
+      hasPredicted: picks.length === 4,
+      // Everyone active can be named — including yourself, and more than once.
+      players: roster.map((r: any) => ({ id: r.id, name: r.name, color: r.color })),
+      turnOrder: order.map((r: any) => ({ id: r.id, name: r.name })),
+      currentPlayer: currentPlayer ? { id: currentPlayer.id, name: currentPlayer.name } : null,
+      isMyTurn: Boolean(currentPlayer && currentPlayer.id === Number(player.id)),
+    };
+  })() : null;
+
   // The player's own prediction requests, plus how many they have left and whether they
   // are on cooldown. Computed here so the phone can explain the limits before the player
   // types something and gets refused.
@@ -546,8 +654,10 @@ export async function getPlayerState(gameId: number, playerId: number) {
     rouletteAvailable: currentRoulette?.status === 'OPEN',
     interactiveBlock,
     slotmachine,
+    pakEenZes,
     actionable: normalizedPredictions.some((p: any) => p.status === 'OPEN') || currentRoulette?.status === 'OPEN' || interactiveBlock?.status === 'OPEN'
-      || Boolean(slotmachine?.allowed && slotmachine.configValid),
+      || Boolean(slotmachine?.allowed && slotmachine.configValid)
+      || Boolean(pakEenZes && ['PREDICTING', 'DRAWING'].includes(pakEenZes.status)),
     recentLedger: ledger.rows.map((r: any) => ({ ...r, id: Number(r.id), amount: Number(r.amount) })),
   };
 }
@@ -567,10 +677,10 @@ export async function getScreenState(gameId: number) {
   const game = gameResult.rows[0];
   if (!game) throw new HttpError(404, 'Game not found');
   const screenMode = game.mode || game.current_screen_mode || 'DASHBOARD';
-  const blockId = ['ROUND_BLOCK','ROULETTE','SLOTMACHINE'].includes(screenMode) ? (Number(game.payload?.blockId || game.current_round_block_id || 0) || null) : null;
+  const blockId = ['ROUND_BLOCK','ROULETTE','SLOTMACHINE','PAK_EEN_ZES'].includes(screenMode) ? (Number(game.payload?.blockId || game.current_round_block_id || 0) || null) : null;
   const rouletteGameId = screenMode === 'ROULETTE' ? (Number(game.payload?.rouletteGameId || 0) || null) : null;
 
-  const [round, block, prediction, players, ledgerEvents, predictionEvents, rouletteEvents, ticker, totals, roulette, recentResults, slot, slotSpins] = await Promise.all([
+  const [round, block, prediction, players, ledgerEvents, predictionEvents, rouletteEvents, ticker, totals, roulette, recentResults, slot, slotSpins, pakEenZesGame, pakPredictionCount] = await Promise.all([
     pool.query('SELECT id,round_number,title,status FROM rounds WHERE id=COALESCE($1::bigint,$2::bigint) AND game_night_id=$3', [game.screen_round_id, game.current_round_id, gameId]),
     blockId ? pool.query(
       `SELECT b.*,COUNT(a.id)::int AS answer_count FROM round_blocks b LEFT JOIN round_question_answers a ON a.round_block_id=b.id
@@ -641,6 +751,13 @@ export async function getScreenState(gameId: number) {
          WHERE ss.round_block_id=$1 AND ss.game_night_id=$2
          ORDER BY ss.spun_at DESC,ss.id DESC LIMIT 6`, [blockId, gameId])
       : Promise.resolve({ rows: [] } as any),
+    // The projector is the only surface that shows the deck and the reveal.
+    screenMode === 'PAK_EEN_ZES' && blockId
+      ? loadPakEenZesGame(pool, gameId, blockId)
+      : Promise.resolve(null),
+    screenMode === 'PAK_EEN_ZES'
+      ? pool.query('SELECT COUNT(*)::int AS n FROM players WHERE game_night_id=$1 AND active=TRUE', [gameId])
+      : Promise.resolve({ rows: [{ n: 0 }] } as any),
   ]);
 
   type EconEvent = { playerId: number; delta: number; time: number; key: string };
@@ -746,6 +863,25 @@ export async function getScreenState(gameId: number) {
         recentSpins: spins.slice(1),
       };
     })() : null,
+    // The Pak een Zes scene: before the game it counts predictions, during it shows the
+    // deck, the turn and the last card, and after it lists the four sixes and who drew
+    // them. `lastDraw` is what the reveal animates to — it is already committed.
+    pakEenZes: pakEenZesGame ? {
+      blockId,
+      status: pakEenZesGame.status,
+      turnIndex: pakEenZesGame.turnIndex,
+      participants: pakEenZesGame.participants,
+      currentPlayer: pakEenZesGame.currentPlayer,
+      drawnCount: pakEenZesGame.drawnCount,
+      cardsRemaining: pakEenZesGame.cardsRemaining,
+      lastDraw: pakEenZesGame.draws[pakEenZesGame.draws.length - 1] || null,
+      recentDraws: pakEenZesGame.draws.slice(-6).reverse(),
+      sixes: pakEenZesGame.sixes,
+      sixesFound: pakEenZesGame.sixes.length,
+      predictionCount: pakEenZesGame.predictionCount,
+      activePlayerCount: Number(pakPredictionCount.rows[0]?.n || 0),
+      finished: pakEenZesGame.finished,
+    } : null,
     recentPredictionResults: recentResults.rows.map((r: any) => ({ id: Number(r.id), number: Number(r.display_number), question: r.question, result: r.result, yesOdds: Number(r.yes_odds), noOdds: Number(r.no_odds), settledAt: r.settled_at })),
   };
 }
