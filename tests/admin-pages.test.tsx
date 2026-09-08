@@ -323,6 +323,19 @@ describe('admin pages render', () => {
     expect(html).toContain('Max wallet % per prediction');
   });
 
+  it('offers Full Reset separately from Delete Game Save, gated on its own phrase', () => {
+    const html = render(createElement(SettingsPage, { state: adminState(), gameId: 1, run, onReset: () => {} }));
+    expect(html).toContain('RESET AVOND');
+    expect(html).toContain('Full Reset');
+    // Dead until the exact phrase is typed, and it is not the delete phrase.
+    expect(html).toMatch(/<button [^>]*disabled[^>]*>RESET AVOND<\/button>/);
+    expect(html).toContain('placeholder="RESET AVOND"');
+    // Both destructive actions stay available and stay distinguishable.
+    expect(html).toContain('DELETE GAME SAVE');
+    // The gentler action reads first, so a host does not scroll past it to the harsher one.
+    expect(html.indexOf('Full Reset')).toBeLessThan(html.indexOf('Delete Game Save'));
+  });
+
   it('renders the Ledger with the readable list first and the full table behind it', () => {
     const html = render(createElement(LedgerPage, { state: adminState(), gameId: 1 }));
     expect(html).toContain('LEDGER FILTER');

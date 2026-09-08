@@ -15,7 +15,7 @@ Market Mayhem is a private game-night economy with player wallets, prediction de
 ## Routes
 
 - `/admin/:gameId` — Control Center
-- `/admin/:gameId/settings` — game settings and reset
+- `/admin/:gameId/settings` — game settings, Full Reset and Delete Game Save
 - `/admin/:gameId/players` — players, join links and per-player adjustments
 - `/admin/:gameId/rounds` — round list
 - `/admin/:gameId/rounds/:roundId` — content, round groups and group scoring
@@ -340,9 +340,19 @@ Notes that save time:
 
 Previously deployed migrations are historical and are not rewritten.
 
+## Full Reset
+
+Settings → **RESET AVOND** requires exactly `RESET AVOND` in both UI and backend. It throws away the played evening and keeps the prepared one, so a night can be tested end to end and then run for real without rebuilding anything.
+
+Reset: the whole ledger, every wallet back to its player's `starting_balance_snapshot`, prediction deposits and results, roulette games/bets, slotmachine series and spins, Pak een Zes games/predictions/draws, Fotoronde uploads and judgements, live-question answers, player-proposed markets, every round back to `UPCOMING`, every block's interactive state back to what authoring gives a new block, no active round or step, and the Big Screen back to the dashboard with nothing staged or remembered.
+
+Kept: rounds with their order and titles, every block with its type, order, title and payload, predictions with their probability, odds, timing and stake limits, slotmachine symbols/chances/payouts, teams and membership, all players with their join links and sessions, and the settings on the Settings page.
+
+Wallets are set back rather than corrected: the old ledger rows are deleted and one fresh `STARTING_BALANCE` entry is written per player, so the wallet equals the snapshot equals the sum of the ledger and the test run leaves no trace in the history. `game_state_version` is bumped so Admin, phones and the projector all refresh within one poll. `netlify/lib/full-reset.ts` holds the runtime/configuration classification as two explicit lists, and a test fails if a migration adds a table that appears in neither.
+
 ## Delete Game Save
 
-Settings → Danger Zone → **DELETE GAME SAVE** requires exactly `yes delete` in both UI and backend. The transaction is scoped to the requested game ID and removes player/game economy, round content/groups/questions, predictions, roulette and screen state while preserving Admin sessions and the audit table. A final `GAME_RESET` audit record is written first.
+Unlike Full Reset, this also removes the evening you prepared. Settings → Danger Zone → **DELETE GAME SAVE** requires exactly `yes delete` in both UI and backend. The transaction is scoped to the requested game ID and removes player/game economy, round content/groups/questions, predictions, roulette and screen state while preserving Admin sessions and the audit table. A final `GAME_RESET` audit record is written first.
 
 ## Live updates
 
