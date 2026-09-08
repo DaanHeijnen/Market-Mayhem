@@ -3,12 +3,16 @@ import { HttpError } from './http';
 import {
   evaluateSlotConfig,
   outcomePercentage,
+  resolveSlotTurn,
   symbolLetter,
+  SLOT_MAX_SPINS_LIMIT,
   SLOT_OUTCOME_LABELS,
   SLOT_OUTCOME_TYPES,
   type SlotConfigStatus,
   type SlotOutcomeType,
   type SlotOutcomeWeight,
+  type SlotSeriesTurn,
+  type SlotTurn,
 } from './slotmachine';
 
 /**
@@ -105,7 +109,12 @@ export function slotBlockSettings(payload: any): SlotBlockSettings {
   const maxSpins = Number(payload?.maxSpins);
   const allowed = Array.isArray(payload?.allowedPlayerIds) ? payload.allowedPlayerIds.map(Number).filter(Number.isInteger) : [];
   return {
-    maxSpins: Number.isInteger(maxSpins) && maxSpins > 0 ? maxSpins : 10,
+    // Clamped on read as well as on write, so a block authored before the ten-spin rule
+    // cannot still sell a longer run.
+    maxSpins: Math.min(
+      SLOT_MAX_SPINS_LIMIT,
+      Number.isInteger(maxSpins) && maxSpins > 0 ? maxSpins : SLOT_MAX_SPINS_LIMIT,
+    ),
     instructions: typeof payload?.body === 'string' ? payload.body : '',
     // Empty means everyone; the endpoints treat it that way rather than as "nobody".
     allowedPlayerIds: allowed,
@@ -187,4 +196,45 @@ export async function closeSlotSeriesForBlock(
   }
 
   return { closed: series.rows.length, refunded: refundedTotal };
+}
+
+/**
+ * Read the turn for one slotmachine block.
+ *
+ * Turn order is lock order, so the series are read by id. A spin still sitting at
+ * SPINNING holds the turn with its player until it resolves, which is what stops the
+ * projector cutting away from someone's final result.
+ */
+export async function loadSlotTurn(db: Queryable, gameId: number, blockId: number): Promise<SlotTurn & { spinningSpinId: number | null }> {
+  const [series, spinning] = await Promise.all([
+    db.query(
+      `SELECT sr.id,sr.player_id,sr.stake_per_spin,sr.total_spins,sr.spins_remaining,sr.status,p.display_name
+       FROM slot_series sr JOIN players p ON p.id=sr.player_id
+       WHERE sr.game_night_id=$1 AND sr.round_block_id=$2
+       ORDER BY sr.id`,
+      [gameId, blockId],
+    ),
+    // A spin is "in progress" exactly while it is SPINNING; the timed sync that reveals
+    // it is the same one the roulette result uses.
+    db.query(
+      `SELECT id,player_id FROM slot_spins
+       WHERE round_block_id=$1 AND game_night_id=$2 AND status='SPINNING'
+       ORDER BY id DESC LIMIT 1`,
+      [blockId, gameId],
+    ),
+  ]);
+
+  const rows: SlotSeriesTurn[] = series.rows.map((row: any) => ({
+    seriesId: Number(row.id),
+    playerId: Number(row.player_id),
+    playerName: row.display_name,
+    stakePerSpin: Number(row.stake_per_spin),
+    totalSpins: Number(row.total_spins),
+    spinsRemaining: Number(row.spins_remaining),
+    status: row.status,
+  }));
+
+  const spinningRow = spinning.rows[0];
+  const turn = resolveSlotTurn(rows, spinningRow ? Number(spinningRow.player_id) : null);
+  return { ...turn, spinningSpinId: spinningRow ? Number(spinningRow.id) : null };
 }

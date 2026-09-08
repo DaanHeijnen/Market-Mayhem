@@ -3,7 +3,7 @@ import { requirePlayer } from '../lib/auth';
 import { withTransaction } from '../lib/db';
 import { body, ok, intValue, requestIdempotencyKey, HttpError } from '../lib/http';
 import { incrementGameVersion } from '../lib/game-state';
-import { loadSlotConfig, playerMayPlaySlot, slotBlockSettings } from '../lib/slot-state';
+import { loadSlotConfig, loadSlotTurn, playerMayPlaySlot, slotBlockSettings } from '../lib/slot-state';
 import {
   classifyGrid,
   generateGrid,
@@ -29,6 +29,12 @@ import { wrap } from './_wrap';
  * All of that, the coin movement and the stored result happen inside one transaction,
  * before any client is told anything. The Big Screen animation only ever plays toward an
  * outcome that is already committed.
+ *
+ * Two gates make the turn system real, and both are enforced here rather than trusted
+ * from the phone. Only the player the server says is up may spin — one player uses their
+ * whole bought run before the next starts. And no spin may begin while the previous one
+ * is still resolving, so tapping SPIN three times cannot buy three spins: a spin only
+ * counts once it has a final outcome on screen.
  *
  * The payout is credited here rather than after the animation. That keeps the money in
  * the same transaction as the decision, so there is no settlement step that could be
@@ -92,6 +98,16 @@ export default wrap(async request => {
     }
     if (!playerMayPlaySlot(slotBlockSettings(block.payload), session.playerId)) {
       throw new HttpError(403, 'You are not taking part in this slotmachine');
+    }
+
+    // The turn is derived from the series rows, and the FOR UPDATE above has already
+    // pinned this player's row — so two racing requests cannot both read themselves up.
+    const turn = await loadSlotTurn(client, gameId, blockId);
+    if (turn.spinning) throw new HttpError(409, 'Wait for the current spin to finish');
+    if (!turn.current || turn.current.playerId !== session.playerId) {
+      throw new HttpError(403, turn.current
+        ? `It is ${turn.current.playerName || 'another player'}'s turn`
+        : 'Nobody has spins left on this slotmachine');
     }
 
     const config = await loadSlotConfig(client, gameId);
@@ -171,9 +187,13 @@ export default wrap(async request => {
     );
     if (!decremented.rows[0]) throw new HttpError(409, 'No spins remaining in this series');
 
+    const spinsLeft = Number(decremented.rows[0].spins_remaining);
     return {
       spinId,
       spinNumber,
+      // Whether this player keeps the turn. Zero means their run is over, and the next
+      // player takes over once this spin has finished resolving.
+      keepsTurn: spinsLeft > 0,
       outcomeType: outcome.type,
       outcome: label,
       spinsRemaining: Number(decremented.rows[0].spins_remaining),

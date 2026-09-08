@@ -16,6 +16,7 @@ import {
   type Rank,
   type Suit,
 } from '../lib/pak-een-zes';
+import { awardPakEenZesPredictions } from '../lib/pak-een-zes-state';
 import { wrap } from './_wrap';
 
 /**
@@ -124,11 +125,16 @@ export default wrap(async request => {
     // The game ends the moment the fourth six is out, whatever is left in the deck.
     const sixesFound = countSixes([...drawn, card]);
     const finished = allSixesFound([...drawn, card]);
+    let reward: { awarded: number; totalPoints: number; pointsPerCorrect: number } | null = null;
     if (finished) {
       await client.query(
         "UPDATE pak_een_zes_games SET status='FINISHED',finished_at=NOW(),updated_at=NOW() WHERE id=$1",
         [pakEenZesGameId],
       );
+      // Paid in the same transaction as the six that ended the game: no separate Admin
+      // step to forget, and no window where the game is over but unscored. The ledger's
+      // unique index is what makes a retry safe.
+      reward = await awardPakEenZesPredictions(client, gameId, pakEenZesGameId, 'player');
     } else {
       await client.query(
         'UPDATE pak_een_zes_games SET turn_index=$2,updated_at=NOW() WHERE id=$1',
@@ -145,6 +151,7 @@ export default wrap(async request => {
       isSix: six,
       sixesFound,
       finished,
+      reward,
       version: await incrementGameVersion(client, gameId),
     };
   }));

@@ -51,6 +51,7 @@ Round numbers are labels, not execution pointers. A partial unique database inde
 - `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`
 - `SLOTMACHINE`
 - `PAK_EEN_ZES`
+- `FOTORONDE`
 
 `game_nights.current_round_block_id` is the operational content cursor. Previous/next controls are conveniences over block order; they never imply `round_number + 1`.
 
@@ -169,6 +170,21 @@ The payout comes from the drawn category, never from which symbols filled it. `w
 
 Configuration validity has one definition, in `netlify/lib/slotmachine.ts`, reached by two routes that must not disagree: `evaluateSlotConfig` from the full configuration (Admin surfaces and every write path), and `describeSlotConfig` from SQL aggregates on the player snapshot's hottest query. A machine is valid when the total is above zero, the five chances sum to it exactly, and all twelve symbols have artwork — the last because the generator draws freely from the whole set. An invalid machine is still *saveable*, so the Admin can nudge numbers into place, but locking a series and spinning both refuse it.
 
+### Turns
+
+One player at a time, and that player uses their entire bought run before the next starts. The turn is **derived, not stored**: `resolveSlotTurn` takes the block's series in lock order and the turn is simply the head of "who still has spins". A stored turn pointer can drift out of step with the spins that actually happened and there is no reconciliation step that would fix it; here the spins *are* the turn state.
+
+Two gates are enforced in `slot-spin`, never trusted from the phone:
+
+- only `turn.current` may spin, so a request from anyone else is a 403;
+- no spin may begin while one is still `SPINNING`, so tapping SPIN repeatedly cannot buy several spins — a spin only counts once it has a final outcome.
+
+`spinningPlayerId` keeps the current player in place while their spin resolves, even once it took their last spin. Without that the projector would cut to the next player while the previous one's final result was still on screen; with it, the handover happens after the reveal.
+
+`maySpin` is the single verdict both sides use — the player snapshot sends it so the phone enables exactly what the server would allow, which is why the button and the enforcement cannot disagree.
+
+A run is bought once. `slot-lock-series` refuses a second series for the same player on the same block, whether the first is still running or already used, so there is no topping up; a `CANCELLED` series does not count, since that only happens when the host leaves the block and the machine starts over. `SLOT_MAX_SPINS_LIMIT` is 10, clamped on read as well as on write so a block authored before that rule cannot still sell a longer run.
+
 ### Series and spins
 
 ```mermaid
@@ -195,7 +211,7 @@ Because a deactivated player can no longer spin, `remove-player` refuses while t
 
 ## Pak een Zes
 
-A `PAK_EEN_ZES` block: predictions, then turn-based card draws. No money is involved, so there is no wallet or ledger participation — but everything is recorded, because this step deliberately builds no scoring and a points system has to be addable later without replaying the evening.
+A `PAK_EEN_ZES` block: predictions, then turn-based card draws, then a payout for the predictions that came true.
 
 ```mermaid
 stateDiagram-v2
@@ -229,9 +245,65 @@ The remaining deck is derived from the rows already drawn rather than from a shu
 
 Double-tap protection has three layers: `FOR UPDATE` on the game row serialises concurrent requests, `UNIQUE (game, idempotency_key)` answers a replay with the card it already produced, and the turn advances exactly once inside the same transaction. The game flips to `FINISHED` in that same transaction the moment the fourth six is out.
 
+### Scoring
+
+One Admin-set amount per correct prediction, on `game_nights.pak_een_zes_points_per_correct` — a single game-wide value rather than a rate per player, six or slot.
+
+`countCorrectPredictions` is a **multiset intersection**: each pick is matched against one six that player drew, and a six can satisfy only one pick. That is what makes the brief's example score three — Bas named twice and drawing two sixes counts twice, while Bas named twice and drawing one six counts once.
+
+`awardPakEenZesPredictions` runs inside the transaction that draws the fourth six, so the reward lands with the event that earned it: no separate Admin action to forget, and no window where the game is over but unscored. It follows the live question's `QUESTION_REWARD` path exactly — one `PAK_EEN_ZES_REWARD` ledger row plus a wallet credit, guarded by a partial unique index on `(pak_een_zes_game_id, player_id)`. A conflict is verified against the row that already exists rather than swallowed.
+
+The rate is snapshotted onto `pak_een_zes_games.points_per_correct` when the game pays, and the award function reads that snapshot in preference to the live setting. Both matter: the snapshot stops a later Settings change from rewriting what a finished game awarded, and reading it on a retry is what keeps the retry a clean no-op instead of a spurious conflict.
+
+An incomplete prediction — fewer than four slots — never scores. Only `FINISHED` games pay; a game cancelled when the host leaves the block does not.
+
+Per-player results are recomputed on read from the picks and the six events rather than stored, so the breakdown every surface shows always matches the rows behind it.
+
 ### Leaving the block
 
 Changing content block or completing the round **cancels** a live game (`closePakEenZesForBlock`) rather than blocking the move. Nothing financial is at stake, but leaving it in `DRAWING` would keep a turn indicator live on somebody's phone for a game nobody is watching. Draws and predictions are kept — cancelling must never erase the record. A finished game is left alone, and re-activating the block that is already live is a no-op so a dashboard detour and back cannot kill a game mid-play.
+
+## Fotoronde
+
+A `FOTORONDE` block: each team submits one photo per subject, and the Admin awards credits per photo which are split across that team's members.
+
+**Teams are round groups**, created by the Admin. `round_group_members` is unique by `(round_id, player_id)`, so a player's team is derivable from their session — which is what makes "uploading on behalf of your own team" enforceable rather than a matter of trust. `playerTeamForRound` is the only source of that answer; the phone never sends a team. The legacy `teams` table is untouched and unread.
+
+The Fotoronde panel creates and populates teams in place, through the existing `upsert-round-group` / `set-round-group-members` / `delete-round-group` endpoints and the groups already in the Admin snapshot. No second team model, and no new endpoint — the host simply reaches them where they need them, since the block cannot open without at least one. Because photo rewards carry `round_group_id`, the existing delete guard already refuses to remove a team that earned credits.
+
+**Subjects** live in the block payload as `{key, label}` pairs, defaulting to the standard six. The key is the identity and a submission is filed under it, so renaming a subject keeps its photos while the label is free to change. `normalizeSubjects` derives and de-duplicates keys, so two subjects that read alike can never inherit each other's photos.
+
+```mermaid
+stateDiagram-v2
+  [*] --> DRAFT
+  DRAFT --> OPEN : open submissions
+  OPEN --> CLOSED : close submissions
+  DRAFT --> CLOSED : skipped
+  CLOSED --> COMPLETED : mark finished
+```
+
+Forward-only. Uploads are accepted in `OPEN` alone; awards in `CLOSED` and `COMPLETED`. There is no route back to `OPEN` because a team must not be able to swap a photo the Admin has already judged, and `COMPLETED` still accepts awards so marking it done is not a trap.
+
+### Uploads
+
+`upload-photo-submission` is player-authenticated but reuses the round-media blob store and `lib/media`'s size and type limits — a photo round is round media like any other, and its bytes must not reach the database. Validation happens before a byte is stored, so a refused submission leaves no orphaned file, and the phase is re-checked inside the writing transaction so a photo cannot land after the Admin closed submissions.
+
+One photo per team per subject is a database guarantee: `UNIQUE (photo_round_id, subject_key, group_id)` plus an upsert, so a second upload from any team-mate replaces the team's photo rather than adding one.
+
+### Credits
+
+`distributeCredits` splits an award across the team's **active** members: `floor(credits / members)` each, with the remainder handed out one credit at a time down a stable member order (display name, then id). The amounts therefore always sum to exactly what was awarded — nothing lost to rounding, nothing invented by it — and the same input always produces the same split, including on a retry. The Admin panel states the split before the award is confirmed.
+
+`payPhotoSubmission` writes one `PHOTO_ROUND_REWARD` ledger row plus a wallet credit per member, exactly as a group adjustment does. Double payment is impossible rather than guarded against: `credits_awarded IS NULL` gates it under a row lock, and behind that a partial unique index on `(photo_submission_id, player_id)` refuses a second credit. A repeat request is answered with what was already awarded rather than an error.
+
+The split shown for a **judged** photo is read back from the ledger rows rather than recomputed, because a team's membership can change after an award — the figure has to be the split that happened, not what today's team would receive.
+
+### Edge cases
+
+- **Deactivating a player** removes them from future splits (active members only) but never claws back what they were paid.
+- **Changing team membership** never touches existing submissions; `uploaded_by` is `ON DELETE SET NULL` so removing a player keeps their team's photo and its credits.
+- **Leaving the block or completing the round** moves an open Fotoronde to `CLOSED`, not cancelled: the photos and the chance to award credits for them are the point of the block, so ending the upload window never discards unjudged work. Round completion therefore leaves scoring clearly unstarted rather than half-finished, and the Admin panel reports how many photos are still unjudged.
+- **Deleting the block or round** is refused once photos exist, since those photos may already have paid credits.
 
 ## Projector state
 
@@ -245,6 +317,7 @@ Changing content block or completing the round **cancels** a live game (`closePa
 - `ROULETTE`
 - `SLOTMACHINE`
 - `PAK_EEN_ZES`
+- `FOTORONDE`
 
 Each block type has exactly one composition that can present it: `setScreenMode` refuses `ROUND_BLOCK` for a roulette or slotmachine block and refuses `SLOTMACHINE` for anything else, so the projector cannot be pointed at a slot block with the plain content scene.
 

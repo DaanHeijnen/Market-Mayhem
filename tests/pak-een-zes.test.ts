@@ -4,6 +4,7 @@ import {
   canTransition,
   cardKey,
   cardLabel,
+  countCorrectPredictions,
   countSixes,
   drawCard,
   isLive,
@@ -12,10 +13,12 @@ import {
   nextTurnIndex,
   picksForPlayer,
   playerAtTurn,
+  predictionPoints,
   remainingDeck,
   validatePrediction,
   DECK_SIZE,
   FULL_DECK,
+  DEFAULT_POINTS_PER_CORRECT,
   PREDICTION_SLOTS,
   RANKS,
   SIXES_IN_DECK,
@@ -265,5 +268,91 @@ describe('block settings', () => {
     expect(pakEenZesBlockSettings({ body: 'Pak een kaart' }).instructions).toBe('Pak een kaart');
     expect(pakEenZesBlockSettings({}).instructions).toBe('');
     expect(pakEenZesBlockSettings(null).instructions).toBe('');
+  });
+});
+
+describe('scoring predictions', () => {
+  // Names as ids, for readability.
+  const BAS = 1, TWAN = 2, EMMA = 3, JORRIT = 4, DAAN = 5;
+
+  // The brief's worked example, exactly.
+  it('scores the worked example at three correct', () => {
+    const picks = [BAS, TWAN, BAS, EMMA];
+    const sixDrawers = [BAS, JORRIT, BAS, EMMA];
+    expect(countCorrectPredictions(picks, sixDrawers)).toBe(3);
+    expect(predictionPoints(3, 25)).toBe(75);
+  });
+
+  it('scores nothing when nobody predicted was right', () => {
+    expect(countCorrectPredictions([BAS, BAS, BAS, BAS], [TWAN, EMMA, JORRIT, DAAN])).toBe(0);
+    expect(predictionPoints(0, 25)).toBe(0);
+  });
+
+  it('scores a perfect prediction at four', () => {
+    expect(countCorrectPredictions([BAS, TWAN, EMMA, JORRIT], [JORRIT, EMMA, TWAN, BAS])).toBe(4);
+    expect(predictionPoints(4, 25)).toBe(100);
+  });
+
+  // The multiplicity rule, from both sides.
+  it('counts a name picked twice twice, when that player drew two sixes', () => {
+    expect(countCorrectPredictions([BAS, BAS, TWAN, EMMA], [BAS, BAS, JORRIT, DAAN])).toBe(2);
+  });
+
+  it('counts a name picked twice only once, when that player drew one six', () => {
+    // You cannot be paid twice for a six that only happened once.
+    expect(countCorrectPredictions([BAS, BAS, TWAN, EMMA], [BAS, JORRIT, DAAN, TWAN])).toBe(2); // one Bas + Twan
+    expect(countCorrectPredictions([BAS, BAS, BAS, BAS], [BAS, JORRIT, DAAN, TWAN])).toBe(1);
+  });
+
+  it('counts all four when one player drew all four sixes and was picked four times', () => {
+    expect(countCorrectPredictions([BAS, BAS, BAS, BAS], [BAS, BAS, BAS, BAS])).toBe(4);
+  });
+
+  it('does not credit a six more than once across different picks', () => {
+    // Three picks of Bas, two sixes for Bas: two correct, not three.
+    expect(countCorrectPredictions([BAS, BAS, BAS, TWAN], [BAS, BAS, EMMA, JORRIT])).toBe(2);
+  });
+
+  it('lets a player who picked themselves score for their own six', () => {
+    expect(countCorrectPredictions([DAAN, DAAN, BAS, EMMA], [DAAN, DAAN, JORRIT, TWAN])).toBe(2);
+  });
+
+  it('scores nothing before any six has been drawn', () => {
+    expect(countCorrectPredictions([BAS, TWAN, EMMA, JORRIT], [])).toBe(0);
+  });
+
+  it('is order independent — which six came first does not matter', () => {
+    const picks = [BAS, TWAN, BAS, EMMA];
+    expect(countCorrectPredictions(picks, [BAS, JORRIT, BAS, EMMA])).toBe(3);
+    expect(countCorrectPredictions(picks, [EMMA, BAS, BAS, JORRIT])).toBe(3);
+    expect(countCorrectPredictions(picks, [JORRIT, EMMA, BAS, BAS])).toBe(3);
+  });
+
+  describe('points per correct', () => {
+    it('pays the same amount for every correct prediction', () => {
+      expect(predictionPoints(1, 25)).toBe(25);
+      expect(predictionPoints(2, 25)).toBe(50);
+      expect(predictionPoints(3, 25)).toBe(75);
+      expect(predictionPoints(4, 25)).toBe(100);
+    });
+
+    it('honours whatever rate the Admin set, not a hardcoded one', () => {
+      expect(predictionPoints(3, 10)).toBe(30);
+      expect(predictionPoints(3, 100)).toBe(300);
+      expect(predictionPoints(3, 1)).toBe(3);
+    });
+
+    it('pays nothing at a zero rate, so the prediction can be for pride alone', () => {
+      expect(predictionPoints(4, 0)).toBe(0);
+    });
+
+    it('never pays a negative amount', () => {
+      expect(predictionPoints(-1, 25)).toBe(0);
+      expect(predictionPoints(3, -25)).toBe(0);
+    });
+
+    it('has a sane default for a fresh game', () => {
+      expect(DEFAULT_POINTS_PER_CORRECT).toBe(25);
+    });
   });
 });

@@ -32,7 +32,7 @@ A reset/fresh game has no players, rounds, predictions or transactions.
 1. **Settings** — set game name, starting coins, optional maximum wallet percentage per prediction, and the slotmachine's reel symbols and outcome odds.
 2. **Players** — create players and generate their single-use join links.
 3. **Rounds** — create rounds in any numbering scheme; execution does not assume `current + 1`.
-4. **Round Content** — add ordered blocks: `TEXT`, `QUESTION`, `DUOLINGO_QUESTION`, `ROULETTE`, `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`, `SLOTMACHINE`, `PAK_EEN_ZES`.
+4. **Round Content** — add ordered blocks: `TEXT`, `QUESTION`, `DUOLINGO_QUESTION`, `ROULETTE`, `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`, `SLOTMACHINE`, `PAK_EEN_ZES`, `FOTORONDE`.
 5. **Predictions** — set probability, market-specific duration and min/max deposit, then optionally schedule to a round.
 6. **Control Center** — run the round, move through content, operate live questions/roulette, watch slotmachine series, adjust coins and control the projector.
 
@@ -120,17 +120,23 @@ The configuration is **valid** only when the chances sum to exactly the total an
 
 On the block itself: title, instruction text for phones, **maximum spins per series**, and optionally which players take part (leave all unchecked for everyone).
 
-### Playing
+### Playing — one player at a time
 
 Player Mobile becomes the controller automatically while the block is live:
 
 1. choose **inzet per spin**
-2. choose **aantal spins** (capped by the block maximum and by their wallet)
+2. choose **aantal spins** — at most **10**, and also capped by their wallet
 3. see **totale inzet** = stake per spin × spins
-4. **INZET VASTZETTEN** — commits the series; stake and spin count are now frozen
-5. **SPIN** — once per remaining spin
+4. **INZET VASTZETTEN** — commits the run; stake and spin count are now frozen
+5. wait for your turn, then **SPIN** once per remaining spin
 
-The whole total is debited at lock, like a prediction deposit, so committed coins cannot be spent elsewhere between spins. Unused spins are refunded if the series is cancelled.
+**A player plays their whole bought run before the next player starts.** With Daan on 6, Bas on 4 and Twan on 8, the order is Daan's six spins, then Bas's four, then Twan's eight. Turn order is the order the runs were locked in. Everyone not up sees who is, and how far through their run they are.
+
+There is **no topping up**: once a run is locked the stake and count cannot change, and once it is used that player is finished for this block. The pickers disappear rather than offering a purchase the server would refuse.
+
+**A new spin cannot start until the previous one has a final outcome.** Tapping SPIN disables the button immediately, and the backend refuses a second spin while one is still resolving — so three quick taps cannot buy three spins. When the last spin of a run lands, the projector shows `DAAN IS KLAAR / VOLGENDE SPELER: BAS` and the next player's phone gets the button.
+
+The whole total is debited at lock, like a prediction deposit, so committed coins cannot be spent elsewhere between spins. Unused spins are refunded if the run is cancelled.
 
 On each spin the server works in **two steps**:
 
@@ -139,17 +145,68 @@ On each spin the server works in **two steps**:
 
 It then re-classifies the finished field and refuses to pay anything that does not match the category it drew. So a spin drawn as "two alike side by side" can never turn out to also show three alike, and the configured percentages are the percentages players actually see. The payout comes from the category, never from which symbols happened to fill it.
 
-The Big Screen shows the full 3×3 field, highlights the cells that form the winning pattern, and names the category (`2 DEZELFDE NAAST ELKAAR`, `3 DEZELFDE OP LIJN`, …) alongside the current player, stake per spin, current spin, spins remaining, payout multiplier, amount won and spin status. Phones show the category name only — never the field.
+The Big Screen shows whose turn it is for their whole run — bought, remaining and stake per spin, with only the remaining count changing between spins — plus the full 3×3 field, highlights the cells that form the winning pattern, and names the category (`2 DEZELFDE NAAST ELKAAR`, `3 DEZELFDE OP LIJN`, …) alongside the current player, stake per spin, current spin, spins remaining, payout multiplier, amount won and spin status. Phones show the category name only — never the field.
 
 ### Ending safely
 
 Moving to the next content block, or completing the round, closes every live series and refunds spins nobody used — so no slotmachine session keeps running behind the Admin's back. Nothing is lost: spins already taken keep their outcome and payout.
 
+## Fotoronde
+
+A `FOTORONDE` round block. Every team gets the same list of photo subjects; players upload one photo per subject **on behalf of their team**, and the Admin then awards credits per photo.
+
+"Team" means a **round group** — the round-scoped teams the Admin creates. You can build them straight from the Fotoronde panel in the Control Center (or on the round page, which also has group scoring); either way they are the same objects and the same endpoints. A player belongs to at most one group per round, so the app derives their team from their session: there is no team picker, and uploading for another team is not something a phone can ask for.
+
+A team that has earned photo credits cannot be deleted — the existing group guard keeps it for the ledger.
+
+### Subjects
+
+The block starts with the standard six — *Iets kunstigs, Iets lelijks, Iets moois, Iets opwindends, Iets wat met het geloof heeft te maken, Iets kinderlijks* — and the list is editable in the Round Content Builder. Each subject keeps a stable key, so renaming one never detaches the photos already filed under it.
+
+### Phases
+
+`DRAFT → OPEN → CLOSED → COMPLETED`, forwards only.
+
+- **DRAFT** — the block exists, nobody can upload yet.
+- **OPEN** — teams upload and may replace their photo.
+- **CLOSED** — uploads stop; the Admin judges. There is no way back to OPEN, so a team cannot swap a photo the Admin has already looked at.
+- **COMPLETED** — a marker. Awarding stays possible, so marking it done is not a trap.
+
+### One photo per team per subject
+
+A second upload from *any* team-mate replaces the team's photo rather than adding a second one — enforced by a unique index on `(round, subject, team)`. Team-mates see it is already sent, by whom, with a small preview.
+
+### Credits
+
+The Admin awards credits per photo. They go to the team and are **split across its active members** by one consistent rule: everyone gets `floor(credits / members)`, and the remainder is handed out one credit at a time down the member order. So 25 credits across 4 players pays **7 + 6 + 6 + 6** — the total is always exactly what was awarded, and the Admin panel shows the split *before* confirming it.
+
+Credits are real coins, landing in wallets through the existing ledger as `PHOTO_ROUND_REWARD`. The same photo can never be rewarded twice: `credits_awarded IS NULL` is the gate under a row lock, and behind it a unique index on `(photo, player)` refuses a second credit. An already-judged photo shows what it earned instead of an input.
+
+### Big Screen
+
+While submissions are open the projector shows progress per subject (`4 / 6 teams`). While judging, the Admin can put any single photo up full-screen with its team's name, and the standings appear as credits land.
+
 ## Pak een Zes
 
 A `PAK_EEN_ZES` round block. Everyone predicts who will draw a six, then players take turns pulling cards from a real 52-card deck until all four sixes are out.
 
-No coins are involved — this step deliberately builds **no scoring**. What it does do is record everything a points system would need later.
+### Scoring
+
+**Settings → Pak een Zes** holds one game-wide number: **punten per juiste voorspelling**. Not per player, per six or per prediction slot — every correct prediction is worth the same, and the players' phones show that exact value *before* they pick, so they know what a correct guess is worth.
+
+Correctness is a **multiset match**: each pick is matched against one six that player actually drew, and a six can only satisfy one pick.
+
+| | |
+| --- | --- |
+| predicted | Bas, Twan, Bas, Emma |
+| drew a six | Bas, Jorrit, Bas, Emma |
+| correct | **3** → 3 × 25 = **75 points** |
+
+Bas is named twice and drew two sixes, so both picks count. Naming Bas twice when he drew only one six counts once — you cannot be paid twice for a six that happened once.
+
+Points are credited through the existing wallet and ledger as `PAK_EEN_ZES_REWARD`, in the same transaction that draws the fourth six. There is no separate Admin step, and a partial unique index on `(game, player)` makes paying twice impossible. The rate is snapshotted onto the game when it pays, so changing Settings afterwards never rewrites a finished game. An incomplete prediction never scores.
+
+Afterwards the phone shows the player their own result (`3 voorspellingen goed / +75 punten`), and the Big Screen and Control Center list who predicted well.
 
 ### The host's flow
 
@@ -172,11 +229,12 @@ Whoever is up gets one big **KAART PAKKEN** button; everyone else sees whose tur
 
 A six is a moment: the projector calls it out by name. The game ends the instant the fourth six is out, whatever is left in the deck, and the Big Screen then lists all four with who drew them. A player can draw more than one six.
 
-### What is stored for later scoring
+### What is stored
 
 - every prediction, per slot, duplicates intact
 - every card drawn, in order, with who drew it
 - `is_six` on each draw, constrained so it can never disagree with the rank
+- the rate each finished game paid, and one reward ledger row per scoring player
 
 Which player drew a six, which suit, on which draw, and how often the same player did it are all one query away.
 
@@ -277,7 +335,7 @@ Notes that save time:
 2. Import it into Netlify.
 3. Enable Netlify Database.
 4. Generate a hash with `npm run admin:hash`, then configure `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH` and `SESSION_SECRET`.
-5. Apply/deploy migrations through `0013_pak_een_zes.sql`.
+5. Apply/deploy migrations through `0015_photo_round.sql`.
 6. Deploy.
 
 Previously deployed migrations are historical and are not rewritten.

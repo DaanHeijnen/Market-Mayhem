@@ -34,6 +34,8 @@ export function MobileViews({ state: s, gameId, view, predictionId, busy, act, g
   // Backend-driven for the same reason: the live block owns the phone, and Pak een Zes
   // goes away again on its own when the host moves on.
   if (s.pakEenZes) return <PakEenZesView state={s} game={s.pakEenZes} busy={busy} act={act} gameId={gameId} />;
+  // Backend-driven like the rest: the live block owns the phone.
+  if (s.photoRound) return <PhotoRoundView state={s} round={s.photoRound} busy={busy} gameId={gameId} />;
   if (view === 'predictions') return <PredictionList state={s} go={go} busy={busy} act={act} gameId={gameId} />;
   if (view === 'prediction' && currentPrediction) return <PredictionDetail state={s} prediction={currentPrediction} busy={busy} act={act} go={go} gameId={gameId} />;
   if (view === 'roulette') return <RouletteView state={s} busy={busy} act={act} go={go} gameId={gameId} />;
@@ -302,13 +304,23 @@ function SlotControllerView({ state: s, slot, busy, act, gameId }: { state: any;
   const totalStake = stakePerSpin * spins;
 
   const lastSpin = series?.lastSpin || slot.lastSeries?.lastSpin || null;
-  const spinning = lastSpin?.status === 'SPINNING';
-  const canLock = !busy && slot.configValid && slot.allowed && maxSpins > 0 && spins >= 1 && spins <= maxSpins && totalStake <= s.player.balance;
+  const turn = slot.turn || null;
+  // The server's verdict, not a local guess — the same function the spin endpoint
+  // enforces decided this. `spinning` covers the window where the reels are still
+  // resolving, which is what keeps SPIN disabled between taps.
+  const spinning = Boolean(turn?.spinning) || lastSpin?.status === 'SPINNING';
+  const myTurn = Boolean(turn?.isMyTurn);
+  const maySpin = Boolean(turn?.maySpin) && !busy;
+  // A completed run is final for this block — no topping up, so the pickers go away.
+  const usedUpRun = slot.lastSeries?.status === 'COMPLETED';
+  const canLock = !busy && !usedUpRun && slot.configValid && slot.allowed && maxSpins > 0 && spins >= 1 && spins <= maxSpins && totalStake <= s.player.balance;
 
   return <div className="slot-mobile">
     <div className="slot-mobile-header">
       <div className="label muted">SLOTMACHINE</div>
-      <span className={`pill status-pill ${series ? 'open' : 'neutral'}`}>{series ? 'SERIES LOCKED' : 'READY'}</span>
+      <span className={`pill status-pill ${myTurn ? 'open' : series ? 'warning' : 'neutral'}`}>
+        {myTurn ? 'JOUW BEURT' : series ? 'WACHTEN' : 'READY'}
+      </span>
     </div>
     <h1 className="display slot-mobile-title">{slot.title}</h1>
     {slot.instructions && <p className="muted slot-mobile-instructions">{slot.instructions}</p>}
@@ -328,22 +340,47 @@ function SlotControllerView({ state: s, slot, busy, act, gameId }: { state: any;
                 <span>Total committed</span><b><CoinIcon size={16} /> {series.totalStake}</b>
               </div>
             </Card>
-            <button
-              className="btn btn-primary slot-spin-btn"
-              disabled={busy || spinning || series.spinsRemaining <= 0}
-              onClick={() => act(async () => {
-                await mutation('/api/slot-spin', { gameId, seriesId: series.id }, true, spinKey);
-                setSpinKey(crypto.randomUUID());
-              })}
-            >{spinning ? 'SPINNING…' : `SPIN · ${series.spinsRemaining} LEFT`}</button>
+            {myTurn
+              ? <>
+                <Card className="slot-your-turn"><b>JIJ BENT AAN DE BEURT</b><span className="muted">Maak je hele reeks af — daarna is de volgende speler.</span></Card>
+                {/* Disabled the instant it is tapped (busy) and for as long as the spin
+                    is still resolving, so three quick taps cannot buy three spins. The
+                    backend refuses them too; this only spares the round trip. */}
+                <button
+                  className="btn btn-primary slot-spin-btn"
+                  disabled={!maySpin || spinning || series.spinsRemaining <= 0}
+                  onClick={() => act(async () => {
+                    await mutation('/api/slot-spin', { gameId, seriesId: series.id }, true, spinKey);
+                    setSpinKey(crypto.randomUUID());
+                  })}
+                >{busy ? 'BEZIG…' : spinning ? 'DRAAIT…' : `SPIN · ${series.spinsRemaining} LEFT`}</button>
+              </>
+              : <Card className="slot-waiting-turn">
+                <div className="label muted">AAN DE BEURT</div>
+                <b className="slot-waiting-name">{turn?.current?.name || '—'}</b>
+                <span className="muted">
+                  {turn?.current
+                    ? `Nog ${turn.current.spinsRemaining} van ${turn.current.totalSpins} spins. Jij bent hierna aan de beurt zodra het jouw plek is.`
+                    : 'Wachten op de volgende speler.'}
+                </span>
+              </Card>}
             <SlotLastSpin spin={lastSpin} />
           </>
           : <>
             {slot.lastSeries && <Card className="slot-series-done">
-              <b>SERIES FINISHED</b>
-              <span className="muted">{slot.lastSeries.status === 'CANCELLED' ? 'Unused spins were refunded.' : 'All spins used — lock a new series to keep playing.'}</span>
+              <b>JE REEKS IS KLAAR</b>
+              <span className="muted">{slot.lastSeries.status === 'CANCELLED'
+                ? 'Unused spins were refunded.'
+                : 'Al je spins zijn gebruikt. Er kunnen geen spins worden bijgekocht.'}</span>
             </Card>}
-            <Card className="slot-setup-card">
+            {/* Someone else is mid-run, so the pickers would be misleading: they can
+                still buy a run, but it starts after the current player finishes. */}
+            {!slot.lastSeries && turn?.current && <Card className="slot-waiting-turn">
+              <div className="label muted">AAN DE BEURT</div>
+              <b className="slot-waiting-name">{turn.current.name || '—'}</b>
+              <span className="muted">Zet hieronder je reeks vast — je komt achter de huidige speler in de rij.</span>
+            </Card>}
+            {!usedUpRun && <Card className="slot-setup-card">
               <label className="slot-field">
                 <span className="label muted">INZET PER SPIN</span>
                 <div className="slot-stake-picker">
@@ -372,8 +409,8 @@ function SlotControllerView({ state: s, slot, busy, act, gameId }: { state: any;
                 INZET VASTZETTEN
               </button>
               {maxSpins === 0 && <p className="muted microcopy">Your wallet does not cover a spin at this stake — lower the stake per spin.</p>}
-              {maxSpins > 0 && <p className="muted microcopy">Once locked, the stake and spin count cannot be changed. Unused spins are refunded if the host moves on.</p>}
-            </Card>
+              {maxSpins > 0 && <p className="muted microcopy">Once locked, the stake and spin count cannot be changed and no extra spins can be bought. You play your whole run in one turn.</p>}
+            </Card>}
             <SlotLastSpin spin={lastSpin} />
           </>}
 
@@ -395,6 +432,124 @@ function SlotLastSpin({ spin }: { spin: any }) {
     <b className="slot-last-outcome">{spin.outcome}</b>
     <span>{won ? `+${spin.payout} coins at ${Number(spin.payoutMultiplier).toFixed(2).replace(/\.?0+$/, '')}x` : 'Geen winst — no payout on this spin'}</span>
   </Card>;
+}
+
+/**
+ * Fotoronde on the phone: the subject list, and one photo per subject for your team.
+ *
+ * The team is not a choice. It comes from the round's groups via the session, so a player
+ * uploads on behalf of their own team or not at all — there is no team picker to get
+ * wrong, and the server would refuse one anyway.
+ *
+ * A photo already sent by *any* team-mate shows as sent, because the submission belongs
+ * to the team rather than to the person who pressed upload. While the round is open it
+ * can still be replaced; once the Admin closes it, it cannot.
+ */
+function PhotoRoundView({ state: s, round, busy, gameId }: { state: any; round: any; busy: boolean; gameId: number }) {
+  return <div className="photo-mobile">
+    <div className="photo-mobile-header">
+      <div className="label muted">FOTORONDE</div>
+      <span className={`pill status-pill ${round.open ? 'open' : round.status === 'DRAFT' ? 'neutral' : 'warning'}`}>
+        {round.open ? 'INZENDEN OPEN' : round.status === 'DRAFT' ? 'NOG NIET OPEN' : round.status === 'CLOSED' ? 'GESLOTEN' : 'AFGEROND'}
+      </span>
+    </div>
+    <h1 className="display photo-mobile-title">{round.title}</h1>
+    {round.team
+      ? <div className="photo-team-chip">Team: <b>{round.team.name}</b></div>
+      : <Card><b>Je zit niet in een team voor deze ronde.</b><span className="muted">Vraag de host om je aan een team toe te voegen.</span></Card>}
+    {round.instructions && <p className="muted photo-mobile-instructions">{round.instructions}</p>}
+
+    {round.status === 'DRAFT' && <Card><b>Nog even wachten.</b><span className="muted">De host opent zo het inzenden.</span></Card>}
+    {round.status === 'CLOSED' && <Card><b>Inzenden is gesloten.</b><span className="muted">De host beoordeelt de foto’s nu.</span></Card>}
+    {round.status === 'COMPLETED' && <Card><b>De Fotoronde is afgerond.</b><span className="muted">Credits staan in je wallet.</span></Card>}
+
+    {round.team && <div className="photo-subject-list">
+      {round.subjects.map((subject: any, index: number) => <Card className={`photo-subject-card ${subject.submitted ? 'is-done' : ''}`} key={subject.key}>
+        <div className="photo-subject-head">
+          <span className="photo-subject-index">{index + 1}</span>
+          <b className="photo-subject-label">{subject.label}</b>
+        </div>
+
+        {subject.submitted && <div className="photo-subject-done">
+          <span className="photo-done-mark">✓ Foto ingestuurd</span>
+          {subject.uploaderName && <span className="muted">door {subject.uploaderName}</span>}
+        </div>}
+
+        {/* A small preview, so a team-mate can see what was sent before replacing it. */}
+        {subject.mediaKey && <img className="photo-subject-preview" src={`/api/block-media?key=${encodeURIComponent(subject.mediaKey)}`} alt="" />}
+
+        {round.open && <PhotoUploadField
+          gameId={gameId}
+          blockId={round.blockId}
+          subjectKey={subject.key}
+          replacing={subject.submitted}
+          disabled={busy}
+        />}
+      </Card>)}
+    </div>}
+  </div>;
+}
+
+/**
+ * One subject's upload control.
+ *
+ * Uploads straight to its own endpoint rather than through `act`, because this is a
+ * multipart post rather than a JSON mutation. It keeps its own busy flag so one subject
+ * uploading never disables the others, and the button is dead while a file is in flight
+ * so a double tap cannot send the same photo twice.
+ */
+function PhotoUploadField({ gameId, blockId, subjectKey, replacing, disabled }: {
+  gameId: number;
+  blockId: number;
+  subjectKey: string;
+  replacing: boolean;
+  disabled: boolean;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState('');
+
+  const upload = async (file: File | undefined | null) => {
+    if (!file || uploading) return;
+    setUploading(true);
+    setError('');
+    try {
+      const form = new FormData();
+      form.append('gameId', String(gameId));
+      form.append('blockId', String(blockId));
+      form.append('subjectKey', subjectKey);
+      form.append('file', file);
+      const response = await fetch('/api/upload-photo-submission', { method: 'POST', credentials: 'include', body: form });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Uploaden mislukt');
+      // The next poll brings the submission back with its preview, so there is nothing
+      // to set locally.
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Uploaden mislukt');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return <div className="photo-upload-field">
+    {/* capture="environment" opens the camera straight away on a phone, which is what
+        a photo round actually wants. */}
+    <input
+      ref={inputRef}
+      className="visually-hidden"
+      type="file"
+      accept="image/*"
+      capture="environment"
+      disabled={disabled || uploading}
+      onChange={e => void upload(e.target.files?.[0])}
+    />
+    <button
+      className={`btn ${replacing ? 'btn-secondary' : 'btn-primary'} btn-full photo-upload-btn`}
+      disabled={disabled || uploading}
+      onClick={() => inputRef.current?.click()}
+    >{uploading ? 'UPLOADEN…' : replacing ? 'FOTO VERVANGEN' : 'FOTO UPLOADEN'}</button>
+    {error && <span className="neg photo-upload-error">{error}</span>}
+  </div>;
 }
 
 /**
@@ -436,7 +591,13 @@ function PakEenZesView({ state: s, game, busy, act, gameId }: { state: any; game
     {game.predicting && <>
       <Card className="pez-predict-card">
         <div className="display pez-question">Wie trekken volgens jou een zes?</div>
-        <p className="muted microcopy">Je mag dezelfde speler meerdere keren kiezen, en jezelf ook.</p>
+        {/* Stated before the picks, not after: the value is what makes the choice mean
+            something. Comes from Settings — never hardcoded here. */}
+        {game.pointsPerCorrect > 0 && <div className="pez-points-banner">
+          <b>Elke juiste voorspelling is {game.pointsPerCorrect} punten waard.</b>
+          <span>Raad je iemand goed en trekt die persoon echt een zes? Dan verdien je {game.pointsPerCorrect} punten.</span>
+        </div>}
+        <p className="muted microcopy">Je mag dezelfde speler meerdere keren kiezen, en jezelf ook. Noem je iemand twee keer en trekt hij twee zessen, dan tellen beide mee.</p>
         {[0, 1, 2, 3].map(index => <label className="pez-pick" key={index}>
           <span className="pez-pick-number">{index + 1}</span>
           <select className="field" value={picks[index]} onChange={e => setPick(index, e.target.value)}>
@@ -478,7 +639,16 @@ function PakEenZesView({ state: s, game, busy, act, gameId }: { state: any; game
         </Card>}
     </>}
 
-    {game.finished && <Card className="pez-saved"><b>ALLE VIER DE ZESSEN ZIJN GEVONDEN</b><span className="muted">Bekijk het overzicht op het grote scherm.</span></Card>}
+    {game.finished && <>
+      <Card className="pez-saved"><b>ALLE VIER DE ZESSEN ZIJN GEVONDEN</b><span className="muted">Bekijk het overzicht op het grote scherm.</span></Card>
+      {game.myScore && <Card className={`pez-score-card ${game.myScore.points > 0 ? 'is-win' : ''}`}>
+        <b className="pez-score-correct">{game.myScore.correct} voorspelling{game.myScore.correct === 1 ? '' : 'en'} goed</b>
+        <span className="pez-score-points">{game.myScore.points > 0 ? `+${game.myScore.points} punten` : 'Geen punten deze ronde'}</span>
+        {game.myScore.correct > 0 && game.pointsPerCorrect > 0 && <em className="muted">
+          {game.myScore.correct} × {game.pointsPerCorrect} punten
+        </em>}
+      </Card>}
+    </>}
 
     {game.turnOrder?.length > 0 && game.drawing && <Card>
       <div className="label muted">SPEELVOLGORDE</div>

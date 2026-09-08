@@ -36,6 +36,15 @@ export const DECK_SIZE = RANKS.length * SUITS.length; // 52
 /** Everyone predicts exactly this many names. */
 export const PREDICTION_SLOTS = 4;
 
+/**
+ * Default points for one correct prediction.
+ *
+ * One game-wide number, set by the Admin in Settings — not per player, per six or per
+ * slot. This is only the starting value; the configured one is always read from the
+ * database, never from here.
+ */
+export const DEFAULT_POINTS_PER_CORRECT = 25;
+
 export const FULL_DECK: Card[] = SUITS.flatMap(suit => RANKS.map(rank => ({ rank, suit })));
 
 export const cardKey = (card: Card) => `${card.rank}-${card.suit}`;
@@ -180,4 +189,42 @@ export function validatePrediction(picks: unknown, eligiblePlayerIds: number[]):
 /** How many of a player's four picks named a given player. Ready for later scoring. */
 export function picksForPlayer(picks: number[], playerId: number) {
   return picks.filter(id => id === playerId).length;
+}
+
+// ---------------------------------------------------------------------------
+// Scoring
+// ---------------------------------------------------------------------------
+
+/**
+ * How many of a prediction came true.
+ *
+ * A multiset intersection, not a set one: each pick is matched against one six that
+ * player actually drew, and a six can only satisfy one pick. That is what makes the
+ * brief's example come out at three —
+ *
+ *   predicted  Bas, Twan, Bas, Emma
+ *   drew a six Bas, Jorrit, Bas, Emma
+ *
+ * Bas is named twice and drew two sixes, so both of those picks count. Naming Bas twice
+ * when he drew only one six counts once, which is the same rule read from the other
+ * side: you cannot earn twice for a six that only happened once.
+ */
+export function countCorrectPredictions(picks: number[], sixDrawerIds: number[]): number {
+  const remaining = new Map<number, number>();
+  for (const id of sixDrawerIds) remaining.set(id, (remaining.get(id) ?? 0) + 1);
+
+  let correct = 0;
+  for (const pick of picks) {
+    const left = remaining.get(pick) ?? 0;
+    if (left <= 0) continue;
+    remaining.set(pick, left - 1);
+    correct += 1;
+  }
+  return correct;
+}
+
+/** Points earned: the same rate for every correct prediction. */
+export function predictionPoints(correct: number, pointsPerCorrect: number) {
+  if (correct <= 0 || pointsPerCorrect <= 0) return 0;
+  return correct * pointsPerCorrect;
 }

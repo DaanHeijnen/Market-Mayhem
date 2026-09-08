@@ -31,8 +31,14 @@ export const SLOT_MAIN_ROW = 1;
 /** How long the Big Screen reel animation runs before the outcome is treated as shown. */
 export const SLOT_SPIN_MS = 3200;
 
-/** Hard ceiling on a block's configured max spins, so one series cannot be unbounded. */
-export const SLOT_MAX_SPINS_LIMIT = 100;
+/**
+ * Hard ceiling on a series, and the default.
+ *
+ * Ten is the product rule, not a safety valve: a player buys their whole run up front
+ * and then plays it out while everyone else waits, so a long series is a long wait for
+ * the room. There is no topping up afterwards.
+ */
+export const SLOT_MAX_SPINS_LIMIT = 10;
 export const SLOT_DEFAULT_MAX_SPINS = 10;
 
 /** Fewest distinct symbols the generator needs: 9 cells, no symbol used more than twice. */
@@ -476,6 +482,69 @@ export function evaluateSlotConfig(
     allocatedWeight: weights.reduce((sum, w) => sum + w.weight, 0),
     symbolCount: symbolPositions.size,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Turns
+// ---------------------------------------------------------------------------
+
+export type SlotSeriesTurn = {
+  seriesId: number;
+  playerId: number;
+  playerName?: string;
+  stakePerSpin: number;
+  totalSpins: number;
+  spinsRemaining: number;
+  status: string;
+};
+
+export type SlotTurn = {
+  /** Whose turn it is, or null when nobody has spins left. */
+  current: SlotSeriesTurn | null;
+  /** True while a spin is still resolving; no new spin may start. */
+  spinning: boolean;
+  /** Who plays after the current player finishes their whole run. */
+  next: SlotSeriesTurn | null;
+  /** Series with spins left, in turn order. */
+  queue: SlotSeriesTurn[];
+  /** Series that used every spin they bought. */
+  finished: SlotSeriesTurn[];
+};
+
+/**
+ * Whose turn it is, derived from the series rows rather than stored anywhere.
+ *
+ * One player at a time, and that player uses their entire bought run before the next
+ * one starts. Turn order is the order the series were locked in, which is why `series`
+ * must arrive in that order — the queue is simply "who still has spins", and the head
+ * of it is up.
+ *
+ * Deriving instead of storing a pointer is deliberate: a stored turn index can drift
+ * out of step with the spins that actually happened, and there is no reconciliation
+ * step that could fix it. Here the spins *are* the turn state.
+ *
+ * `spinningPlayerId` keeps the current player in place while their spin is still
+ * resolving, even once it took their last spin. Without that the projector would cut to
+ * the next player while the previous one's final result was still on screen.
+ */
+export function resolveSlotTurn(series: SlotSeriesTurn[], spinningPlayerId: number | null = null): SlotTurn {
+  const queue = series.filter(s => s.status === 'ACTIVE' && s.spinsRemaining > 0);
+  const finished = series.filter(s => s.status !== 'CANCELLED' && s.spinsRemaining === 0);
+
+  const mid = spinningPlayerId == null
+    ? null
+    : series.find(s => s.playerId === spinningPlayerId && s.status !== 'CANCELLED') ?? null;
+
+  const current = mid ?? queue[0] ?? null;
+  const next = queue.find(s => s.seriesId !== current?.seriesId) ?? null;
+
+  return { current, spinning: Boolean(mid), next, queue, finished };
+}
+
+/** Whether this player may start a spin right now. The server's answer, not the phone's. */
+export function maySpin(turn: SlotTurn, playerId: number) {
+  if (turn.spinning) return false;
+  return Boolean(turn.current && turn.current.playerId === playerId && turn.current.spinsRemaining > 0);
 }
 
 /** Spins a player may still lock, bounded by the block's maximum and their wallet. */

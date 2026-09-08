@@ -4,11 +4,12 @@ import { body, ok, intValue, textValue, HttpError } from '../lib/http';
 import { incrementGameVersion } from '../lib/game-state';
 import { mediaKeyValue } from '../lib/media';
 import { SLOT_DEFAULT_MAX_SPINS, SLOT_MAX_SPINS_LIMIT } from '../lib/slotmachine';
+import { normalizeSubjects } from '../lib/photo-round';
 import { wrap } from './_wrap';
 
 // Must stay in step with round_blocks_type_check (migration 0007) and with
 // blockMeta.ts on the client, which generates the content picker from the same set.
-const TYPES = ['TEXT','QUESTION','ROULETTE','DUOLINGO_QUESTION','PICTURE','MUSIC','BUZZER','WAGER','SLOTMACHINE','PAK_EEN_ZES'] as const;
+const TYPES = ['TEXT','QUESTION','ROULETTE','DUOLINGO_QUESTION','PICTURE','MUSIC','BUZZER','WAGER','SLOTMACHINE','PAK_EEN_ZES','FOTORONDE'] as const;
 type BlockType = typeof TYPES[number];
 
 function optionalText(value: unknown, max: number) {
@@ -77,6 +78,12 @@ export default wrap(async request => {
       : [];
     payload = { body: bodyText, maxSpins, allowedPlayerIds };
   }
+  if (type === 'FOTORONDE') {
+    // The subject list is editable while the round has not started; normalizeSubjects
+    // falls back to the standard six and keeps each subject's key stable, so renaming
+    // one never detaches the photos already filed under it.
+    payload = { body: bodyText, subjects: normalizeSubjects(p.subjects) };
+  }
   if (type === 'PAK_EEN_ZES') {
     // Nothing to configure but the instruction text: the deck is a fixed 52 cards, the
     // game ends on the fourth six, and everyone active takes part. The turn order is
@@ -127,6 +134,15 @@ export default wrap(async request => {
         );
         const pakHistory = await client.query('SELECT id FROM pak_een_zes_games WHERE round_block_id=$1 LIMIT 1', [blockId]);
         if (pakHistory.rows[0]) throw new HttpError(409, 'A block with Pak een Zes history cannot change type');
+        // An unopened Fotoronde holds nothing; one with photos is history, and those
+        // photos may already have paid credits.
+        await client.query(
+          `DELETE FROM photo_rounds pr WHERE pr.round_block_id=$1
+           AND NOT EXISTS(SELECT 1 FROM photo_submissions s WHERE s.photo_round_id=pr.id)`,
+          [blockId],
+        );
+        const photoHistory = await client.query('SELECT id FROM photo_rounds WHERE round_block_id=$1 LIMIT 1', [blockId]);
+        if (photoHistory.rows[0]) throw new HttpError(409, 'A block with Fotoronde photos cannot change type');
       }
       await client.query(
         `UPDATE round_blocks SET type=$2,title=$3,payload=$4::jsonb,

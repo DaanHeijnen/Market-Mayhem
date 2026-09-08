@@ -4,6 +4,7 @@ import { body, ok, intValue, HttpError } from '../lib/http';
 import { incrementGameVersion, setScreenMode } from '../lib/game-state';
 import { closeSlotSeriesForBlock } from '../lib/slot-state';
 import { closePakEenZesForBlock } from '../lib/pak-een-zes-state';
+import { closePhotoRoundForBlock } from '../lib/photo-round-state';
 import { wrap } from './_wrap';
 
 export default wrap(async request => {
@@ -63,6 +64,18 @@ export default wrap(async request => {
     );
     for (const pakBlock of pakBlocks.rows) {
       await closePakEenZesForBlock(client, gameId, Number(pakBlock.id));
+    }
+
+    // A Fotoronde still taking photos is closed, not cancelled: the submissions and any
+    // credits already awarded are kept, and unjudged photos stay judgeable afterwards.
+    // Completing a round therefore never leaves scoring half-finished — it leaves it
+    // clearly unstarted, which the Admin panel reports.
+    const photoBlocks = await client.query(
+      "SELECT id FROM round_blocks WHERE round_id=$1 AND type='FOTORONDE' ORDER BY sort_order,id",
+      [roundId],
+    );
+    for (const photoBlock of photoBlocks.rows) {
+      await closePhotoRoundForBlock(client, gameId, Number(photoBlock.id));
     }
 
     // Draft roulette games have no money attached and should not survive a

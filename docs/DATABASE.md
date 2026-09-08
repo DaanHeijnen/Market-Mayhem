@@ -39,6 +39,11 @@ erDiagram
   pak_een_zes_games ||--o{ pak_een_zes_draws : records
   players ||--o{ pak_een_zes_predictions : submits
   players ||--o{ pak_een_zes_draws : draws
+  round_blocks ||--o{ photo_rounds : runs
+  photo_rounds ||--o{ photo_submissions : collects
+  round_groups ||--o{ photo_submissions : submits
+  players ||--o{ photo_submissions : uploads
+  photo_submissions ||--o{ ledger_entries : attributes
   game_nights ||--|| screen_state : broadcasts
 ```
 
@@ -66,7 +71,7 @@ Manual/group reasons are stored as exact descriptions. Corrections create new le
 
 `rounds` have `UPCOMING`, `ACTIVE`, `COMPLETED`. A partial unique index from migration 0004 enforces at most one active round per game.
 
-`round_blocks` has game/round/type/order/title/JSON payload plus interactive timestamps/status. Migration 0006 expanded allowed types to `TEXT`, `QUESTION`, `DUOLINGO_QUESTION`, `ROULETTE`; migration 0007 adds `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`; migration 0010 adds `SLOTMACHINE`; migration 0013 adds `PAK_EEN_ZES`.
+`round_blocks` has game/round/type/order/title/JSON payload plus interactive timestamps/status. Migration 0006 expanded allowed types to `TEXT`, `QUESTION`, `DUOLINGO_QUESTION`, `ROULETTE`; migration 0007 adds `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`; migration 0010 adds `SLOTMACHINE`; migration 0013 adds `PAK_EEN_ZES`; migration 0015 adds `FOTORONDE`.
 
 Payload keys for the types added by 0007. Media blocks store only a Netlify Blobs **key**, never the bytes — the payload travels in every admin-state snapshot, so embedding a file would bloat each poll response:
 
@@ -77,6 +82,7 @@ Payload keys for the types added by 0007. Media blocks store only a Netlify Blob
 Payload keys for the type added by 0010:
 
 - `SLOTMACHINE` — `maxSpins` (per series), `allowedPlayerIds` (empty array means everyone), plus `body` as the instruction text shown on phones. The reel artwork and the outcome distribution are **not** here: they are game-wide and live in their own tables.
+- `FOTORONDE` — `subjects` as `{key, label}` pairs (defaulting to the standard six) plus `body` as the instruction text shown on phones. The key is the identity a submission is filed under, so renaming a subject keeps its photos.
 - `PAK_EEN_ZES` — `body` only, as the instruction text shown on phones. There is nothing else to author: the deck is a fixed 52 cards, the game ends on the fourth six, every active player takes part, and the turn order is frozen when the host starts.
 
 `BUZZER` and `WAGER` are authorable and presentable but have no phone-side interaction and no live state machine, matching the Admin UX redesign, which specifies none for them. `blockMeta.ts` marks this with `interactive: false`.
@@ -108,7 +114,7 @@ Deleting a round block or a round is refused once slot series exist, the same ru
 
 ## Pak een Zes
 
-Migration 0013 adds four tables. No money is involved, so there is no wallet or ledger participation — but every table exists so a scoring pass can be added later without replaying the evening.
+Migration 0013 adds four tables; migration 0014 adds the scoring on top.
 
 - `pak_een_zes_games` — one game per block: `status` (`READY`/`PREDICTING`/`LOCKED`/`DRAWING`/`FINISHED`/`CANCELLED`) and `turn_index`, which walks the turn order and wraps. A partial unique index allows only one live game per block, so re-showing a block cannot silently start a second one.
 - `pak_een_zes_participants` — the turn order, frozen at START. Stored rather than derived so a player joining or leaving mid-game cannot reshuffle whose turn it is. Unique on both `(game, player)` and `(game, turn_order)`.
@@ -116,6 +122,25 @@ Migration 0013 adds four tables. No money is involved, so there is no wallet or 
 - `pak_een_zes_draws` — every card that left the deck, in order, with who drew it. Three unique constraints carry the game's guarantees: `(game, rank, suit)` means a card leaves the deck exactly once, `(game, draw_number)` keeps the sequence honest, and `(game, idempotency_key)` answers a double-tapped KAART PAKKEN with the card it already produced. A CHECK ties `is_six` to `rank = '6'`, so a six event can never be recorded against a non-six. A partial index on `(game_night_id, player_id) WHERE is_six` is what makes the scoring question — who drew a six, which suit, on which draw, how often — cheap.
 
 The drawn rows *are* the deck's history: what remains is derived from them, never from a shuffled list held in memory.
+
+Scoring (migration 0014):
+
+- `game_nights.pak_een_zes_points_per_correct` — one game-wide amount per correct prediction, defaulting to 25.
+- `pak_een_zes_games.points_per_correct` — the rate that game actually paid, snapshotted when it finishes, so a later Settings change never rewrites history. Null until it pays.
+- `ledger_entries.pak_een_zes_game_id` — attribution for the `PAK_EEN_ZES_REWARD` rows, with a partial unique index on `(pak_een_zes_game_id, player_id)` that makes a double payout impossible rather than unlikely.
+
+Correct predictions are a multiset match, so a name picked twice can score twice when that player drew two sixes, and scores once when they drew one.
+
+## Fotoronde
+
+Migration 0015 adds two tables. "Team" means a **round group**: `round_group_members` is unique by `(round_id, player_id)`, so a player's team is derivable from their session rather than sent by their phone. The legacy `teams` table is untouched and unread.
+
+- `photo_rounds` — one per block, with `status` (`DRAFT`/`OPEN`/`CLOSED`/`COMPLETED`) and its phase timestamps. A unique index on `round_block_id` allows exactly one for the life of the block: unlike the other games there is no "start over", because the photos and the credits awarded for them are history.
+- `photo_submissions` — one photo per team per subject, keyed `(photo_round_id, subject_key, group_id)` by a unique constraint. That constraint *is* the "one active submission per team per subject" rule; replacing upserts the row rather than inserting a second. `group_id` cascades with the group (a photo for a team that no longer exists has nobody to pay), while `uploaded_by` is `ON DELETE SET NULL` so removing a player never erases their team's photo or the credits it earned. Only the Netlify Blobs `media_key` is stored, never the bytes. A partial index on `credits_awarded IS NULL` carries the Admin's unjudged working list.
+
+`ledger_entries.photo_submission_id` attributes the `PHOTO_ROUND_REWARD` rows, with a partial unique index on `(photo_submission_id, player_id)` that makes a double payout impossible rather than unlikely. Credits are real coins in wallets — there is no second currency.
+
+Credits are split across the team's active members as `floor(credits / members)` with the remainder handed out one credit at a time, so the amounts always sum to exactly what was awarded. The split shown for a judged photo is read back from those ledger rows rather than recomputed, because team membership can change after an award.
 
 ## Screen state
 
@@ -190,5 +215,7 @@ Migration 0006 adds market-owned:
 - `0011_shared_slot_symbols.sql`: collapses `slot_reel_symbols` from 3 x 12 to one shared set of 12, so each symbol is uploaded once instead of three times.
 - `0012_slot_outcome_types.sql`: replaces per-combination chances with the five fixed outcome types, drops `slot_outcomes`, and adds `outcome_type` / `grid` / `win_cells` to `slot_spins`. Payouts now belong to patterns rather than to particular images.
 - `0013_pak_een_zes.sql`: Pak een Zes games, participants, predictions and draws, plus `PAK_EEN_ZES` added to `round_blocks.type` and to the live/staged/previous `screen_state` mode constraints.
+- `0014_pak_een_zes_scoring.sql`: the Admin-set points per correct prediction, the per-game rate snapshot, and `PAK_EEN_ZES_REWARD` ledger attribution with a one-reward-per-player index.
+- `0015_photo_round.sql`: Fotoronde rounds and submissions, `PHOTO_ROUND_REWARD` ledger attribution with a one-reward-per-player index, and `FOTORONDE` added to `round_blocks.type` and to the live/staged/previous `screen_state` mode constraints.
 
 Unrelated legacy schema (`teams`, `players.team_id`, avatar/admin-note fields, codewords/timers, session `last_seen_at`, correction link) remains for upgrade safety even though current production UI does not use it.

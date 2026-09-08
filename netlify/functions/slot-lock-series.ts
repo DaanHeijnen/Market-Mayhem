@@ -9,6 +9,11 @@ import { wrap } from './_wrap';
 /**
  * Lock a slotmachine reeks: stake per spin x number of spins, committed up front.
  *
+ * This is the only chance to choose. Players take turns and each one plays their whole
+ * run before the next starts, so the run has to be bought before it begins — there is no
+ * topping up afterwards, and a player who has already played gets no second series on
+ * this block.
+ *
  * The whole total is debited here rather than per spin. That is what "vastzetten" means
  * financially — the coins are committed to the machine and cannot be spent on a
  * prediction in between spins — and it mirrors how a prediction deposit works. The
@@ -72,11 +77,18 @@ export default wrap(async request => {
       return { duplicate: true, seriesId: Number(existing.id), spinsRemaining: Number(existing.spins_remaining) };
     }
 
-    const live = await client.query(
-      "SELECT id FROM slot_series WHERE round_block_id=$1 AND player_id=$2 AND status='ACTIVE' FOR UPDATE",
+    // Any series at all, not just a live one: one run per player per block, so a player
+    // who has used all their spins cannot buy more. A CANCELLED series does not count —
+    // that only happens when the host leaves the block and the machine starts over.
+    const existingSeries = await client.query(
+      "SELECT id,status FROM slot_series WHERE round_block_id=$1 AND player_id=$2 AND status IN ('ACTIVE','COMPLETED') FOR UPDATE",
       [blockId, session.playerId],
     );
-    if (live.rows[0]) throw new HttpError(409, 'Finish your current series before locking a new one');
+    if (existingSeries.rows[0]) {
+      throw new HttpError(409, existingSeries.rows[0].status === 'COMPLETED'
+        ? 'You have already used your spins on this slotmachine'
+        : 'You have already locked a series on this slotmachine');
+    }
 
     const wallet = await client.query('SELECT current_balance FROM wallets WHERE player_id=$1 AND game_night_id=$2 FOR UPDATE', [session.playerId, gameId]);
     if (!wallet.rows[0]) throw new HttpError(404, 'Player wallet not found');

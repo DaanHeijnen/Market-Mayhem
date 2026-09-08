@@ -7,7 +7,17 @@ import { MediaField } from './MediaField';
 
 const QUESTION_EMOJIS = ['🍆','🌽','🍑','😳'] as const;
 
-const blankBlock = { type: 'TEXT', title: '', body: '', answers: ['', '', '', ''], correctAnswerIndex: 0, rewardCoins: 10, imageKey: '', audioKey: '', audioName: '', correctAnswer: '', maxSpins: 10, allowedPlayerIds: [] as number[] };
+/** Mirrors DEFAULT_PHOTO_SUBJECTS in netlify/lib/photo-round.ts; the server normalises. */
+const DEFAULT_PHOTO_SUBJECT_LABELS = [
+  'Iets kunstigs',
+  'Iets lelijks',
+  'Iets moois',
+  'Iets opwindends',
+  'Iets wat met het geloof heeft te maken',
+  'Iets kinderlijks',
+];
+
+const blankBlock = { type: 'TEXT', title: '', body: '', answers: ['', '', '', ''], correctAnswerIndex: 0, rewardCoins: 10, imageKey: '', audioKey: '', audioName: '', correctAnswer: '', maxSpins: 10, allowedPlayerIds: [] as number[], subjects: [...DEFAULT_PHOTO_SUBJECT_LABELS] };
 
 export function RoundsPage({ state: s, gameId, roundId, run }: { state: any; gameId: number; roundId: number | null; run: RunMutation }) {
   const nav = useNavigate();
@@ -67,6 +77,8 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
       ...(blockForm.type === 'MUSIC' ? { audioKey: blockForm.audioKey || null, audioName: blockForm.audioName } : {}),
       ...(blockForm.type === 'WAGER' ? { correctAnswer: blockForm.correctAnswer } : {}),
       ...(blockForm.type === 'SLOTMACHINE' ? { maxSpins: Number(blockForm.maxSpins) || 1, allowedPlayerIds: blockForm.allowedPlayerIds } : {}),
+      // Labels only; the server derives and preserves each subject's stable key.
+      ...(blockForm.type === 'FOTORONDE' ? { subjects: blockForm.subjects.filter((label: string) => label.trim()).map((label: string) => ({ label })) } : {}),
     };
     if (await run('/api/upsert-round-block', payload)) resetBlock();
   };
@@ -85,6 +97,9 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
       correctAnswer: block.payload?.correctAnswer || '',
       maxSpins: block.payload?.maxSpins ?? 10,
       allowedPlayerIds: Array.isArray(block.payload?.allowedPlayerIds) ? block.payload.allowedPlayerIds : [],
+      subjects: Array.isArray(block.payload?.subjects) && block.payload.subjects.length
+        ? block.payload.subjects.map((s: any) => String(s?.label ?? ''))
+        : [...DEFAULT_PHOTO_SUBJECT_LABELS],
     });
   };
   const move = async (index: number, dir: -1 | 1) => {
@@ -116,7 +131,7 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
       <div className="form-grid compact">
         <label className="span-2">{blockForm.type === 'QUESTION' || blockForm.type === 'DUOLINGO_QUESTION' ? 'Question text' : blockForm.type === 'TEXT' ? 'Optional title' : 'Title'}<input className="field" value={blockForm.title} onChange={e => setBlockForm({ ...blockForm, title: e.target.value })} /></label>
       </div>
-      {['TEXT','QUESTION','PICTURE','MUSIC','BUZZER','WAGER','SLOTMACHINE','PAK_EEN_ZES'].includes(blockForm.type) && <label>{blockForm.type === 'TEXT' ? 'Body / instructions' : ['SLOTMACHINE','PAK_EEN_ZES'].includes(blockForm.type) ? 'Instructions shown on the players\u2019 phones' : 'Optional supporting text'}<textarea className="field" rows={blockForm.type === 'TEXT' ? 4 : 2} value={blockForm.body} onChange={e => setBlockForm({ ...blockForm, body: e.target.value })} /></label>}
+      {['TEXT','QUESTION','PICTURE','MUSIC','BUZZER','WAGER','SLOTMACHINE','PAK_EEN_ZES','FOTORONDE'].includes(blockForm.type) && <label>{blockForm.type === 'TEXT' ? 'Body / instructions' : ['SLOTMACHINE','PAK_EEN_ZES','FOTORONDE'].includes(blockForm.type) ? 'Instructions shown on the players\u2019 phones' : 'Optional supporting text'}<textarea className="field" rows={blockForm.type === 'TEXT' ? 4 : 2} value={blockForm.body} onChange={e => setBlockForm({ ...blockForm, body: e.target.value })} /></label>}
 
       {blockForm.type === 'PICTURE' && <MediaField
         kind="image" gameId={gameId} value={blockForm.imageKey}
@@ -163,6 +178,41 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
         </div>
       </div>}
 
+      {/* The subject list. Editable while the round has not started; the server keeps
+          each subject's key stable so renaming one never detaches its photos. */}
+      {blockForm.type === 'FOTORONDE' && <div className="photo-subject-editor">
+        <div className="label muted">FOTO-OPDRACHTEN · {blockForm.subjects.filter((x: string) => x.trim()).length}</div>
+        <p className="muted type-note">
+          Every team gets this same list and uploads one photo per subject. You award credits per photo once
+          submissions are closed.
+        </p>
+        {blockForm.subjects.map((label: string, index: number) => <div className="photo-subject-row" key={index}>
+          <span className="photo-subject-number">{index + 1}</span>
+          <input
+            className="field"
+            value={label}
+            placeholder="Onderwerp"
+            onChange={e => setBlockForm({ ...blockForm, subjects: blockForm.subjects.map((x: string, i: number) => i === index ? e.target.value : x) })}
+          />
+          <button
+            className="btn btn-danger-ghost btn-compact"
+            disabled={blockForm.subjects.length <= 1}
+            onClick={() => setBlockForm({ ...blockForm, subjects: blockForm.subjects.filter((_: string, i: number) => i !== index) })}
+          >×</button>
+        </div>)}
+        <div className="actions actions-compact">
+          <button
+            className="btn btn-secondary btn-compact"
+            disabled={blockForm.subjects.length >= 20}
+            onClick={() => setBlockForm({ ...blockForm, subjects: [...blockForm.subjects, ''] })}
+          >+ ONDERWERP</button>
+          <button
+            className="btn btn-secondary btn-compact"
+            onClick={() => setBlockForm({ ...blockForm, subjects: [...DEFAULT_PHOTO_SUBJECT_LABELS] })}
+          >RESET NAAR STANDAARD ZES</button>
+        </div>
+      </div>}
+
       {blockForm.type === 'PAK_EEN_ZES' && <p className="muted type-note">
         Nothing else to configure: the deck is a fixed 52 cards, the game ends when all four sixes are out, and every
         active player takes a turn. You open the predictions, close them and start the game from the Control Center;
@@ -189,6 +239,9 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
         {block.type === 'PICTURE' && block.payload?.imageKey && <img className="block-thumb" src={`/api/block-media?key=${encodeURIComponent(block.payload.imageKey)}`} alt="" />}
         {block.type === 'MUSIC' && block.payload?.audioKey && <div className="media-audio"><audio controls preload="none" src={`/api/block-media?key=${encodeURIComponent(block.payload.audioKey)}`} /><span className="muted">{block.payload.audioName || 'Audio'}</span></div>}
         {block.type === 'WAGER' && block.payload?.correctAnswer && <p className="muted block-copy">Correct answer: <b>{block.payload.correctAnswer}</b></p>}
+        {block.type === 'FOTORONDE' && <p className="muted block-copy">
+          {(block.payload?.subjects?.length ?? 6)} foto-opdrachten · teams uploaden vanaf hun telefoon · run it from the Control Center
+        </p>}
         {block.type === 'PAK_EEN_ZES' && <p className="muted block-copy">
           Predict four names, then draw cards until all four sixes are out · run it from the Control Center
         </p>}

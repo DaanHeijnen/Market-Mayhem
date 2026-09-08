@@ -63,6 +63,7 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
   const rouletteAction = (action: string) => activeRoulette && run('/api/roulette-action', { rouletteGameId: activeRoulette.id, action }, true);
   const questionAction = (action: string) => liveBlock && run('/api/question-action', { blockId: liveBlock.id, action });
   const pezAction = (action: string) => liveBlock && run('/api/pak-een-zes-action', { blockId: liveBlock.id, action });
+  const photoAction = (action: string) => liveBlock && run('/api/photo-round-action', { blockId: liveBlock.id, action });
 
   const adjust = async () => {
     if (adjusting) return;
@@ -117,10 +118,28 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
       // mid-series, so this panel is status rather than controls.
       if (!config?.valid) return <span className="neg live-meta"><b>Slotmachine unusable — {config?.reason || 'not configured'}</b></span>;
       if (!slot) return <span className="muted live-meta">Slotmachine ready — players lock a series on their phones.</span>;
+      const turn = slot.turn;
       return <>
         <span className="muted live-meta">
-          Max {slot.maxSpins} spins per series · {slot.participantCount === 0 ? 'everyone plays' : `${slot.participantCount} selected player${slot.participantCount === 1 ? '' : 's'}`}
+          {turn?.current
+            ? `${turn.current.playerName} is aan de beurt · ${turn.current.spinsRemaining}/${turn.current.totalSpins} spins over${turn.spinning ? ' · draait…' : ''}`
+            : turn?.allDone && slot.series.length > 0
+              ? 'Alle spelers zijn klaar'
+              : 'Nobody has locked a series yet'}
+          {' · '}max {slot.maxSpins} spins
           {slot.lockedCoins > 0 ? ` · ${slot.lockedCoins} coins locked in unspun spins` : ''}
+        </span>
+      </>;
+    }
+    if (liveBlock?.type === 'FOTORONDE') {
+      const photo = s.photoRound;
+      const status = photo?.status || 'DRAFT';
+      return <>
+        {status === 'DRAFT' && <button className="btn btn-blue" onClick={() => photoAction('OPEN')}>OPEN INZENDEN</button>}
+        {status === 'OPEN' && <button className="btn btn-secondary" onClick={() => photoAction('CLOSE')}>SLUIT INZENDEN</button>}
+        {status === 'CLOSED' && <button className="btn btn-success" onClick={() => photoAction('COMPLETE')}>MARKEER AFGEROND</button>}
+        <span className="muted live-meta">
+          {photo?.submissionCount ?? 0} foto's · {photo?.judgedCount ?? 0} beoordeeld · {photo?.totalCredits ?? 0} credits toegekend
         </span>
       </>;
     }
@@ -214,6 +233,8 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
 
     {liveBlock?.type === 'PAK_EEN_ZES' && <PakEenZesLivePanel game={s.pakEenZes} />}
 
+    {liveBlock?.type === 'FOTORONDE' && <PhotoRoundPanel round={s.photoRound} run={run} gameId={gameId} activeRound={activeRound} players={s.players} nav={nav} />}
+
     {/* One ordered timeline for the round: content blocks, then its unresolved markets.
         Ordered by the server so this and GO LIVE can never disagree. */}
     {activeRound && runOfShow.length > 0 && <Card>
@@ -304,6 +325,7 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
 function SlotLivePanel({ slot, config, activePlayers }: { slot: any; config: any; activePlayers: any[] }) {
   const series: any[] = slot?.activeSeries || [];
   const last = slot?.lastSpin || null;
+  const turn = slot?.turn || null;
 
   return <Card className="slot-live-panel">
     <div className="row-between">
@@ -315,6 +337,29 @@ function SlotLivePanel({ slot, config, activePlayers }: { slot: any; config: any
     </div>
 
     {!config?.valid && <p className="neg"><b>{config?.reason || 'Finish the slotmachine setup in Settings before running this block.'}</b></p>}
+
+    {/* One player at a time, so the turn is the headline: who is up, how much of their
+        run is left, and who follows. */}
+    <div className="slot-turn-strip">
+      <div>
+        <span className="label muted">AAN DE BEURT</span>
+        <b>{turn?.current ? turn.current.playerName : turn?.allDone && series.length > 0 ? 'Alle spelers klaar' : '—'}</b>
+      </div>
+      <div>
+        <span className="label muted">SPINS OVER</span>
+        <b>{turn?.current ? `${turn.current.spinsRemaining} / ${turn.current.totalSpins}` : '—'}</b>
+      </div>
+      <div>
+        <span className="label muted">INZET PER SPIN</span>
+        <b>{turn?.current ? turn.current.stakePerSpin : '—'}</b>
+      </div>
+      <div>
+        <span className="label muted">HIERNA</span>
+        <b>{turn?.next ? turn.next.playerName : turn?.current ? 'niemand meer' : '—'}</b>
+      </div>
+    </div>
+
+    {turn?.spinning && <p className="muted microcopy">A spin is resolving — no new spin can start until it lands.</p>}
 
     <div className="slot-live-stats">
       <div><span className="label muted">ACTIVE SERIES</span><b>{series.length} of {activePlayers.length}</b></div>
@@ -346,9 +391,276 @@ function SlotLivePanel({ slot, config, activePlayers }: { slot: any; config: any
     </div>}
 
     <p className="muted microcopy">
-      Moving to the next content block ends every series and refunds spins nobody used, so nothing keeps running behind your back.
+      One player at a time: each one plays their whole bought run before the next starts, and no extra spins can be
+      bought afterwards. The server decides whose turn it is and refuses a spin while the previous one is still
+      resolving. Moving to the next content block ends every series and refunds spins nobody used.
     </p>
   </Card>;
+}
+
+/**
+ * The Fotoronde: every team's photos, by subject, with the credits the host awards.
+ *
+ * Judging happens per photo. The split across the team's members is shown next to the
+ * amount before it is confirmed, so the host can see that 25 credits across 4 players
+ * pays 7 + 6 + 6 + 6 rather than wondering where the odd credit went.
+ *
+ * An already-judged photo shows what it earned instead of an input: the server refuses a
+ * second award, so offering one would be a lie.
+ */
+function PhotoRoundPanel({ round, run, gameId, activeRound, players, nav }: {
+  round: any;
+  run: RunMutation;
+  gameId: number;
+  activeRound: any;
+  players: any[];
+  nav: (path: string) => void;
+}) {
+  const [credits, setCredits] = useState<Record<number, string>>({});
+  const [awarding, setAwarding] = useState<number | null>(null);
+  const status = round?.status || 'DRAFT';
+  const teams: any[] = round?.teams || [];
+
+  const award = async (submissionId: number, amount: number) => {
+    if (awarding !== null) return;
+    setAwarding(submissionId);
+    try {
+      if (await run('/api/award-photo-credits', { submissionId, credits: amount })) {
+        setCredits(current => { const next = { ...current }; delete next[submissionId]; return next; });
+      }
+    } finally { setAwarding(null); }
+  };
+
+  const show = (submissionId: number | null) => run('/api/show-photo-submission', { blockId: round.blockId, submissionId });
+
+  return <Card className="photo-live-panel">
+    <div className="row-between">
+      <div>
+        <div className="label muted">FOTORONDE · LIVE</div>
+        <h2 className="display card-heading">Teams upload from their phones</h2>
+      </div>
+      <Status tone={status === 'OPEN' ? 'open' : status === 'COMPLETED' ? 'success' : status === 'CLOSED' ? 'warning' : 'neutral'}>{status}</Status>
+    </div>
+
+    <div className="photo-live-stats">
+      <div><span className="label muted">TEAMS</span><b>{teams.length}</b></div>
+      <div><span className="label muted">FOTO'S</span><b>{round?.submissionCount ?? 0}</b></div>
+      <div><span className="label muted">BEOORDEELD</span><b>{round?.judgedCount ?? 0} / {round?.submissionCount ?? 0}</b></div>
+      <div><span className="label muted">CREDITS</span><b><CoinIcon size={16} /> {round?.totalCredits ?? 0}</b></div>
+    </div>
+
+    {/* Teams are the unit everything else is grouped by, and the host builds them here
+        rather than having to leave for the round page. Round groups and the existing
+        group endpoints do the work — this is only where they are reached from. */}
+    <PhotoTeamEditor
+      activeRound={activeRound}
+      players={players}
+      teamTotals={round?.teamTotals || []}
+      run={run}
+      nav={nav}
+      gameId={gameId}
+    />
+
+    {(round?.bySubject || []).map((entry: any) => <div className="photo-subject-group" key={entry.subject.key}>
+      <div className="photo-subject-title">
+        <div className="label muted">{String(entry.subject.label).toUpperCase()}</div>
+        <span className="muted">{entry.submittedCount} / {teams.length} teams</span>
+      </div>
+
+      {/* Named, because "which teams are still missing" is the actionable half. */}
+      {entry.missingTeams.length > 0 && <div className="photo-missing">
+        <span className="label muted">NOG GEEN FOTO</span>
+        {entry.missingTeams.map((name: string) => <span key={name}>{name}</span>)}
+      </div>}
+
+      {entry.submissions.length === 0
+        ? <div className="sub-empty">Nog geen foto's voor dit onderwerp.</div>
+        : <div className="photo-grid">
+          {entry.submissions.map((submission: any) => {
+            const team = teams.find(t => t.groupId === submission.groupId);
+            const memberCount = team?.memberIds.length ?? 0;
+            const typed = credits[submission.id];
+            const amount = Number(typed);
+            const validAmount = typed !== undefined && typed !== '' && Number.isInteger(amount) && amount >= 0;
+            const judged = submission.creditsAwarded != null;
+            return <div className={`photo-card ${judged ? 'is-judged' : ''}`} key={submission.id}>
+              <img className="photo-card-image" src={`/api/block-media?key=${encodeURIComponent(submission.mediaKey)}`} alt="" />
+              <div className="photo-card-body">
+                <b>{submission.teamName}</b>
+                <span className="muted">Ingezonden door: {submission.uploaderName || 'onbekend'}</span>
+
+                {judged
+                  ? <div className="photo-awarded">
+                    <b><CoinIcon size={16} /> {submission.creditsAwarded} credits</b>
+                    <span className="muted">{submission.distribution}</span>
+                  </div>
+                  : round?.acceptsAwards
+                    ? <div className="photo-award-form">
+                      <input
+                        className="field photo-credit-input"
+                        type="number"
+                        min="0"
+                        placeholder="Credits"
+                        value={typed ?? ''}
+                        onChange={e => setCredits({ ...credits, [submission.id]: e.target.value })}
+                      />
+                      {/* The split, shown before confirming rather than after. */}
+                      <span className="muted photo-split-hint">
+                        {validAmount && memberCount > 0
+                          ? `${memberCount} spelers · ${describeSplit(amount, memberCount)}`
+                          : memberCount === 0 ? 'geen actieve spelers' : `${memberCount} spelers`}
+                      </span>
+                      <button
+                        className="btn btn-primary btn-compact"
+                        disabled={!validAmount || memberCount === 0 || awarding !== null}
+                        onClick={() => award(submission.id, amount)}
+                      >{awarding === submission.id ? 'TOEKENNEN…' : 'TOEKENNEN'}</button>
+                    </div>
+                    : <span className="muted">Sluit het inzenden om te beoordelen.</span>}
+
+                <button
+                  className={`btn btn-secondary btn-compact ${round?.shownSubmissionId === submission.id ? 'is-shown' : ''}`}
+                  onClick={() => show(round?.shownSubmissionId === submission.id ? null : submission.id)}
+                >{round?.shownSubmissionId === submission.id ? 'VAN SCHERM HALEN' : 'OP BIG SCREEN'}</button>
+              </div>
+            </div>;
+          })}
+        </div>}
+    </div>)}
+
+    <p className="muted microcopy">
+      Credits go to the team and are split across its active players — every credit is handed out, and the same photo
+      can never be rewarded twice. Moving to the next content block closes submissions but keeps the photos, so
+      anything unjudged stays judgeable.
+    </p>
+  </Card>;
+}
+
+/**
+ * Create and populate the Fotoronde's teams, in place.
+ *
+ * Teams are round groups, created by the Admin for this round — the same objects the
+ * round page edits and the same three endpoints. Surfaced here because this is where the
+ * host needs them: they are running the Fotoronde, and a block that cannot open without
+ * teams should not send them somewhere else to make one.
+ *
+ * Membership is a checkbox grid rather than a picker, because a player belongs to at
+ * most one group per round and the server enforces that — so the grid shows the whole
+ * roster and the server refuses a double assignment.
+ */
+function PhotoTeamEditor({ activeRound, players, teamTotals, run, nav, gameId }: {
+  activeRound: any;
+  players: any[];
+  teamTotals: any[];
+  run: RunMutation;
+  nav: (path: string) => void;
+  gameId: number;
+}) {
+  const [name, setName] = useState('');
+  const [editingMembers, setEditingMembers] = useState<Record<number, number[]>>({});
+  const [saving, setSaving] = useState<number | null>(null);
+  const [open, setOpen] = useState(false);
+
+  const groups: any[] = activeRound?.groups || [];
+  // Structure is frozen once the round is completed; the existing endpoints refuse it
+  // too, so this only avoids offering an action that would fail.
+  const locked = activeRound?.status === 'COMPLETED';
+  const roster = players.filter(p => p.active);
+
+  const membersFor = (group: any) => editingMembers[group.id] ?? group.members.map((m: any) => m.id);
+  const toggle = (group: any, playerId: number) => {
+    const current = membersFor(group);
+    setEditingMembers({
+      ...editingMembers,
+      [group.id]: current.includes(playerId) ? current.filter((id: number) => id !== playerId) : [...current, playerId],
+    });
+  };
+
+  const saveMembers = async (group: any) => {
+    if (saving !== null) return;
+    setSaving(group.id);
+    try {
+      if (await run('/api/set-round-group-members', { groupId: group.id, playerIds: membersFor(group) })) {
+        setEditingMembers(current => { const next = { ...current }; delete next[group.id]; return next; });
+      }
+    } finally { setSaving(null); }
+  };
+
+  return <div className="photo-teams">
+    <div className="row-between">
+      <div className="label muted">TEAMS · {groups.length}</div>
+      {groups.length > 0 && <button className="text-button" onClick={() => setOpen(x => !x)}>
+        {open ? 'Klaar met teams' : 'Teams aanpassen'}
+      </button>}
+    </div>
+
+    {groups.length === 0 && <p className="neg photo-teams-empty">
+      <b>Nog geen teams in deze ronde.</b> Maak hieronder minstens één team — de Fotoronde kan niet open zonder.
+    </p>}
+
+    {/* Collapsed by default once teams exist: judging is the main job here, not admin. */}
+    {(open || groups.length === 0) && !locked && <div className="photo-team-create">
+      <input className="field" placeholder="Teamnaam" value={name} onChange={e => setName(e.target.value)} />
+      <button
+        className="btn btn-primary btn-compact"
+        disabled={!name.trim() || !activeRound}
+        onClick={async () => { if (await run('/api/upsert-round-group', { roundId: activeRound.id, name })) setName(''); }}
+      >+ TEAM</button>
+    </div>}
+
+    <div className="photo-team-list">
+      {groups.map(group => {
+        const totals = teamTotals.find((t: any) => t.groupId === group.id);
+        const selected = membersFor(group);
+        const activeNames = group.members.filter((m: any) => m.active).map((m: any) => m.display_name);
+        return <div className="photo-team-entry" key={group.id}>
+          <div className="photo-team-row">
+            <div>
+              <b>{group.name}</b>
+              <span className="muted"> · {activeNames.length ? activeNames.join(', ') : 'geen actieve spelers'}</span>
+            </div>
+            <span className="photo-team-credits">{totals?.submitted ?? 0} foto&apos;s · {totals?.credits ?? 0} credits</span>
+          </div>
+
+          {open && !locked && <div className="photo-team-members">
+            <div className="group-members">
+              {roster.map(player => <label key={player.id} className={`group-member ${selected.includes(player.id) ? 'selected' : ''}`}>
+                <input type="checkbox" checked={selected.includes(player.id)} onChange={() => toggle(group, player.id)} />
+                <span className="player-dot" style={{ background: player.public_color }} />
+                <span>{player.display_name}</span>
+              </label>)}
+            </div>
+            <div className="actions actions-compact">
+              <button className="btn btn-secondary btn-compact" disabled={saving === group.id} onClick={() => saveMembers(group)}>
+                {saving === group.id ? 'OPSLAAN…' : 'SAVE MEMBERS'}
+              </button>
+              {/* Refused server-side once the team has ledger history, photo credits
+                  included — so a team that earned something is kept for the ledger. */}
+              <button className="btn btn-danger-ghost btn-compact" onClick={() => run('/api/delete-round-group', { groupId: group.id })}>DELETE</button>
+            </div>
+          </div>}
+        </div>;
+      })}
+    </div>
+
+    {open && activeRound && <button className="text-button photo-teams-link" onClick={() => nav(`/admin/${gameId}/rounds/${activeRound.id}`)}>
+      Open de rondepagina voor groepsscoring en hernoemen
+    </button>}
+  </div>;
+}
+
+/**
+ * How an award divides, in words. Mirrors describeDistribution in
+ * netlify/lib/photo-round.ts — src and netlify are separate TypeScript projects, so this
+ * is a local copy rather than pulling backend code into the client bundle.
+ */
+function describeSplit(credits: number, memberCount: number) {
+  if (memberCount <= 0) return 'no players';
+  if (credits <= 0) return 'no credits';
+  const base = Math.floor(credits / memberCount);
+  const remainder = credits % memberCount;
+  if (remainder === 0) return `${memberCount} × ${base}`;
+  return `${remainder} × ${base + 1} + ${memberCount - remainder} × ${base}`;
 }
 
 /**
@@ -387,6 +699,15 @@ function PakEenZesLivePanel({ game }: { game: any }) {
       {awaiting.length > 0 && <div className="pez-awaiting-names">
         {awaiting.map(player => <span key={player.playerId}>{player.name}</span>)}
       </div>}
+    </div>}
+
+    {/* The scoring outcome, so the host can read it out without leaving the panel. */}
+    {(game?.results?.length ?? 0) > 0 && <div className="pez-live-sixes">
+      <div className="label muted">VOORSPELLINGEN · {game.pointsPerCorrect} PUNTEN PER STUK</div>
+      {game.results.filter((r: any) => r.correct > 0).map((result: any) => <div className="ledger-line" key={result.playerId}>
+        <span><b>{result.playerName}</b> · {result.correct} goed</span>
+        <b className="pos">+{result.points}</b>
+      </div>)}
     </div>}
 
     {sixes.length > 0 && <div className="pez-live-sixes">

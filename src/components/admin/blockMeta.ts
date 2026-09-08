@@ -3,14 +3,14 @@
 // tokens.css (design handbook 02 — COLOR).
 //
 // `available` marks the types the database accepts (round_blocks type CHECK). All
-// ten are permitted as of migration 0013; the flag stays so a future type can be
+// eleven are permitted as of migration 0015; the flag stays so a future type can be
 // designed and described here before its migration lands.
 //
 // `interactive` marks the types with a phone-side flow and a live state machine.
 // BUZZER and WAGER are authorable and presentable but not interactive: the redesign
 // specifies no phone UI or live controls for them.
 
-export type BlockType = 'TEXT' | 'QUESTION' | 'DUOLINGO_QUESTION' | 'ROULETTE' | 'PICTURE' | 'MUSIC' | 'BUZZER' | 'WAGER' | 'SLOTMACHINE' | 'PAK_EEN_ZES';
+export type BlockType = 'TEXT' | 'QUESTION' | 'DUOLINGO_QUESTION' | 'ROULETTE' | 'PICTURE' | 'MUSIC' | 'BUZZER' | 'WAGER' | 'SLOTMACHINE' | 'PAK_EEN_ZES' | 'FOTORONDE';
 
 export type BlockMeta = { label: string; description: string; accent: string; available: boolean; interactive: boolean };
 
@@ -25,6 +25,7 @@ export const BLOCK_META: Record<BlockType, BlockMeta> = {
   WAGER: { label: 'Wager round', description: 'Players stake their own coins on how confident they are, then answer.', accent: 'green', available: true, interactive: false },
   SLOTMACHINE: { label: 'Slotmachine', description: 'Players lock a run of spins from their phones; the reels spin on the big screen.', accent: 'lime', available: true, interactive: true },
   PAK_EEN_ZES: { label: 'Pak een Zes', description: 'Everyone predicts who draws a six, then players take turns pulling cards until all four sixes are out.', accent: 'ink', available: true, interactive: true },
+  FOTORONDE: { label: 'Fotoronde', description: 'Each team uploads one photo per subject from their phones; you award credits per photo.', accent: 'cyan-deep', available: true, interactive: true },
 };
 
 const FALLBACK: BlockMeta = { label: 'Content block', description: '', accent: 'muted', available: false, interactive: false };

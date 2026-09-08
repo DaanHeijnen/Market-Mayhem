@@ -6,21 +6,25 @@ import {
   generateGrid,
   gridLabel,
   maxLockableSpins,
+  maySpin,
   outcomePercentage,
   outcomeTypeAllowsPayout,
   pickOutcomeType,
+  resolveSlotTurn,
   seriesTotalStake,
   slotPayout,
   symbolLetter,
   winningCells,
   SLOT_LINES,
   SLOT_MAIN_ROW,
+  SLOT_MAX_SPINS_LIMIT,
   SLOT_OUTCOME_LABELS,
   SLOT_OUTCOME_TYPES,
   SLOT_SYMBOL_COUNT,
   type SlotGrid,
   type SlotOutcomeType,
   type SlotOutcomeWeight,
+  type SlotSeriesTurn,
 } from '../netlify/lib/slotmachine';
 import { slotBlockSettings, playerMayPlaySlot } from '../netlify/lib/slot-state';
 
@@ -429,7 +433,15 @@ describe('slotmachine series limits', () => {
 describe('slotmachine block settings', () => {
   it('falls back to a usable maximum when the payload has none', () => {
     expect(slotBlockSettings({}).maxSpins).toBe(10);
-    expect(slotBlockSettings({ maxSpins: 20 }).maxSpins).toBe(20);
+    expect(slotBlockSettings({ maxSpins: 6 }).maxSpins).toBe(6);
+  });
+
+  // A player buys their whole run up front and then everyone waits through it, so ten
+  // is a product rule. Clamped on read too, in case a block was authored before it.
+  it('never sells more than ten spins, even if a block says otherwise', () => {
+    expect(SLOT_MAX_SPINS_LIMIT).toBe(10);
+    expect(slotBlockSettings({ maxSpins: 20 }).maxSpins).toBe(10);
+    expect(slotBlockSettings({ maxSpins: 100 }).maxSpins).toBe(10);
   });
 
   it('treats an empty allowlist as everyone rather than nobody', () => {
@@ -442,5 +454,123 @@ describe('slotmachine block settings', () => {
     const restricted = slotBlockSettings({ allowedPlayerIds: [1, 2] });
     expect(playerMayPlaySlot(restricted, 1)).toBe(true);
     expect(playerMayPlaySlot(restricted, 3)).toBe(false);
+  });
+});
+
+describe('taking turns', () => {
+  /** Series arrive in lock order, which is the turn order. */
+  const series = (seriesId: number, playerId: number, totalSpins: number, spinsRemaining: number, status = 'ACTIVE'): SlotSeriesTurn =>
+    ({ seriesId, playerId, playerName: `P${playerId}`, stakePerSpin: 10, totalSpins, spinsRemaining, status });
+
+  // The worked example from the brief: Daan 6, Bas 4, Twan 8, locked in that order.
+  const daan = (left: number) => series(1, 11, 6, left);
+  const bas = (left: number) => series(2, 22, 4, left);
+  const twan = (left: number) => series(3, 33, 8, left);
+
+  it('gives the turn to whoever locked first', () => {
+    const turn = resolveSlotTurn([daan(6), bas(4), twan(8)]);
+    expect(turn.current?.playerId).toBe(11);
+    expect(turn.next?.playerId).toBe(22);
+    expect(turn.spinning).toBe(false);
+  });
+
+  // The headline rule: one player finishes their whole run before the next starts.
+  it('keeps the same player for their entire run', () => {
+    for (const left of [6, 5, 4, 3, 2, 1]) {
+      const turn = resolveSlotTurn([daan(left), bas(4), twan(8)]);
+      expect(turn.current?.playerId, `${left} spins left`).toBe(11);
+    }
+  });
+
+  it('hands over only once the run is used up', () => {
+    const turn = resolveSlotTurn([series(1, 11, 6, 0, 'COMPLETED'), bas(4), twan(8)]);
+    expect(turn.current?.playerId).toBe(22);
+    expect(turn.next?.playerId).toBe(33);
+    expect(turn.finished.map(f => f.playerId)).toEqual([11]);
+  });
+
+  it('walks the whole running order to the end', () => {
+    const afterTwo = resolveSlotTurn([
+      series(1, 11, 6, 0, 'COMPLETED'),
+      series(2, 22, 4, 0, 'COMPLETED'),
+      twan(8),
+    ]);
+    expect(afterTwo.current?.playerId).toBe(33);
+    expect(afterTwo.next).toBeNull();
+
+    const allDone = resolveSlotTurn([
+      series(1, 11, 6, 0, 'COMPLETED'),
+      series(2, 22, 4, 0, 'COMPLETED'),
+      series(3, 33, 8, 0, 'COMPLETED'),
+    ]);
+    expect(allDone.current).toBeNull();
+    expect(allDone.finished).toHaveLength(3);
+  });
+
+  // Otherwise the projector would cut away from the last result of a run.
+  it('holds the turn on the player whose spin is still resolving', () => {
+    const turn = resolveSlotTurn([series(1, 11, 6, 0, 'COMPLETED'), bas(4)], 11);
+    expect(turn.current?.playerId).toBe(11);
+    expect(turn.spinning).toBe(true);
+    // Bas is up next, but not yet.
+    expect(turn.next?.playerId).toBe(22);
+  });
+
+  it('moves on as soon as that spin has resolved', () => {
+    const turn = resolveSlotTurn([series(1, 11, 6, 0, 'COMPLETED'), bas(4)], null);
+    expect(turn.current?.playerId).toBe(22);
+    expect(turn.spinning).toBe(false);
+  });
+
+  it('ignores a cancelled series entirely', () => {
+    const turn = resolveSlotTurn([series(1, 11, 6, 4, 'CANCELLED'), bas(4)]);
+    expect(turn.current?.playerId).toBe(22);
+    expect(turn.finished).toHaveLength(0);
+  });
+
+  it('reports nobody up when no series exist', () => {
+    const turn = resolveSlotTurn([]);
+    expect(turn.current).toBeNull();
+    expect(turn.next).toBeNull();
+    expect(turn.queue).toHaveLength(0);
+  });
+
+  it('handles a single player without stalling', () => {
+    expect(resolveSlotTurn([daan(3)]).current?.playerId).toBe(11);
+    expect(resolveSlotTurn([daan(3)]).next).toBeNull();
+  });
+
+  describe('who may spin', () => {
+    const three = [daan(6), bas(4), twan(8)];
+
+    it('lets only the player whose turn it is spin', () => {
+      const turn = resolveSlotTurn(three);
+      expect(maySpin(turn, 11)).toBe(true);
+      expect(maySpin(turn, 22)).toBe(false);
+      expect(maySpin(turn, 33)).toBe(false);
+    });
+
+    // The anti-spam rule: no second spin until the first has an outcome.
+    it('refuses everyone, including the active player, while a spin is resolving', () => {
+      const turn = resolveSlotTurn(three, 11);
+      expect(turn.spinning).toBe(true);
+      expect(maySpin(turn, 11)).toBe(false);
+      expect(maySpin(turn, 22)).toBe(false);
+    });
+
+    it('lets the active player spin again once the previous one landed', () => {
+      expect(maySpin(resolveSlotTurn([daan(5), bas(4)], null), 11)).toBe(true);
+    });
+
+    it('refuses a player with no spins left', () => {
+      const turn = resolveSlotTurn([series(1, 11, 6, 0, 'COMPLETED'), bas(4)]);
+      expect(maySpin(turn, 11)).toBe(false);
+      expect(maySpin(turn, 22)).toBe(true);
+    });
+
+    it('refuses everyone when every run is done', () => {
+      const turn = resolveSlotTurn([series(1, 11, 6, 0, 'COMPLETED')]);
+      expect(maySpin(turn, 11)).toBe(false);
+    });
   });
 });

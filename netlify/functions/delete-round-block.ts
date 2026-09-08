@@ -41,6 +41,15 @@ export default wrap(async request => {
     );
     const pakHistory = await client.query('SELECT 1 FROM pak_een_zes_games WHERE round_block_id=$1 LIMIT 1', [blockId]);
     if (pakHistory.rows[0]) throw new HttpError(409, 'Pak een Zes history must be preserved; keep this block');
+    // An unopened Fotoronde deletes freely; one with photos is history, and its credits
+    // may already be in players' wallets.
+    await client.query(
+      `DELETE FROM photo_rounds pr WHERE pr.round_block_id=$1
+       AND NOT EXISTS(SELECT 1 FROM photo_submissions s WHERE s.photo_round_id=pr.id)`,
+      [blockId],
+    );
+    const photoHistory = await client.query('SELECT 1 FROM photo_rounds WHERE round_block_id=$1 LIMIT 1', [blockId]);
+    if (photoHistory.rows[0]) throw new HttpError(409, 'Fotoronde photos must be preserved; keep this block');
     await clearScreenIfReferences(client, gameId, admin.username, { blockId });
     await client.query('UPDATE game_nights SET current_round_block_id=NULL WHERE id=$1 AND current_round_block_id=$2', [gameId, blockId]);
     await client.query('DELETE FROM round_blocks WHERE id=$1', [blockId]);

@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { MobileViews } from '../src/components/mobile/MobileViews';
 import { ControlPage } from '../src/components/admin/control/ControlPage';
 import { PlayingCard, CardDeck, suitSymbol } from '../src/components/shared/PlayingCard';
+import { PakEenZesSettings } from '../src/components/admin/settings/PakEenZesSettings';
 
 const noop = () => {};
 const run = async () => true;
@@ -30,6 +31,8 @@ function pez(overrides: Record<string, unknown> = {}) {
     finished: false,
     myPicks: [],
     hasPredicted: false,
+    pointsPerCorrect: 25,
+    myScore: null,
     players: ROSTER,
     turnOrder: [],
     currentPlayer: null,
@@ -295,5 +298,107 @@ describe('Pak een Zes in the Control Center', () => {
     const html = renderRouted(createElement(ControlPage, { state: state({ pakEenZes: null }), gameId: 1, run }));
     expect(html).toContain('PAK EEN ZES · LIVE');
     expect(html).toContain('OPEN VOORSPELLINGEN');
+  });
+});
+
+describe('Pak een Zes scoring', () => {
+  const scored = (overrides: Record<string, unknown> = {}) =>
+    render(createElement(MobileViews, {
+      state: playerState({ pakEenZes: pez(overrides) }),
+      gameId: 1, view: 'home', predictionId: null, busy: false, act: noop, go: noop,
+    }));
+
+  // The value has to be readable before the picks are made, and must come from
+  // Settings rather than being baked into the page.
+  it('states what a correct prediction is worth, before the four fields', () => {
+    const html = scored();
+    expect(html).toContain('Elke juiste voorspelling is 25 punten waard');
+    // Before the fields, not after.
+    expect(html.indexOf('punten waard')).toBeLessThan(html.indexOf('class="pez-pick"'));
+  });
+
+  it('shows whatever the Admin configured, not a fixed number', () => {
+    expect(scored({ pointsPerCorrect: 10 })).toContain('is 10 punten waard');
+    expect(scored({ pointsPerCorrect: 250 })).toContain('is 250 punten waard');
+  });
+
+  it('says nothing about points when the host set the rate to zero', () => {
+    const html = scored({ pointsPerCorrect: 0 });
+    expect(html).not.toContain('punten waard');
+    // The prediction form is still there — it is just for pride.
+    expect(html).toContain('VOORSPELLING OPSLAAN');
+  });
+
+  it('explains that a doubled name can count twice', () => {
+    expect(scored()).toContain('twee keer en trekt hij twee zessen');
+  });
+
+  it('shows the player their own result once the game is over', () => {
+    const html = scored({
+      status: 'FINISHED', predicting: false, finished: true,
+      hasPredicted: true, myPicks: [1, 2, 1, 3],
+      myScore: { correct: 3, points: 75 },
+    });
+    expect(html).toContain('3 voorspellingen goed');
+    expect(html).toContain('+75 punten');
+    expect(html).toContain('3 × 25 punten');
+  });
+
+  it('uses the singular for one correct prediction', () => {
+    const html = scored({
+      status: 'FINISHED', predicting: false, finished: true,
+      hasPredicted: true, myScore: { correct: 1, points: 25 },
+    });
+    expect(html).toContain('1 voorspelling goed');
+    expect(html).not.toContain('1 voorspellingen');
+  });
+
+  it('is explicit when a player scored nothing', () => {
+    const html = scored({
+      status: 'FINISHED', predicting: false, finished: true,
+      hasPredicted: true, myScore: { correct: 0, points: 0 },
+    });
+    expect(html).toContain('0 voorspellingen goed');
+    expect(html).toContain('Geen punten deze ronde');
+  });
+
+  it('shows no score card for a player who never predicted', () => {
+    const html = scored({ status: 'FINISHED', predicting: false, finished: true, myScore: null });
+    expect(html).not.toContain('voorspellingen goed');
+  });
+});
+
+describe('Pak een Zes scoring settings', () => {
+  const state = (points: number) => ({ game: { pak_een_zes_points_per_correct: points } });
+  const settings = (points: number) =>
+    renderToStaticMarkup(createElement(PakEenZesSettings, { state: state(points), run }));
+
+  it('shows the stored rate and a worked total', () => {
+    const html = settings(25);
+    expect(html).toContain('value="25"');
+    // Three correct at 25 is 75, spelled out so the effect is obvious.
+    expect(html).toContain('>75<');
+    expect(html).toContain('25 PUNTEN');
+  });
+
+  it('reflects a different configured rate', () => {
+    const html = settings(10);
+    expect(html).toContain('value="10"');
+    expect(html).toContain('>30<');
+  });
+
+  it('accepts zero and says the prediction is for pride alone', () => {
+    const html = settings(0);
+    expect(html).toContain('GEEN PUNTEN');
+    expect(html).toContain('pride alone');
+  });
+
+  // Nothing to save until the number actually changes.
+  it('keeps the save button dead until the value is edited', () => {
+    expect(settings(25)).toMatch(/<button [^>]*disabled[^>]*>SAVE SCORING<\/button>/);
+  });
+
+  it('promises a finished game keeps the rate it was scored at', () => {
+    expect(settings(25)).toContain('never rewrites a game that already paid out');
   });
 });

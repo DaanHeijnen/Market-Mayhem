@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { RunMutation } from '../types';
 import { Card } from '../ui';
 import { SlotMachineSettings } from './SlotMachineSettings';
+import { PakEenZesSettings } from './PakEenZesSettings';
 
 export function SettingsPage({ state: s, gameId, run, onReset }: { state: any; gameId: number; run: RunMutation; onReset: () => void }) {
   const g = s.game;
@@ -31,6 +32,8 @@ export function SettingsPage({ state: s, gameId, run, onReset }: { state: any; g
 
     <SlotMachineSettings state={s} gameId={gameId} run={run} />
 
+    <PakEenZesSettings state={s} run={run} />
+
     {/* The typed phrase is the gate, exactly as the design has it — the button stays
         dead until it matches, so the confirmation is the input rather than a first click.
         What gets removed is listed because it is not recoverable. */}
@@ -47,6 +50,7 @@ export function SettingsPage({ state: s, gameId, run, onReset }: { state: any; g
         <li>predictions, deposits and payouts</li>
         <li>roulette games and bets</li>
         <li>slotmachine symbols, odds, series and spins</li>
+        <li>Pak een Zes predictions, draws and scoring</li>
         <li>screen state and game settings</li>
       </ul>}
       <p>Type exactly <b>yes delete</b> to confirm.</p>

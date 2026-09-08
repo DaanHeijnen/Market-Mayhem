@@ -3,6 +3,7 @@ import { HttpError } from './http';
 import { orderRunOfShow, nextStep } from './run-of-show';
 import { closeSlotSeriesForBlock } from './slot-state';
 import { closePakEenZesForBlock } from './pak-een-zes-state';
+import { closePhotoRoundForBlock } from './photo-round-state';
 
 export const SCREEN_MODES = [
   'DASHBOARD',
@@ -13,6 +14,7 @@ export const SCREEN_MODES = [
   'ROULETTE',
   'SLOTMACHINE',
   'PAK_EEN_ZES',
+  'FOTORONDE',
 ] as const;
 export type ScreenMode = typeof SCREEN_MODES[number];
 
@@ -64,7 +66,7 @@ export async function setScreenMode(
     roundId = null;
     predictionId = null;
   }
-  if (mode === 'ROUND_BLOCK' || mode === 'ROULETTE' || mode === 'SLOTMACHINE' || mode === 'PAK_EEN_ZES') {
+  if (mode === 'ROUND_BLOCK' || mode === 'ROULETTE' || mode === 'SLOTMACHINE' || mode === 'PAK_EEN_ZES' || mode === 'FOTORONDE') {
     if (!roundId || !blockId) throw new HttpError(400, 'roundId and blockId are required');
     if (Number(game.rows[0].current_round_id || 0) !== roundId) throw new HttpError(409, 'Only the active round can be presented');
     const block = await client.query(
@@ -77,9 +79,10 @@ export async function setScreenMode(
     if (mode === 'ROULETTE' && block.rows[0].type !== 'ROULETTE') throw new HttpError(409, 'ROULETTE mode requires a roulette block');
     if (mode === 'SLOTMACHINE' && block.rows[0].type !== 'SLOTMACHINE') throw new HttpError(409, 'SLOTMACHINE mode requires a slotmachine block');
     if (mode === 'PAK_EEN_ZES' && block.rows[0].type !== 'PAK_EEN_ZES') throw new HttpError(409, 'PAK_EEN_ZES mode requires a Pak een Zes block');
+    if (mode === 'FOTORONDE' && block.rows[0].type !== 'FOTORONDE') throw new HttpError(409, 'FOTORONDE mode requires a Fotoronde block');
     // Each block type has exactly one composition that can present it, so the projector
     // can never be pointed at a slot block with the plain content scene.
-    if (mode === 'ROUND_BLOCK' && ['ROULETTE', 'SLOTMACHINE', 'PAK_EEN_ZES'].includes(block.rows[0].type)) throw new HttpError(409, `${block.rows[0].type} blocks must use ${block.rows[0].type} mode`);
+    if (mode === 'ROUND_BLOCK' && ['ROULETTE', 'SLOTMACHINE', 'PAK_EEN_ZES', 'FOTORONDE'].includes(block.rows[0].type)) throw new HttpError(409, `${block.rows[0].type} blocks must use ${block.rows[0].type} mode`);
     predictionId = null;
   }
   if (mode.startsWith('PREDICTION')) {
@@ -145,6 +148,11 @@ export async function setActiveRoundBlock(client: PoolClient, gameId: number, ro
     // a turn indicator live on somebody's phone for a game nobody is watching. The draws
     // and predictions are kept — cancelling must not erase history.
     await closePakEenZesForBlock(client, gameId, previousBlockId);
+
+    // A Fotoronde is CLOSED rather than cancelled: its photos, and the chance to award
+    // credits for them, are the point of the block. Ending the upload window must not
+    // throw away work nobody has judged yet.
+    await closePhotoRoundForBlock(client, gameId, previousBlockId);
   }
 
   await client.query('UPDATE game_nights SET current_round_block_id=$2,updated_at=NOW() WHERE id=$1', [gameId, blockId]);
@@ -207,6 +215,11 @@ export async function setActiveRoundBlock(client: PoolClient, gameId: number, ro
       await closePakEenZesForBlock(client, gameId, blockId);
     }
     await setScreenMode(client, gameId, 'PAK_EEN_ZES', actor, { roundId, blockId });
+  } else if (block.rows[0].type === 'FOTORONDE') {
+    // No cleanup on entry, unlike the other games: there is exactly one Fotoronde per
+    // block for the life of the block, because its photos and the credits awarded for
+    // them are history. Re-showing the block returns to the same round.
+    await setScreenMode(client, gameId, 'FOTORONDE', actor, { roundId, blockId });
   } else {
     await setScreenMode(client, gameId, 'ROUND_BLOCK', actor, { roundId, blockId });
   }
@@ -257,7 +270,8 @@ export async function setStagedItem(client: PoolClient, gameId: number, item: St
     mode = block.rows[0].type === 'ROULETTE' ? 'ROULETTE'
       : block.rows[0].type === 'SLOTMACHINE' ? 'SLOTMACHINE'
         : block.rows[0].type === 'PAK_EEN_ZES' ? 'PAK_EEN_ZES'
-          : 'ROUND_BLOCK';
+          : block.rows[0].type === 'FOTORONDE' ? 'FOTORONDE'
+            : 'ROUND_BLOCK';
     roundId = item.roundId;
     blockId = item.blockId;
   }

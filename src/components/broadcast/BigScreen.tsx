@@ -22,6 +22,7 @@ export function BigScreen({ gameId }: { gameId: number }) {
   if (s.mode === 'ROULETTE') return <RouletteScene roulette={s.roulette} round={s.round} block={s.block} />;
   if (s.mode === 'SLOTMACHINE') return <SlotScene slot={s.slotmachine} round={s.round} block={s.block} />;
   if (s.mode === 'PAK_EEN_ZES') return <PakEenZesScene game={s.pakEenZes} round={s.round} block={s.block} />;
+  if (s.mode === 'FOTORONDE') return <PhotoRoundScene photo={s.photoRound} round={s.round} block={s.block} />;
   return <Dashboard s={s} error={error} />;
 }
 
@@ -146,6 +147,12 @@ function SlotScene({ slot, round, block }: { slot: any; round: any; block: any }
   const spinning = Boolean(spin?.spinning);
   const revealed = Boolean(spin) && !spinning;
   const field = spin && Array.isArray(spin.grid) && spin.grid.length === 3 ? spin.grid : null;
+  const turn = slot?.turn || null;
+  // A player is "done" the moment their run is used up and the final spin has resolved —
+  // that is when the projector hands over to the next player.
+  const handingOver = Boolean(
+    turn && !turn.spinning && turn.current && turn.current.spinsRemaining === 0,
+  );
 
   return <div className="slot-screen">
     <div className="slot-screen-header">
@@ -153,9 +160,13 @@ function SlotScene({ slot, round, block }: { slot: any; round: any; block: any }
         <div className="label muted">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'MARKET MAYHEM'}</div>
         <h1 className="display">{block?.title || 'SLOTMACHINE'}</h1>
       </div>
+      {/* The turn, not the last spin: this stays put for the player's whole run so the
+          room always knows who is up. Only the remaining count moves between spins. */}
       <div className="slot-screen-player">
-        <span>{spin ? String(spin.playerName).toUpperCase() : 'WAITING FOR A PLAYER'}</span>
-        <b>{spin ? `SPIN ${spin.spinNumber} OF ${spin.totalSpins}` : 'LOCK A SERIES ON YOUR PHONE'}</b>
+        <span>{turn?.current ? `${String(turn.current.playerName || '').toUpperCase()} IS AAN DE BEURT` : 'WACHTEN OP EEN SPELER'}</span>
+        <b>{turn?.current
+          ? `${turn.current.spinsRemaining} VAN ${turn.current.totalSpins} SPINS OVER`
+          : 'ZET JE REEKS VAST OP JE TELEFOON'}</b>
       </div>
     </div>
 
@@ -178,21 +189,42 @@ function SlotScene({ slot, round, block }: { slot: any; round: any; block: any }
             <span>UITKOMST</span>
             <b>{spinning ? '· · ·' : revealed ? spin.outcome : '—'}</b>
           </div>
-          <SlotStat label="INZET PER SPIN" value={spin ? spin.stakePerSpin : '—'} coin />
+          <SlotStat label="INZET PER SPIN" value={turn?.current ? turn.current.stakePerSpin : spin ? spin.stakePerSpin : '—'} coin />
           <SlotStat label="PAYOUT" value={spinning || !spin ? '—' : `${formatMultiplier(spin.payoutMultiplier)}x`} />
           <SlotStat label="GEWONNEN" value={spinning || !spin ? '—' : spin.payout} coin highlight={revealed && spin.payout > 0} />
-          <SlotStat label="SPINS LEFT" value={spin ? spin.spinsRemaining : '—'} />
+          <SlotStat label="SPINS OVER" value={turn?.current ? turn.current.spinsRemaining : '—'} />
         </div>
+
+        {/* Handing over is its own moment: the run is finished, so name who is next
+            rather than leaving the last result up with no explanation. */}
+        {handingOver && <div className="slot-handover">
+          <b>{String(turn.current.playerName || '').toUpperCase()} IS KLAAR</b>
+          <span>{turn.next
+            ? `VOLGENDE SPELER: ${String(turn.next.playerName || '').toUpperCase()}`
+            : 'ALLE SPELERS ZIJN KLAAR'}</span>
+        </div>}
 
         <div className="slot-screen-footer">
           {spinning
-            ? 'SPINNING…'
-            : revealed
-              ? spin.payout > 0
-                ? `${String(spin.playerName).toUpperCase()} WINT ${spin.payout} COINS · ${String(spin.outcome).toUpperCase()}`
-                : `${String(spin.playerName).toUpperCase()} — GEEN WINST`
-              : 'CHOOSE YOUR STAKE AND SPINS ON YOUR PHONE'}
+            ? 'DRAAIT…'
+            : handingOver
+              ? turn.next ? 'DE VOLGENDE SPELER KAN BEGINNEN' : 'SLOTMACHINE AFGEROND'
+              : revealed
+                ? spin.payout > 0
+                  ? `${String(spin.playerName).toUpperCase()} WINT ${spin.payout} COINS · ${String(spin.outcome).toUpperCase()}`
+                  : `${String(spin.playerName).toUpperCase()} — GEEN WINST`
+                : turn?.current
+                  ? 'DRUK OP SPIN OP JE TELEFOON'
+                  : 'ZET JE REEKS VAST OP JE TELEFOON'}
         </div>
+
+        {/* Who is still waiting, so the room can see the running order. */}
+        {(turn?.queue?.length ?? 0) > 1 && <div className="slot-queue">
+          {turn.queue.map((entry: any) => <span
+            key={entry.seriesId}
+            className={`slot-queue-name ${turn.current?.seriesId === entry.seriesId ? 'is-current' : ''}`}
+          >{entry.playerName} · {entry.spinsRemaining}</span>)}
+        </div>}
 
         {slot.recentSpins.length > 0 && <div className="slot-history">
           {slot.recentSpins.map((previous: any) => <div className={`slot-history-row ${previous.payout > 0 ? 'is-win' : ''}`} key={previous.id}>
@@ -253,6 +285,9 @@ function PakEenZesScene({ game, round, block }: { game: any; round: any; block: 
         <b>{game?.predictionCount ?? 0}</b>
         <span>van {game?.activePlayerCount ?? 0} spelers hebben voorspeld</span>
       </div>
+      {game?.pointsPerCorrect > 0 && <div className="pez-points-note">
+        ELKE JUISTE VOORSPELLING IS {game.pointsPerCorrect} PUNTEN WAARD
+      </div>}
       <div className="pez-footer">
         {status === 'PREDICTING' ? 'VUL JE VOORSPELLING IN OP JE TELEFOON' : 'VOORSPELLINGEN GESLOTEN · DE HOST START HET SPEL'}
       </div>
@@ -299,10 +334,89 @@ function PakEenZesScene({ game, round, block }: { game: any; round: any; block: 
           <em>trek {six.drawNumber}</em>
         </div>)}
       </div>
+      {/* Only the players who scored: a list of zeros tells the room nothing. */}
+      {(game?.results?.length ?? 0) > 0 && <div className="pez-scoreboard">
+        <div className="label muted">JUISTE VOORSPELLINGEN</div>
+        {game.results.map((result: any) => <div className="pez-score-row" key={result.playerId}>
+          <span>{String(result.playerName).toUpperCase()}</span>
+          <b>{result.correct} goed</b>
+          <em>+{result.points}</em>
+        </div>)}
+      </div>}
+
       <div className="pez-footer">{game?.drawnCount ?? 0} kaarten getrokken</div>
     </div>}
   </div>;
 }
+
+/**
+ * Fotoronde, on the projector.
+ *
+ * Two faces. While submissions are open it shows progress per subject, which is the one
+ * thing the room wants to know — who still owes a photo. While judging, the Admin puts a
+ * single photo up and it fills the screen with its team's name, because that is what
+ * everyone is looking at and arguing about.
+ */
+function PhotoRoundScene({ photo, round, block }: { photo: any; round: any; block: any }) {
+  const shown = photo?.shown || null;
+  const status = photo?.status || 'DRAFT';
+
+  return <div className="photo-screen">
+    <div className="photo-screen-header">
+      <div className="photo-screen-title">
+        <div className="label muted">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'MARKET MAYHEM'}</div>
+        <h1 className="display">{block?.title || 'FOTORONDE'}</h1>
+      </div>
+      <div className="photo-screen-status">
+        <span>{PHOTO_STATUS_LABELS[status] || status}</span>
+        <b>{photo?.submissionCount ?? 0} FOTO&apos;S · {photo?.teamCount ?? 0} TEAMS</b>
+      </div>
+    </div>
+
+    {/* One photo, judged. The team name is the headline — the photo speaks for itself. */}
+    {shown
+      ? <div className="photo-stage">
+        <div className="photo-stage-subject">{String(shown.subjectLabel || '').toUpperCase()}</div>
+        <img className="photo-stage-image" src={`/api/block-media?key=${encodeURIComponent(shown.mediaKey)}`} alt="" />
+        <div className="photo-stage-team">
+          <b>{String(shown.teamName).toUpperCase()}</b>
+          {shown.creditsAwarded != null && <span className="photo-stage-credits">{shown.creditsAwarded} CREDITS</span>}
+        </div>
+      </div>
+      : <div className="photo-progress">
+        {(photo?.subjects || []).map((subject: any) => <div className="photo-progress-row" key={subject.key}>
+          <span>{subject.label}</span>
+          <b>{subject.submittedCount} / {photo?.teamCount ?? 0}</b>
+        </div>)}
+        {(photo?.subjects?.length ?? 0) === 0 && <div className="screen-center-message">FOTORONDE</div>}
+      </div>}
+
+    <div className="photo-screen-footer">
+      {status === 'OPEN'
+        ? 'UPLOAD JE FOTO\u2019S OP JE TELEFOON'
+        : status === 'DRAFT'
+          ? 'DE HOST OPENT ZO HET INZENDEN'
+          : shown
+            ? 'BEOORDELING'
+            : 'INZENDEN GESLOTEN'}
+    </div>
+
+    {/* The standings, once credits have started landing. */}
+    {!shown && (photo?.teamTotals?.length ?? 0) > 0 && photo.teamTotals.some((t: any) => t.credits > 0) && <div className="photo-standings">
+      {photo.teamTotals.filter((t: any) => t.credits > 0).map((team: any) => <div className="photo-standing" key={team.groupId}>
+        <span>{String(team.name).toUpperCase()}</span>
+        <b>{team.credits}</b>
+      </div>)}
+    </div>}
+  </div>;
+}
+
+const PHOTO_STATUS_LABELS: Record<string, string> = {
+  DRAFT: 'NOG NIET OPEN',
+  OPEN: 'INZENDEN OPEN',
+  CLOSED: 'BEOORDELING',
+  COMPLETED: 'AFGEROND',
+};
 
 const PEZ_STATUS_LABELS: Record<string, string> = {
   READY: 'KLAAR OM TE STARTEN',

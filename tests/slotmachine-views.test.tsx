@@ -25,9 +25,27 @@ function slotmachine(overrides: Record<string, unknown> = {}) {
     configReason: 'Configuration is valid.',
     series: null,
     lastSeries: null,
+    turn: null,
     ...overrides,
   };
 }
+
+/** A turn payload as the player snapshot builds it. `mine` means this player is up. */
+function turn(overrides: Record<string, unknown> = {}) {
+  return {
+    current: { playerId: 1, name: 'Daan', spinsRemaining: 10, totalSpins: 10, stakePerSpin: 5 },
+    next: null,
+    spinning: false,
+    isMyTurn: true,
+    maySpin: true,
+    waitingFor: null,
+    allDone: false,
+    ...overrides,
+  };
+}
+
+const activeSeries = (spinsRemaining = 10) =>
+  ({ id: 9, stakePerSpin: 5, totalSpins: 10, spinsRemaining, totalStake: 50, status: 'ACTIVE', lastSpin: null });
 
 function playerState(overrides: Record<string, unknown> = {}) {
   return {
@@ -88,7 +106,7 @@ describe('slotmachine on the phone', () => {
 
   it('replaces the pickers with SPIN once the series is locked', () => {
     const state = playerState({
-      slotmachine: slotmachine({ series: { id: 9, stakePerSpin: 5, totalSpins: 10, spinsRemaining: 10, totalStake: 50, status: 'ACTIVE', lastSpin: null } }),
+      slotmachine: slotmachine({ series: activeSeries(10), turn: turn() }),
     });
     const html = render(createElement(MobileViews, { state, gameId: 1, view: 'home', predictionId: null, busy: false, act: noop, go: noop }));
     expect(html).toContain('INZET VASTGEZET');
@@ -98,12 +116,17 @@ describe('slotmachine on the phone', () => {
     expect(html).not.toContain('INZET VASTZETTEN');
   });
 
+  // The anti-spam rule, from the phone's side: the button is dead while the spin is
+  // still resolving. The backend refuses it too; this only spares the round trip.
   it('disables SPIN while the reels are still turning, so a second tap cannot land', () => {
     const state = playerState({
-      slotmachine: slotmachine({ series: { id: 9, stakePerSpin: 5, totalSpins: 10, spinsRemaining: 9, totalStake: 50, status: 'ACTIVE', lastSpin: { spinNumber: 1, outcome: null, payoutMultiplier: null, payout: null, status: 'SPINNING' } } }),
+      slotmachine: slotmachine({
+        series: { ...activeSeries(9), lastSpin: { spinNumber: 1, outcome: null, payoutMultiplier: null, payout: null, status: 'SPINNING' } },
+        turn: turn({ spinning: true, maySpin: false, current: { playerId: 1, name: 'Daan', spinsRemaining: 9, totalSpins: 10, stakePerSpin: 5 } }),
+      }),
     });
     const html = render(createElement(MobileViews, { state, gameId: 1, view: 'home', predictionId: null, busy: false, act: noop, go: noop }));
-    expect(html).toMatch(/<button [^>]*disabled[^>]*>SPINNING…<\/button>/);
+    expect(html).toMatch(/<button [^>]*disabled[^>]*>DRAAIT…<\/button>/);
   });
 
   it('withholds the outcome the server has not revealed yet', () => {
@@ -412,5 +435,76 @@ describe('slotmachine in the Control Center', () => {
   it('says that moving on refunds unused spins, so the host knows nothing is left running', () => {
     const html = renderRouted(createElement(ControlPage, { state: slotState(), gameId: 1, run }));
     expect(html).toContain('refunds spins nobody used');
+  });
+});
+
+describe('slotmachine turns on the phone', () => {
+  const activeSeriesFor = (spinsRemaining: number) =>
+    ({ id: 9, stakePerSpin: 5, totalSpins: 10, spinsRemaining, totalStake: 50, status: 'ACTIVE', lastSpin: null });
+
+  const state = (slotOverrides: Record<string, unknown>) => playerState({ slotmachine: slotmachine(slotOverrides) });
+  const html = (slotOverrides: Record<string, unknown>) =>
+    render(createElement(MobileViews, { state: state(slotOverrides), gameId: 1, view: 'home', predictionId: null, busy: false, act: noop, go: noop }));
+
+  it('gives the active player the SPIN button', () => {
+    const out = html({ series: activeSeriesFor(6), turn: turn({ current: { playerId: 1, name: 'Daan', spinsRemaining: 6, totalSpins: 6, stakePerSpin: 10 } }) });
+    expect(out).toContain('JIJ BENT AAN DE BEURT');
+    expect(out).toContain('SPIN · 6 LEFT');
+  });
+
+  // Everyone else waits, and is told on whom — not shown a dead button.
+  it('tells a waiting player whose turn it is instead of offering SPIN', () => {
+    const out = html({
+      series: activeSeriesFor(4),
+      turn: turn({
+        isMyTurn: false,
+        maySpin: false,
+        waitingFor: 'Daan',
+        current: { playerId: 2, name: 'Daan', spinsRemaining: 3, totalSpins: 6, stakePerSpin: 10 },
+      }),
+    });
+    expect(out).toContain('AAN DE BEURT');
+    expect(out).toContain('Daan');
+    expect(out).toContain('Nog 3 van 6 spins');
+    expect(out).not.toContain('SPIN · ');
+    expect(out).toContain('WACHTEN');
+  });
+
+  it('keeps SPIN available for the whole run, not just the first spin', () => {
+    for (const left of [6, 3, 1]) {
+      const out = html({ series: activeSeriesFor(left), turn: turn({ current: { playerId: 1, name: 'Daan', spinsRemaining: left, totalSpins: 6, stakePerSpin: 10 } }) });
+      expect(out, `${left} left`).toContain(`SPIN · ${left} LEFT`);
+    }
+  });
+
+  // No topping up: once the run is used, the pickers must not come back.
+  it('offers no way to buy more spins after a run is finished', () => {
+    const out = html({
+      series: null,
+      lastSeries: { id: 9, stakePerSpin: 5, totalSpins: 10, spinsRemaining: 0, totalStake: 50, status: 'COMPLETED', lastSpin: null },
+      turn: turn({ isMyTurn: false, maySpin: false, current: null, allDone: true }),
+    });
+    expect(out).toContain('JE REEKS IS KLAAR');
+    expect(out).toContain('geen spins worden bijgekocht');
+    expect(out).not.toContain('INZET VASTZETTEN');
+    expect(out).not.toContain('AANTAL SPINS');
+  });
+
+  it('still lets a player who has not played yet lock a run while someone else is up', () => {
+    const out = html({
+      series: null,
+      turn: turn({
+        isMyTurn: false,
+        maySpin: false,
+        current: { playerId: 2, name: 'Bas', spinsRemaining: 2, totalSpins: 4, stakePerSpin: 5 },
+      }),
+    });
+    expect(out).toContain('INZET VASTZETTEN');
+    expect(out).toContain('Bas');
+  });
+
+  it('caps the spin picker at ten', () => {
+    const out = html({ maxSpins: 10 });
+    expect(out).toContain('AANTAL SPINS · MAX 10');
   });
 });
