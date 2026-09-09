@@ -157,7 +157,9 @@ They are columns on the existing row rather than a second table, so `getAdminSta
 
 Approval does **not** create a market. The player-facing copy is "Approved · waiting for prediction to go live", so approval only signals intent; the Admin still authors the market with its own odds and stake limits. The per-player limits — at most 2 requests, and one hour between submissions — are enforced in the endpoint rather than by constraints, because both are relative to the requesting player and need to return a usable error rather than a constraint violation.
 
-For a Duolingo block the JSON payload contains answer texts, correct index and reward. Player-facing query normalization is what prevents secret data from leaving the server before reveal.
+For a Duolingo block the JSON payload contains supporting text, answer texts, correct index, reward and an optional `contextImageKey` — the Netlify Blobs key of the question's context photo, never the bytes, which would ride along in every poll. Player-facing query normalization is what prevents secret data from leaving the server before reveal: both the correct index and the photo key are withheld until `REVEALED`.
+
+Because the photo lives in the block payload, Full Reset keeps it: the played answers are deleted and the block returns to `READY`, but the question, its answers and its photo are configuration and survive.
 
 ## Round groups
 

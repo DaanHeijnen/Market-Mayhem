@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { RunMutation } from '../types';
-import { Accordion, Card, Countdown, Status } from '../ui';
+import { Accordion, Card, Countdown, ProgressBar, Status } from '../ui';
 import { CoinIcon } from '../../shared/CoinIcon';
 import { blockLabel, blockMeta } from '../blockMeta';
 
@@ -62,6 +62,7 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
   const goLive = () => run('/api/go-live', {});
   const rouletteAction = (action: string) => activeRoulette && run('/api/roulette-action', { rouletteGameId: activeRoulette.id, action }, true);
   const questionAction = (action: string) => liveBlock && run('/api/question-action', { blockId: liveBlock.id, action });
+  const questionPhoto = (show: boolean) => liveBlock && run('/api/show-question-photo', { blockId: liveBlock.id, show });
   const pezAction = (action: string) => liveBlock && run('/api/pak-een-zes-action', { blockId: liveBlock.id, action });
   const photoAction = (action: string) => liveBlock && run('/api/photo-round-action', { blockId: liveBlock.id, action });
 
@@ -90,12 +91,54 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
   const liveActions = () => {
     if (liveBlock?.type === 'DUOLINGO_QUESTION') {
       const status = liveBlock.interactive_status || 'READY';
+      // Computed on the server so this, the projector and the round list cannot disagree
+      // about how far along the room is.
+      const part = liveBlock.participation || { answered: 0, eligible: activePlayers.length, remaining: 0, percentage: 0 };
+      const revealed = status === 'REVEALED' || status === 'SETTLED';
+      const answers = liveBlock.payload?.answers || [];
+      const correctIndex = Number(liveBlock.payload?.correctAnswerIndex);
+      const photoShowing = s.screen?.questionContextPhotoBlockId === liveBlock.id;
       return <>
+        {/* The host's one question is "can I close yet?", so the count, the percentage
+            and the bar come before the buttons rather than trailing them as meta text. */}
+        {['OPEN', 'CLOSED'].includes(status) && <div className="question-participation">
+          <div className="question-participation-head">
+            <div>
+              <div className="label muted">ANTWOORDEN</div>
+              <div className="question-participation-count">{part.answered} / {part.eligible} GEANTWOORD</div>
+            </div>
+            <div className="question-participation-pct">{part.percentage}%</div>
+          </div>
+          <ProgressBar percentage={part.percentage} tone={part.remaining === 0 ? 'success' : 'blue'} label="Answers received" />
+          <div className="muted question-participation-sub">
+            {part.eligible === 0
+              ? 'No active players can answer this question.'
+              : part.remaining === 0
+                ? status === 'OPEN' ? 'Everyone has answered — safe to close.' : `All ${part.eligible} answers received.`
+                : `Still waiting on ${part.remaining} player${part.remaining === 1 ? '' : 's'}.`}
+          </div>
+        </div>}
+
         {status === 'READY' && <button className="btn btn-blue" onClick={() => questionAction('OPEN')}>OPEN ANSWERS</button>}
-        {status === 'OPEN' && <button className="btn btn-secondary" onClick={() => questionAction('CLOSE')}>CLOSE ANSWERS</button>}
-        {status === 'CLOSED' && <button className="btn btn-success" onClick={() => questionAction('REVEAL')}>REVEAL + REWARD</button>}
+        {status === 'OPEN' && <button className="btn btn-secondary" onClick={() => questionAction('CLOSE')}>SLUIT VRAAG</button>}
+        {status === 'CLOSED' && <button className="btn btn-success" onClick={() => questionAction('REVEAL')}>TOON JUISTE ANTWOORD</button>}
+
+        {/* The photo is the beat after the reveal, so its button only exists from there
+            on — and only when a photo was actually uploaded, which keeps the step
+            skippable rather than a dead control. */}
+        {revealed && liveBlock.hasContextPhoto && (photoShowing
+          ? <button className="btn btn-secondary" onClick={() => questionPhoto(false)}>TERUG NAAR DE VRAAG</button>
+          : <button className="btn btn-blue" onClick={() => questionPhoto(true)}>TOON CONTEXTFOTO</button>)}
+
         {status === 'REVEALED' && <button className="btn btn-secondary" onClick={() => questionAction('SETTLE')}>MARK SETTLED</button>}
-        <span className="muted live-meta">{liveBlock.answer_count || 0} of {activePlayers.length} answered · {Number(liveBlock.payload?.rewardCoins || 0)} coin reward</span>
+
+        <span className="muted live-meta">
+          {revealed && Number.isInteger(correctIndex)
+            ? `Juiste antwoord: ${answers[correctIndex] || `answer ${correctIndex + 1}`}`
+            : `${part.answered} of ${part.eligible} answered`}
+          {` · ${Number(liveBlock.payload?.rewardCoins || 0)} coin reward`}
+          {revealed && !liveBlock.hasContextPhoto ? ' · no context photo on this question' : ''}
+        </span>
       </>;
     }
     if (liveBlock?.type === 'ROULETTE') {

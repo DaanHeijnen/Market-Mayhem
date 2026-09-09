@@ -102,7 +102,7 @@ A group adjustment locks game → group → member players/wallets and creates o
 
 ## Live Duolingo question
 
-A `DUOLINGO_QUESTION` stores Admin-only configuration in the block payload: four answer texts, `correctAnswerIndex` and reward coins.
+A `DUOLINGO_QUESTION` stores Admin-only configuration in the block payload: supporting text, four answer texts, `correctAnswerIndex`, reward coins and an optional `contextImageKey`.
 
 ```mermaid
 stateDiagram-v2
@@ -112,7 +112,21 @@ stateDiagram-v2
   REVEALED --> SETTLED
 ```
 
-When the block is current, Player snapshots include only block identity, status, reward, the player's selected emoji index and post-reveal correctness. They never contain answer texts or correct index. Big Screen snapshots contain answer texts, but the correct index is stripped until `REVEALED`/`SETTLED`.
+When the block is current, Player snapshots include only block identity, status, reward, the player's selected emoji index and post-reveal correctness — plus, from the reveal onwards, the correct index and its text so the phone can say what the answer *was* rather than only whether this player matched it. Before the reveal they never contain answer texts or the correct index. Big Screen snapshots contain answer texts and the supporting text, but the correct index and the context photo key are stripped until `REVEALED`/`SETTLED`.
+
+`normalizeBlock` is where that stripping happens and is exported for tests, because what it withholds is a security rule rather than a formatting detail: the projector snapshot is served to anyone holding the screen URL, so a secret that reaches it is public.
+
+### Participation
+
+`questionParticipation(answered, eligible)` returns `answered`, `eligible`, `remaining` and a whole `percentage`, and every surface renders that one result rather than doing its own arithmetic. Eligible is the active players; `answered` counts answers from active players only and is clamped to `eligible`, so deactivating a player who already answered cannot produce a reading over 100% at exactly the moment the host is trusting it. Reward eligibility at reveal is a separate question and deliberately unchanged.
+
+Answers arriving bump `game_state_version` like any other change, so the Admin's existing 3-second poll moves the bar with no new transport. Nothing closes the question automatically — the count exists so the host can decide.
+
+### Context photo
+
+The photo is a projector step rather than a question phase: by the time it appears the answers are closed and the reward is paid, so it changes no game state. It rides in `screen_state.payload` as `questionContextPhotoBlockId` exactly as the Fotoronde selection rides there, and is scoped to a block id rather than a boolean so a flag left over from one question can never raise the next one's photo. `setActiveRoundBlock` replaces the payload, so moving on takes the photo down.
+
+Three independent locks keep it from landing early: `show-question-photo` refuses unless the block is `REVEALED`/`SETTLED` and actually has a photo; `getScreenState` re-checks the phase against the block rather than trusting the payload; and `normalizeBlock` withholds the key entirely until reveal, so an early render has no file to name.
 
 `round_question_answers` is unique by block/player. Reveal locks the question and winner wallets, appends idempotent `QUESTION_REWARD` entries and credits winners once. The reward is attributed to both round and block.
 

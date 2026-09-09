@@ -110,10 +110,32 @@ function MusicScene({ block, round }: { block: any; round: any }) {
 function DuolingoScene({ block, round }: { block: any; round: any }) {
   const correct = block.payload?.correctAnswerIndex;
   const revealed = ['REVEALED', 'SETTLED'].includes(block.interactive_status) && Number.isInteger(Number(correct));
+  const part = block.participation;
+
+  // The context photo is its own step, and once the host calls for it the photo *is* the
+  // slide — the question shrinks to a line above it and the answer to a line below, so
+  // the room still knows what it is looking at and why.
+  //
+  // The server only sends contextImageKey from the reveal onwards, so this cannot render
+  // early even if the flag were wrong.
+  if (block.showingContextPhoto && block.payload?.contextImageKey) {
+    return <div className="duo-screen duo-photo-screen">
+      <div className="duo-topline"><span>{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'LIVE QUESTION'}</span><span className="pill">CONTEXT</span></div>
+      <h2 className="duo-photo-question">{block.title}</h2>
+      <img className="duo-photo-image" src={mediaUrl(block.payload.contextImageKey)} alt="" />
+      {revealed && <div className="duo-photo-answer">🟢 {(block.payload?.answers || [])[Number(correct)] || ''}</div>}
+    </div>;
+  }
+
   return <div className="duo-screen">
-    <div className="duo-topline"><span>{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'LIVE QUESTION'}</span><span className="pill">{block.interactive_status || 'READY'} · {block.answer_count || 0} ANSWERS</span></div>
+    <div className="duo-topline">
+      <span>{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'LIVE QUESTION'}</span>
+      <span className="pill">{block.interactive_status || 'READY'} · {part ? `${part.answered}/${part.eligible}` : block.answer_count || 0} ANSWERS</span>
+    </div>
     <h1>{block.title}</h1>
+    {block.payload?.body && <p className="duo-support">{block.payload.body}</p>}
     <div className="duo-answer-grid">{(block.payload?.answers || []).map((answer: string, index: number) => <div className={`duo-answer-card ${revealed && Number(correct) === index ? 'correct' : revealed ? 'dimmed' : ''}`} key={index}><span className="duo-emoji">{QUESTION_EMOJIS[index]}</span><b>{answer}</b>{revealed && Number(correct) === index && <small>CORRECT</small>}</div>)}</div>
+    {revealed && <div className="duo-reveal-banner"><span>JUISTE ANTWOORD</span><b>🟢 {(block.payload?.answers || [])[Number(correct)] || ''}</b></div>}
     <div className="duo-footer">{block.interactive_status === 'OPEN' ? 'ANSWER NOW ON YOUR PHONE' : block.interactive_status === 'CLOSED' ? 'ANSWERS LOCKED' : revealed ? `CORRECT ANSWER REVEALED${Number(block.payload?.rewardCoins || 0) > 0 ? ` · +${block.payload.rewardCoins} COINS` : ''}` : 'GET READY'}</div>
   </div>;
 }

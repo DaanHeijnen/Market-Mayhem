@@ -325,6 +325,26 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 160; display: grid; place-items: center; padding: 20px; background: rgba(20,18,15,.72); backdrop-filter: blur(5px); }
 .modal { width: min(640px, 100%); padding: 30px; border-radius: var(--r-modal); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+/* Horizontal fill bar (primitive — see ProgressBar in components/admin/ui.tsx).
+   Height and radius follow the pill/control scale so it sits with the other controls. */
+.progress-bar {
+  height: 14px;
+  border-radius: 999px;
+  background: var(--surface-disabled);
+  box-shadow: inset 0 0 0 2px var(--border);
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--blue);
+  /* The Admin polls every 3s, so the bar eases to its new width instead of jumping and
+     making the host wonder whether they misread it. */
+  transition: width .45s cubic-bezier(.4, 0, .2, 1);
+}
+.progress-bar-fill.tone-success { background: var(--green); }
+.progress-bar-fill.tone-ink { background: var(--ink); }
+
 .danger-card { border: 2px solid var(--red); background: #FFF7F5; }
 .danger-list { color: var(--secondary); line-height: 1.8; }
 
@@ -551,7 +571,11 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .emoji-answer.selected { border-color: var(--ink); }
 .emoji-answer.correct { background: #DDF5E5; border-color: var(--green); }
 .emoji-answer.incorrect { background: #FFE2DE; border-color: var(--red); }
-.answer-locked, .answer-correct, .answer-wrong { display: grid; gap: 4px; margin-top: 5px; }
+.answer-locked, .answer-correct, .answer-wrong, .answer-reveal { display: grid; gap: 4px; margin-top: 5px; }
+/* What the answer was, above the player's own result — the projector shows it too, but a
+   phone in a lap is where people actually look. */
+.answer-reveal { border: 2px solid var(--ink); background: var(--surface-soft); }
+.answer-reveal-value { font: 700 18px var(--display); }
 .answer-correct { border: 2px solid var(--green); }
 .answer-wrong { border: 2px solid var(--red); }
 .live-question-wallet { margin-top: auto; padding: 18px 0 4px; display: flex; justify-content: center; align-items: center; gap: 6px; color: var(--muted); font-family: var(--display); font-size: 13px; }
@@ -734,6 +758,34 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .duo-emoji { font-size: 4vw; }
 .duo-answer-card small { color: var(--green); font-weight: 800; letter-spacing: .08em; }
 .duo-footer { padding-top: 2.5vh; text-align: center; color: var(--violet); font-size: 1.2vw; font-weight: 800; letter-spacing: .1em; }
+/* Supporting text under the question, when the block has any. */
+.duo-support { max-width: 72vw; margin: -1.5vh auto 2.5vh; text-align: center; color: var(--secondary); font-size: 1.5vw; line-height: 1.35; }
+/* The reveal, stated as its own banner rather than only as a highlighted card — the
+   room reads the answer from across a lit lounge. */
+.duo-reveal-banner {
+  display: flex; align-items: center; justify-content: center; gap: 2vw;
+  margin-top: 2.5vh; padding: 1.4vh 3vw;
+  border-radius: 999px; background: var(--ink); color: #fff;
+}
+.duo-reveal-banner span { color: var(--lime); font: 800 1.1vw var(--display); letter-spacing: .14em; }
+.duo-reveal-banner b { font: 700 2.6vw var(--display); line-height: 1.1; }
+
+/* The context-photo step. The photo is the slide, so it takes the free space and the
+   question and answer shrink to one line each — contain, never crop, because the whole
+   point is that the room can see the whole picture. */
+.duo-photo-screen .duo-photo-question { max-width: 80vw; margin: 2vh auto 1.5vh; text-align: center; font: 700 2.4vw var(--display); line-height: 1.15; }
+.duo-photo-image {
+  flex: 1; min-height: 0;
+  width: 100%; max-width: 84vw; margin: 0 auto;
+  border-radius: 1.4vw;
+  object-fit: contain;
+  box-shadow: 0 2vh 6vh rgba(20, 18, 15, .22);
+}
+.duo-photo-answer {
+  margin: 2vh auto 0; padding: 1.2vh 3vw;
+  border-radius: 999px; background: var(--lime); color: var(--ink);
+  font: 700 2.4vw var(--display);
+}
 
 .roulette-screen { display: flex; flex-direction: column; padding: 4vh 4vw; background: var(--paper); color: var(--ink); }
 .roulette-screen::before { content: ''; position: absolute; z-index: -1; width: 340px; height: 340px; right: -120px; top: -140px; border-radius: 50%; background: var(--orange); }
@@ -1060,6 +1112,23 @@ button.chip-blue:hover { background: var(--violet); }
 .staged-card.accent-orange .staged-badge, .staged-card.accent-cyan .staged-badge,
 .staged-card.accent-lime .staged-badge { background: rgba(20,18,15,.16); }
 .presenter-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+
+/* Live-question participation. Spans the whole action row rather than sitting inline
+   with the buttons: it is the reading the host makes the decision on, so it comes first
+   and full width, and the SLUIT VRAAG button sits under it. */
+.question-participation {
+  flex: 1 0 100%;
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: var(--r-control);
+  background: var(--surface-soft);
+  box-shadow: inset 0 0 0 2px var(--border);
+}
+.question-participation-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.question-participation-count { font: 700 20px var(--display); letter-spacing: .01em; }
+.question-participation-pct { font: 700 26px var(--display); line-height: 1; }
+.question-participation-sub { font-size: 12px; }
 .go-live-btn { width: 100%; min-height: 56px; font-size: 14px; }
 
 @media (max-width: 1100px) {

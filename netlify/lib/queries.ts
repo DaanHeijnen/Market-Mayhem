@@ -9,6 +9,7 @@ import { loadPakEenZesGame, pakEenZesBlockSettings } from './pak-een-zes-state';
 import { loadPhotoRound, photoRoundInstructions, photoRoundSubjects, playerTeamForRound } from './photo-round-state';
 import { countCorrectPredictions, playerAtTurn, predictionPoints } from './pak-een-zes';
 import { describeSlotConfig, maySpin, symbolLetter, SLOT_OUTCOME_LABELS, SLOT_SPIN_MS, type SlotOutcomeType } from './slotmachine';
+import { isRevealed, mayShowContextPhoto, questionParticipation } from './question';
 
 const ROULETTE_SPIN_MS = 5500;
 
@@ -121,19 +122,36 @@ export async function getGameVersion(gameId: number): Promise<GameVersion> {
   return value;
 }
 
-function normalizeBlock(row: any, admin = true) {
+/**
+ * Shape a round_blocks row for one audience.
+ *
+ * Exported because what it withholds from non-admin surfaces — a wager's answer, a
+ * picture round's title, a live question's correct answer and context photo — is a
+ * security rule rather than a formatting detail, and is worth testing directly rather
+ * than only through a snapshot.
+ */
+export function normalizeBlock(row: any, admin = true, eligibleCount = 0) {
   if (!row) return null;
   const payload = row.payload || {};
-  const revealed = ['REVEALED', 'SETTLED'].includes(row.interactive_status);
+  const revealed = isRevealed(row.interactive_status);
 
   const normalizedPayload = admin ? payload : (() => {
     if (row.type === 'DUOLINGO_QUESTION') {
       const safe: Record<string, unknown> = {
         answers: Array.isArray(payload.answers) ? payload.answers : [],
         rewardCoins: Number(payload.rewardCoins || 0),
+        // Supporting text is part of the question being asked, so it travels from the
+        // start. The correct answer and the context photo do not.
+        body: typeof payload.body === 'string' ? payload.body : '',
       };
       if (revealed && Number.isInteger(Number(payload.correctAnswerIndex))) {
         safe.correctAnswerIndex = Number(payload.correctAnswerIndex);
+      }
+      // Withheld until the reveal, like the answer itself. Stripping the key here rather
+      // than hiding the image in the UI is what makes "never before the reveal"
+      // structural: until then the projector has no way to name the file.
+      if (revealed && typeof payload.contextImageKey === 'string' && payload.contextImageKey) {
+        safe.contextImageKey = payload.contextImageKey;
       }
       return safe;
     }
@@ -159,6 +177,13 @@ function normalizeBlock(row: any, admin = true) {
     answer_count: Number(row.answer_count || 0),
     title: hideTitle ? null : row.title,
     payload: normalizedPayload,
+    // Computed here rather than on each surface so the Admin bar, the projector and the
+    // round list can never disagree about how far along the room is. Only meaningful for
+    // a live question, so the other block types are not given a misleading zero.
+    participation: row.type === 'DUOLINGO_QUESTION'
+      ? questionParticipation(Number(row.answer_count || 0), eligibleCount)
+      : null,
+    hasContextPhoto: row.type === 'DUOLINGO_QUESTION' && Boolean(payload.contextImageKey),
   };
 }
 
@@ -196,8 +221,14 @@ export async function getAdminState(gameId: number) {
   const [rounds, blocks, groups, players, predictions, recent, roulette, screen, requests, slotConfig, slotSeries, slotSpins, pakEenZes, slotTurn, photoRound] = await Promise.all([
     pool.query('SELECT * FROM rounds WHERE game_night_id=$1 ORDER BY round_number,id', [gameId]),
     pool.query(
-      `SELECT b.*,COUNT(a.id)::int AS answer_count
-       FROM round_blocks b LEFT JOIN round_question_answers a ON a.round_block_id=b.id
+      // Answers are counted from active players only, matching the denominator the
+      // participation bar divides by — otherwise deactivating someone mid-question shows
+      // the host more answers than there are players. Reward eligibility at REVEAL is a
+      // separate question and deliberately unchanged.
+      `SELECT b.*,COUNT(ap.id)::int AS answer_count
+       FROM round_blocks b
+       LEFT JOIN round_question_answers a ON a.round_block_id=b.id
+       LEFT JOIN players ap ON ap.id=a.player_id AND ap.active=TRUE
        WHERE b.game_night_id=$1 GROUP BY b.id ORDER BY b.round_id,b.sort_order,b.id`, [gameId],
     ),
     pool.query(
@@ -289,7 +320,10 @@ export async function getAdminState(gameId: number) {
       : Promise.resolve(null),
   ]);
 
-  const normalizedBlocks = blocks.rows.map((b: any) => normalizeBlock(b, true));
+  // Who may answer a live question: every active player. Derived from the player rows
+  // this snapshot already fetched rather than a second query.
+  const eligibleCount = players.rows.filter((p: any) => p.active).length;
+  const normalizedBlocks = blocks.rows.map((b: any) => normalizeBlock(b, true, eligibleCount));
   const groupRows = groups.rows.map((g: any) => ({ ...g, id: Number(g.id), round_id: Number(g.round_id), members: (g.members || []).map((m: any) => ({ ...m, id: Number(m.id), active: Boolean(m.active) })) }));
   const normalizedPredictions = predictions.rows.map(normalizePrediction);
   return {
@@ -318,6 +352,9 @@ export async function getAdminState(gameId: number) {
         ...slot(row?.mode || game.current_screen_mode, row?.round_id, row?.prediction_id, row?.payload),
         staged: slot(row?.staged_mode, row?.staged_round_id, row?.staged_prediction_id, row?.staged_payload),
         previous: slot(row?.previous_mode, row?.previous_round_id, row?.previous_prediction_id, row?.previous_payload),
+        // Which question's context photo is on the projector, so the Admin button can
+        // read SHOW or HIDE rather than guessing.
+        questionContextPhotoBlockId: Number(row?.payload?.questionContextPhotoBlockId || 0) || null,
       };
     })(),
     // Server-ordered so the strip the host sees and the pointer GO LIVE advances can
@@ -607,12 +644,23 @@ export async function getPlayerState(gameId: number, playerId: number) {
     result_number: rouletteRow.status === 'SPINNING' || rouletteRow.result_number == null ? null : Number(rouletteRow.result_number), own_bets: rouletteRow.own_bets || [],
   } : null;
   const interactiveRow = interactive.rows[0];
-  const interactiveBlock = interactiveRow ? {
-    id: Number(interactiveRow.id), roundId: Number(interactiveRow.round_id),
-    status: interactiveRow.interactive_status, rewardCoins: Number(interactiveRow.payload?.rewardCoins || 0),
-    selectedAnswer: interactiveRow.selected_answer == null ? null : Number(interactiveRow.selected_answer),
-    isCorrect: interactiveRow.is_correct == null ? null : Boolean(interactiveRow.is_correct),
-  } : null;
+  const interactiveBlock = interactiveRow ? (() => {
+    // Which answer was right is withheld until the host reveals it, so the phone is
+    // given it only from that moment — the same rule the projector is held to. Sending
+    // the text as well as the index means the player sees *what* the answer was, not
+    // just whether their own emoji happened to match.
+    const revealed = isRevealed(interactiveRow.interactive_status);
+    const correctIndex = Number(interactiveRow.payload?.correctAnswerIndex);
+    const answers = Array.isArray(interactiveRow.payload?.answers) ? interactiveRow.payload.answers : [];
+    return {
+      id: Number(interactiveRow.id), roundId: Number(interactiveRow.round_id),
+      status: interactiveRow.interactive_status, rewardCoins: Number(interactiveRow.payload?.rewardCoins || 0),
+      selectedAnswer: interactiveRow.selected_answer == null ? null : Number(interactiveRow.selected_answer),
+      isCorrect: interactiveRow.is_correct == null ? null : Boolean(interactiveRow.is_correct),
+      correctAnswer: revealed && Number.isInteger(correctIndex) ? Number(correctIndex) : null,
+      correctAnswerText: revealed && Number.isInteger(correctIndex) ? String(answers[correctIndex] ?? '') : '',
+    };
+  })() : null;
   const predictionLocked = Number(player.prediction_locked || 0);
   const rouletteLocked = Number(player.roulette_locked || 0);
   const slotLocked = Number(player.slot_locked || 0);
@@ -832,7 +880,9 @@ export async function getScreenState(gameId: number) {
   const [round, block, prediction, players, ledgerEvents, predictionEvents, rouletteEvents, ticker, totals, roulette, recentResults, slot, slotSpins, pakEenZesGame, pakPredictionCount, screenSlotTurn, screenPhotoRound] = await Promise.all([
     pool.query('SELECT id,round_number,title,status FROM rounds WHERE id=COALESCE($1::bigint,$2::bigint) AND game_night_id=$3', [game.screen_round_id, game.current_round_id, gameId]),
     blockId ? pool.query(
-      `SELECT b.*,COUNT(a.id)::int AS answer_count FROM round_blocks b LEFT JOIN round_question_answers a ON a.round_block_id=b.id
+      `SELECT b.*,COUNT(ap.id)::int AS answer_count FROM round_blocks b
+       LEFT JOIN round_question_answers a ON a.round_block_id=b.id
+       LEFT JOIN players ap ON ap.id=a.player_id AND ap.active=TRUE
        WHERE b.id=$1 AND b.game_night_id=$2 GROUP BY b.id`, [blockId, gameId],
     ) : Promise.resolve({ rows: [] } as any),
     game.prediction_id ? pool.query('SELECT id,display_number,question,status,probability_yes,yes_odds,no_odds,result,opened_at,closes_at FROM predictions WHERE id=$1 AND game_night_id=$2', [game.prediction_id, gameId]) : Promise.resolve({ rows: [] } as any),
@@ -961,7 +1011,22 @@ export async function getScreenState(gameId: number) {
     version: Number(game.game_state_version),
     game: { id: Number(game.id), name: game.name }, mode: screenMode,
     round: round.rows[0] ? { id: Number(round.rows[0].id), number: Number(round.rows[0].round_number), title: round.rows[0].title, status: round.rows[0].status } : null,
-    block: normalizeBlock(block.rows[0], false),
+    // The projector's player list is already active-only, so its length is the same
+    // eligible count the Admin bar uses.
+    block: (() => {
+      const normalized = normalizeBlock(block.rows[0], false, players.rows.length);
+      if (!normalized || normalized.type !== 'DUOLINGO_QUESTION') return normalized;
+      // The host asked for the photo as its own presentation beat, which rides in the
+      // screen payload exactly as the Fotoronde selection does. Re-checked against the
+      // block's own phase, so a payload left over from a previous question cannot put a
+      // photo up before this one is revealed.
+      return {
+        ...normalized,
+        showingContextPhoto: Number(game.payload?.questionContextPhotoBlockId || 0) === normalized.id
+          && mayShowContextPhoto(normalized.interactive_status)
+          && Boolean(normalized.payload?.contextImageKey),
+      };
+    })(),
     prediction: pred ? { id: Number(pred.id), number: Number(pred.display_number), question: pred.question, status: pred.status, publicStatus: publicPredictionStatus(pred.status, pred.result), probabilityYes: Number(pred.probability_yes), yesOdds: Number(pred.yes_odds), noOdds: Number(pred.no_odds), result: pred.result, openedAt: pred.opened_at, closesAt: pred.closes_at } : null,
     leaderboard: players.rows.map((p: any) => ({
       id: Number(p.id), display_name: p.display_name, public_color: p.public_color,

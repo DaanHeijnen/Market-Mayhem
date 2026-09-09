@@ -43,6 +43,28 @@ export function Status({ children, tone = 'neutral' }: { children: ReactNode; to
   return <span className={`pill status-pill status-${tone}`}>{children}</span>;
 }
 
+/**
+ * Horizontal fill bar.
+ *
+ * A design-system primitive rather than a one-off, because "how far along is the room"
+ * is a shape the Control Center wants in more than one place — the live question's
+ * participation readout is only the first. Takes a whole percent and clamps it, so a
+ * caller can hand it a raw ratio without guarding the ends itself.
+ */
+export function ProgressBar({ percentage, tone = 'blue', label }: { percentage: number; tone?: 'blue' | 'success' | 'ink'; label?: string }) {
+  const pct = Math.min(100, Math.max(0, Math.round(percentage) || 0));
+  return <div
+    className="progress-bar"
+    role="progressbar"
+    aria-valuenow={pct}
+    aria-valuemin={0}
+    aria-valuemax={100}
+    aria-label={label}
+  >
+    <div className={`progress-bar-fill tone-${tone}`} style={{ width: `${pct}%` }} />
+  </div>;
+}
+
 export function CoinAmount({ value, className = '' }: { value: number; className?: string }) {
   return <span className={`coin-amount ${className}`}><CoinIcon size={18}/><span>{value}</span></span>;
 }

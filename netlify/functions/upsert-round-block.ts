@@ -38,7 +38,13 @@ export default wrap(async request => {
     const answers = p.answers.map((a: unknown, index: number) => textValue(a, `answer ${index + 1}`, 240));
     const correctAnswerIndex = intValue(p.correctAnswerIndex, 'correctAnswerIndex', { min: 0, max: 3 });
     const rewardCoins = intValue(p.rewardCoins, 'rewardCoins', { min: 0, max: 1_000_000 });
-    payload = { answers, correctAnswerIndex, rewardCoins };
+    // The context photo is optional and only ever a blob key — never the bytes, which
+    // would ride along in every admin-state poll for the rest of the evening. It is the
+    // beat after the reveal, so a question without one skips that step entirely.
+    //
+    // `body` is kept because the projector shows it under the question as supporting
+    // text; it used to be dropped here, which silently discarded whatever was typed.
+    payload = { body: bodyText, answers, correctAnswerIndex, rewardCoins, contextImageKey: p.contextImageKey == null ? '' : mediaKeyValue(p.contextImageKey) };
   }
   if (type === 'PICTURE') {
     // The image is optional at first save so the Admin can outline a round and add

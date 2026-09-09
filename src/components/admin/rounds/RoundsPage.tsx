@@ -17,7 +17,7 @@ const DEFAULT_PHOTO_SUBJECT_LABELS = [
   'Iets kinderlijks',
 ];
 
-const blankBlock = { type: 'TEXT', title: '', body: '', answers: ['', '', '', ''], correctAnswerIndex: 0, rewardCoins: 10, imageKey: '', audioKey: '', audioName: '', correctAnswer: '', maxSpins: 10, allowedPlayerIds: [] as number[], subjects: [...DEFAULT_PHOTO_SUBJECT_LABELS] };
+const blankBlock = { type: 'TEXT', title: '', body: '', answers: ['', '', '', ''], correctAnswerIndex: 0, rewardCoins: 10, imageKey: '', audioKey: '', audioName: '', contextImageKey: '', correctAnswer: '', maxSpins: 10, allowedPlayerIds: [] as number[], subjects: [...DEFAULT_PHOTO_SUBJECT_LABELS] };
 
 export function RoundsPage({ state: s, gameId, roundId, run }: { state: any; gameId: number; roundId: number | null; run: RunMutation }) {
   const nav = useNavigate();
@@ -72,7 +72,7 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
   const submitBlock = async () => {
     const payload = {
       roundId: round.id, blockId: edit?.id || null, type: blockForm.type, title: blockForm.title, body: blockForm.body,
-      ...(blockForm.type === 'DUOLINGO_QUESTION' ? { answers: blockForm.answers, correctAnswerIndex: Number(blockForm.correctAnswerIndex), rewardCoins: Number(blockForm.rewardCoins) } : {}),
+      ...(blockForm.type === 'DUOLINGO_QUESTION' ? { answers: blockForm.answers, correctAnswerIndex: Number(blockForm.correctAnswerIndex), rewardCoins: Number(blockForm.rewardCoins), contextImageKey: blockForm.contextImageKey || null } : {}),
       ...(blockForm.type === 'PICTURE' ? { imageKey: blockForm.imageKey || null } : {}),
       ...(blockForm.type === 'MUSIC' ? { audioKey: blockForm.audioKey || null, audioName: blockForm.audioName } : {}),
       ...(blockForm.type === 'WAGER' ? { correctAnswer: blockForm.correctAnswer } : {}),
@@ -90,6 +90,7 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
       body: block.payload?.body || '',
       answers: block.payload?.answers || ['', '', '', ''],
       correctAnswerIndex: block.payload?.correctAnswerIndex ?? 0,
+      contextImageKey: block.payload?.contextImageKey || '',
       rewardCoins: block.payload?.rewardCoins ?? 10,
       imageKey: block.payload?.imageKey || '',
       audioKey: block.payload?.audioKey || '',
@@ -131,7 +132,7 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
       <div className="form-grid compact">
         <label className="span-2">{blockForm.type === 'QUESTION' || blockForm.type === 'DUOLINGO_QUESTION' ? 'Question text' : blockForm.type === 'TEXT' ? 'Optional title' : 'Title'}<input className="field" value={blockForm.title} onChange={e => setBlockForm({ ...blockForm, title: e.target.value })} /></label>
       </div>
-      {['TEXT','QUESTION','PICTURE','MUSIC','BUZZER','WAGER','SLOTMACHINE','PAK_EEN_ZES','FOTORONDE'].includes(blockForm.type) && <label>{blockForm.type === 'TEXT' ? 'Body / instructions' : ['SLOTMACHINE','PAK_EEN_ZES','FOTORONDE'].includes(blockForm.type) ? 'Instructions shown on the players\u2019 phones' : 'Optional supporting text'}<textarea className="field" rows={blockForm.type === 'TEXT' ? 4 : 2} value={blockForm.body} onChange={e => setBlockForm({ ...blockForm, body: e.target.value })} /></label>}
+      {['TEXT','QUESTION','DUOLINGO_QUESTION','PICTURE','MUSIC','BUZZER','WAGER','SLOTMACHINE','PAK_EEN_ZES','FOTORONDE'].includes(blockForm.type) && <label>{blockForm.type === 'TEXT' ? 'Body / instructions' : ['SLOTMACHINE','PAK_EEN_ZES','FOTORONDE'].includes(blockForm.type) ? 'Instructions shown on the players\u2019 phones' : 'Optional supporting text'}<textarea className="field" rows={blockForm.type === 'TEXT' ? 4 : 2} value={blockForm.body} onChange={e => setBlockForm({ ...blockForm, body: e.target.value })} /></label>}
 
       {blockForm.type === 'PICTURE' && <MediaField
         kind="image" gameId={gameId} value={blockForm.imageKey}
@@ -228,6 +229,12 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
           <label>Correct answer<select className="field" value={blockForm.correctAnswerIndex} onChange={e => setBlockForm({ ...blockForm, correctAnswerIndex: Number(e.target.value) })}>{QUESTION_EMOJIS.map((emoji, i) => <option key={emoji} value={i}>{emoji} Answer {i + 1}</option>)}</select></label>
           <label>Reward coins<input className="field" type="number" min="0" value={blockForm.rewardCoins} onChange={e => setBlockForm({ ...blockForm, rewardCoins: e.target.value })} /></label>
         </div>
+        <MediaField
+          kind="image" gameId={gameId} value={blockForm.contextImageKey}
+          label="Context photo (optional)"
+          hint="Shown on the projector as a separate step, only after you reveal the correct answer — never while players are still answering. Leave empty to skip that step."
+          onChange={({ key }) => setBlockForm({ ...blockForm, contextImageKey: key })}
+        />
       </div>}
       <div className="actions"><button className="btn btn-primary" onClick={submitBlock}>{edit ? 'SAVE BLOCK' : 'ADD BLOCK'}</button>{edit && <button className="btn btn-secondary" onClick={resetBlock}>CANCEL</button>}</div>
     </Card>}

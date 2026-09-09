@@ -259,7 +259,7 @@ function LiveQuestionView({ state: s, block, busy, act, gameId }: { state: any; 
   const revealed = block.status === 'REVEALED' || block.status === 'SETTLED';
   return <div className="live-question-mobile">
     <div className="live-question-header"><div className="label muted">LIVE ROUND QUESTION</div><div className="pill status-pill open">{block.status}</div></div>
-    <p className="live-question-instruction muted">{block.status === 'READY' ? 'Get ready.' : block.status === 'OPEN' && !submitted ? 'Choose one emoji.' : block.status === 'CLOSED' ? 'Answers are closed.' : revealed ? 'Result revealed.' : ''}</p>
+    <p className="live-question-instruction muted">{block.status === 'READY' ? 'Get ready.' : block.status === 'OPEN' && !submitted ? 'Choose one emoji.' : block.status === 'OPEN' ? 'Answer saved. Watch the big screen.' : block.status === 'CLOSED' ? submitted ? 'Answers are closed — yours is saved.' : 'Answers are closed.' : revealed ? 'Result revealed.' : ''}</p>
     <div className="emoji-answer-grid">
       {QUESTION_EMOJIS.map((emoji, index) => {
         const selected = block.selectedAnswer === index;
@@ -267,8 +267,14 @@ function LiveQuestionView({ state: s, block, busy, act, gameId }: { state: any; 
         return <button key={emoji} className={`emoji-answer ${selected ? 'selected' : ''} ${resultClass}`} disabled={busy || block.status !== 'OPEN' || submitted} onClick={() => act(() => mutation('/api/submit-round-answer', { gameId, blockId: block.id, selectedAnswer: index }))}><span>{emoji}</span>{selected && <small>{revealed ? block.isCorrect ? 'CORRECT' : 'YOUR ANSWER' : 'LOCKED'}</small>}</button>;
       })}
     </div>
-    {submitted && !revealed && <Card className="answer-locked"><b>ANSWER LOCKED</b><span>Your selection cannot be changed.</span></Card>}
-    {revealed && <Card className={block.isCorrect ? 'answer-correct' : 'answer-wrong'}><b>{block.isCorrect ? 'CORRECT' : 'NOT THIS TIME'}</b><span>{block.isCorrect && block.rewardCoins > 0 ? `+${block.rewardCoins} coins credited automatically.` : block.isCorrect ? 'Correct answer.' : 'No reward on this question.'}</span></Card>}
+    {submitted && !revealed && <Card className="answer-locked"><b>ANSWER LOCKED</b><span>Your answer is saved — you do not need to send it again.</span></Card>}
+    {/* Which answer was right, not merely whether this player's emoji matched. The server
+        withholds both until the reveal, so there is nothing to hide here. */}
+    {revealed && block.correctAnswer != null && <Card className="answer-reveal">
+      <b>JUISTE ANTWOORD</b>
+      <span className="answer-reveal-value">{QUESTION_EMOJIS[block.correctAnswer]} {block.correctAnswerText || `Answer ${block.correctAnswer + 1}`}</span>
+    </Card>}
+    {revealed && <Card className={block.isCorrect ? 'answer-correct' : 'answer-wrong'}><b>{block.isCorrect ? 'CORRECT' : submitted ? 'NOT THIS TIME' : 'NO ANSWER SENT'}</b><span>{block.isCorrect && block.rewardCoins > 0 ? `+${block.rewardCoins} coins credited automatically.` : block.isCorrect ? 'Correct answer.' : submitted ? 'No reward on this question.' : 'You did not answer this question.'}</span></Card>}
     <div className="live-question-wallet"><CoinIcon size={18} /> {s.player.balance} available</div>
   </div>;
 }
