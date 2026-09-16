@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { MobileViews } from '../src/components/mobile/MobileViews';
 import { ControlPage } from '../src/components/admin/control/ControlPage';
 import { PlayingCard, CardDeck, suitSymbol } from '../src/components/shared/PlayingCard';
-import { PakEenZesSettings } from '../src/components/admin/settings/PakEenZesSettings';
+import { RoundsPage } from '../src/components/admin/rounds/RoundsPage';
 
 const noop = () => {};
 const run = async () => true;
@@ -369,37 +369,52 @@ describe('Pak een Zes scoring', () => {
   });
 });
 
-describe('Pak een Zes scoring settings', () => {
-  const state = (points: number) => ({ game: { pak_een_zes_points_per_correct: points } });
-  const settings = (points: number) =>
-    renderToStaticMarkup(createElement(PakEenZesSettings, { state: state(points), run }));
+/**
+ * Where the scoring rate lives.
+ *
+ * It used to be one game-wide number on the Settings page. It is `rounds.default_points`
+ * now, so a night can hold two Pak een Zes rounds worth different amounts — and the place
+ * to see and change it is the round itself.
+ */
+describe('Pak een Zes scoring', () => {
+  const round = (points: number) => ({
+    id: 3, sortOrder: 3, title: 'Pak een Zes', type: 'PAK_EEN_ZES', status: 'UPCOMING',
+    description: '', instructions: '', defaultPoints: points, groups: [],
+  });
+  const adminState = (points: number) => ({
+    version: 1,
+    game: { id: 1, name: 'Game Night', current_round_id: null, current_screen_mode: 'DASHBOARD', game_state_version: 1 },
+    screen: { mode: 'DASHBOARD', roundId: null, questionId: null, slideId: null, predictionId: null, staged: {}, previous: {} },
+    rounds: [round(points)],
+    activeRound: null,
+    players: [],
+    predictions: [],
+  });
+  const detail = (points: number) => renderRouted(createElement(RoundsPage, {
+    state: adminState(points), gameId: 1, roundId: 3, run,
+  }));
 
-  it('shows the stored rate and a worked total', () => {
-    const html = settings(25);
-    expect(html).toContain('value="25"');
-    // Three correct at 25 is 75, spelled out so the effect is obvious.
-    expect(html).toContain('>75<');
-    expect(html).toContain('25 PUNTEN');
+  it('shows on the round what a correct prediction is worth', () => {
+    expect(detail(25)).toContain('25');
+    expect(detail(10)).toContain('10');
   });
 
-  it('reflects a different configured rate', () => {
-    const html = settings(10);
-    expect(html).toContain('value="10"');
-    expect(html).toContain('>30<');
+  it('says there is nothing else to author, and where the rate is changed', () => {
+    const html = detail(25);
+    expect(html).toContain('Nothing to author');
+    expect(html).toContain('EDIT');
   });
 
-  it('accepts zero and says the prediction is for pride alone', () => {
-    const html = settings(0);
-    expect(html).toContain('GEEN PUNTEN');
-    expect(html).toContain('pride alone');
-  });
-
-  // Nothing to save until the number actually changes.
-  it('keeps the save button dead until the value is edited', () => {
-    expect(settings(25)).toMatch(/<button [^>]*disabled[^>]*>SAVE SCORING<\/button>/);
-  });
-
+  // The rate a finished game paid is snapshotted onto that game, so changing the round
+  // later cannot rewrite what was already awarded.
   it('promises a finished game keeps the rate it was scored at', () => {
-    expect(settings(25)).toContain('never rewrites a game that already paid out');
+    expect(detail(25)).toContain('never rewrites history');
+  });
+
+  it('names the round as a Pak een Zes rather than offering a content editor', () => {
+    const html = detail(25);
+    expect(html).toContain('PAK EEN ZES');
+    expect(html).not.toContain('ADD A QUESTION');
+    expect(html).not.toContain('ADD A SLIDE');
   });
 });

@@ -61,7 +61,7 @@ export function PredictionsPage({ state: s, run }: { state: any; run: RunMutatio
           const id = e.target.value;
           const round = s.rounds.find((item: any) => item.id === Number(id));
           setForm({ ...form, roundId: id, scheduled: Boolean(id) && round?.status === 'UPCOMING' ? form.scheduled : false });
-        }}><option value="">No round</option>{s.rounds.filter((r: any) => r.status !== 'COMPLETED').map((r: any) => <option key={r.id} value={r.id}>R{String(r.round_number).padStart(2, '0')} · {r.title}</option>)}</select></label>
+        }}><option value="">No round</option>{s.rounds.filter((r: any) => r.status !== 'COMPLETED').map((r: any) => <option key={r.id} value={r.id}>R{String(r.sortOrder).padStart(2, '0')} · {r.title}</option>)}</select></label>
         <label>Min deposit (coins)<input className="field" type="number" min="1" value={form.minimumStake} onChange={e => setForm({ ...form, minimumStake: e.target.value })} /></label>
         <label>Max deposit (coins)<input className="field" type="number" min="1" value={form.maximumStake} onChange={e => setForm({ ...form, maximumStake: e.target.value })} /></label>
       </div>

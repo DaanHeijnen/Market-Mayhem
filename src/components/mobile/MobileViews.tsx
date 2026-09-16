@@ -233,7 +233,7 @@ function RouletteView({ state: s, busy, act, go, gameId }: { state: any; busy: b
   return <>
     <Back go={go} />
     <Card className="roulette-mobile-card">
-      <div className="row-between"><div><div className="label">ROULETTE #{rg.id}</div><h1 className="display roulette-title">{rg.block_title || 'Roulette'}</h1></div><span className={`pill status-pill ${rg.status === 'OPEN' ? 'open' : 'neutral'}`}>{rg.status}</span></div>
+      <div className="row-between"><div><div className="label">ROULETTE #{rg.id}</div><h1 className="display roulette-title">{rg.round_title || 'Roulette'}</h1></div><span className={`pill status-pill ${rg.status === 'OPEN' ? 'open' : 'neutral'}`}>{rg.status}</span></div>
       {rg.result_number != null && <div className="roulette-result-badge"><span>WINNING NUMBER</span><b>{rg.result_number}</b></div>}
       {rg.status === 'OPEN' ? <>
         <div className="roulette-help"><b>1.</b> Choose a chip <b>2.</b> Tap one or more table positions <b>3.</b> Confirm</div>

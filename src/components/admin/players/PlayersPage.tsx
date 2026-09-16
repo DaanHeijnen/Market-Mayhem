@@ -121,7 +121,7 @@ export function PlayersPage({ state: s, gameId, run, setMsg }: { state: any; gam
             <input className="field" placeholder="Mandatory reason" value={adjustment?.reason ?? ''} onChange={e => updateAdjustment(player.id, { reason: e.target.value })} />
             <select className="field" value={adjustment?.roundId ?? ''} onChange={e => updateAdjustment(player.id, { roundId: e.target.value })}>
               <option value="">General / no round</option>
-              {s.rounds.map((round: any) => <option key={round.id} value={round.id}>R{String(round.round_number).padStart(2, '0')} · {round.title}</option>)}
+              {s.rounds.map((round: any) => <option key={round.id} value={round.id}>R{String(round.sortOrder).padStart(2, '0')} · {round.title}</option>)}
             </select>
           </div>
           <div className="actions actions-compact">

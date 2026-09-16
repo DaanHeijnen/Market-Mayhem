@@ -216,6 +216,11 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
         player takes a turn. Each correct prediction is worth <b>{round.defaultPoints}</b> — change that with EDIT on
         the round list. You open the predictions, close them and start the game from the Control Center.
       </p>
+      <p className="muted microcopy">
+        A player who named the same person twice and saw them draw two sixes scores twice, so three correct
+        predictions pay <b>{round.defaultPoints * 3}</b>. The rate is snapshotted when the game finishes, so changing
+        it afterwards never rewrites history. Zero is allowed, if the prediction is for pride alone.
+      </p>
     </Card>}
 
     <RoundGroups state={s} round={round} run={run} />

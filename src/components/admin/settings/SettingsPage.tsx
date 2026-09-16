@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import type { RunMutation } from '../types';
 import { Card } from '../ui';
 import { SlotMachineSettings } from './SlotMachineSettings';
-import { PakEenZesSettings } from './PakEenZesSettings';
 
 export function SettingsPage({ state: s, gameId, run, onReset }: { state: any; gameId: number; run: RunMutation; onReset: () => void }) {
   const g = s.game;
@@ -33,8 +32,6 @@ export function SettingsPage({ state: s, gameId, run, onReset }: { state: any; g
     </Card>
 
     <SlotMachineSettings state={s} gameId={gameId} run={run} />
-
-    <PakEenZesSettings state={s} run={run} />
 
     {/* Full Reset comes before Delete Game Save because it is the one a host actually
         reaches for: it exists so the evening can be tested end to end and then played for

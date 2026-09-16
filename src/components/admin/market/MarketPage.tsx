@@ -32,7 +32,7 @@ export function MarketPage({ state: s, gameId, run }: { state: any; gameId: numb
   return <div className="page-stack">
     <div className="market-intro">
       <p>This is the exact chart shown on the Big Screen dashboard — each player's coin value plotted chronologically against their starting balance.</p>
-      <button className="btn btn-lime btn-compact" disabled={onDashboard} onClick={() => run('/api/screen-mode', { mode: 'DASHBOARD' })}>
+      <button className="btn btn-lime btn-compact" disabled={onDashboard} onClick={() => run('/api/show-on-screen', { kind: 'dashboard' })}>
         {onDashboard ? 'ON BIG SCREEN NOW' : 'SHOW ON BIG SCREEN'}
       </button>
     </div>
