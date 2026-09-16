@@ -12,9 +12,10 @@ import { wrap } from './_wrap';
  * screen, now — there is no intermediate state in which the host has chosen something the
  * room cannot see yet, because that state is what made the old preview untrustworthy.
  *
- * `revision` is the round cursor the Admin was looking at when it pressed. A step from a
- * tab that has fallen behind is refused rather than dragging the projector back to where
- * that tab thought the round was.
+ * `revision` is the big screen's own revision as the Admin last saw it. A step from a tab
+ * that has fallen behind is refused rather than dragging the room back to where that tab
+ * thought the evening was. The screen rather than the round cursor, because the intro and
+ * the round-ending step belong to no item inside a round.
  */
 const DIRECTIONS: NavigationDirection[] = ['NEXT', 'PREVIOUS'];
 

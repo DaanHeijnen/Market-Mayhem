@@ -7,18 +7,16 @@ import { slotRoundIsFinished } from '../netlify/lib/slot-state';
 const available = await pgliteAvailable();
 
 describe('which rounds step, and which do not', () => {
-  it('steps through a presentation and a quiz', () => {
-    expect(navigationCapabilities('PRESENTATIE')).toEqual({ next: true, previous: true });
-    expect(navigationCapabilities('LIVE_QUIZ')).toEqual({ next: true, previous: true });
+  // Every type now opens on a title card, so every type has something to step out of and
+  // back to. What differs is how far forward the sequence goes, which is planStep's job.
+  it('navigates every round type, because every round has an intro', () => {
+    for (const type of ['PRESENTATIE', 'LIVE_QUIZ', 'PUBQUIZ', 'ROULETTE', 'SLOTMACHINE', 'PAK_EEN_ZES', 'FOTORONDE'] as const) {
+      expect(navigationCapabilities(type), type).toEqual({ canGoNext: true, canGoPrevious: true });
+    }
   });
 
-  // Backwards is not forced onto a state machine where going back would mean undoing a
-  // settled spin. These four are one live scene driven by their own controls.
-  it('does not offer stepping on a round that is one scene', () => {
-    for (const type of ['ROULETTE', 'SLOTMACHINE', 'PAK_EEN_ZES', 'FOTORONDE'] as const) {
-      expect(navigationCapabilities(type), type).toEqual({ next: false, previous: false });
-    }
-    expect(navigationCapabilities(null)).toEqual({ next: false, previous: false });
+  it('navigates nothing when no round is being played', () => {
+    expect(navigationCapabilities(null)).toEqual({ canGoNext: false, canGoPrevious: false });
   });
 });
 
@@ -62,6 +60,17 @@ describe.skipIf(!available)('stepping the projector, against a migrated database
     let roundId: number;
     let pages: number[];
 
+    const addPageWithAnswer = async (round: number, sortOrder: number, title: string, answer: string | null) => {
+      const { rows } = await db.query(
+        `INSERT INTO presentation_slides(game_night_id,round_id,sort_order,title,body,reveal_text)
+         VALUES($1,$2,$3,$4,'',$5) RETURNING id`,
+        [gameId, round, sortOrder, title, answer],
+      );
+      const id = Number(rows[0].id);
+      await db.query('INSERT INTO presentation_slide_state(slide_id,game_night_id,round_id) VALUES($1,$2,$3)', [id, gameId, round]);
+      return id;
+    };
+
     beforeEach(async () => {
       roundId = await addRound(db, gameId, 'PRESENTATIE');
       await activate(roundId);
@@ -70,29 +79,90 @@ describe.skipIf(!available)('stepping the projector, against a migrated database
         await addPage(roundId, 1, 'Page 2'),
         await addPage(roundId, 2, 'Page 3'),
       ];
-      await setScreen(client(), gameId, { kind: 'slide', roundId, slideId: pages[0] }, 'test');
+      await setScreen(client(), gameId, { kind: 'roundIntro', roundId }, 'test');
+    });
+
+    // 4-5 · the round opens on its own title card, not on its content
+    it('starts on the intro and reaches the first page only on VOLGENDE', async () => {
+      expect((await screen()).mode).toBe('ROUND_INTRO');
+
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
+
+      const row = await screen();
+      expect(row.mode).toBe('SLIDE');
+      expect(Number(row.slide_id)).toBe(pages[0]);
     });
 
     it('puts the next page on the projector immediately, with no go-live step', async () => {
-      const result = await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
-
-      expect(result.kind).toBe('target');
-      const row = await screen();
-      expect(row.mode).toBe('SLIDE');
-      expect(Number(row.slide_id)).toBe(pages[1]);
-      // The round's own cursor came along, so progression and presentation agree.
-      expect(Number((await cursor(roundId)).current_slide_id)).toBe(pages[1]);
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
+      expect(Number((await screen()).slide_id)).toBe(pages[1]);
     });
 
-    it('steps back the same way', async () => {
+    // 9-11 · a page with an answer is two steps, not one
+    it('shows a page, then its answer, then the next page', async () => {
+      const withAnswer = await addRound(db, gameId, 'PRESENTATIE');
+      await activate(withAnswer);
+      const one = await addPageWithAnswer(withAnswer, 0, 'Vraag 1', 'Lima');
+      const two = await addPageWithAnswer(withAnswer, 1, 'Vraag 2', null);
+      await setScreen(client(), gameId, { kind: 'roundIntro', roundId: withAnswer }, 'test');
+
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
+      expect(Number((await screen()).slide_id)).toBe(one);
+      expect((await db.query('SELECT revealed_at FROM presentation_slide_state WHERE slide_id=$1', [one])).rows[0].revealed_at).toBeNull();
+
+      // The answer is the next step, on the same page.
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
+      expect(Number((await screen()).slide_id)).toBe(one);
+      expect((await db.query('SELECT revealed_at FROM presentation_slide_state WHERE slide_id=$1', [one])).rows[0].revealed_at).not.toBeNull();
+
+      // And only then the next page.
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
+      expect(Number((await screen()).slide_id)).toBe(two);
+    });
+
+    // 12 · no empty answer card for a page that has nothing to reveal
+    it('does not invent an answer step for a page without one', async () => {
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
+      expect(Number((await screen()).slide_id)).toBe(pages[0]);
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
+      expect(Number((await screen()).slide_id)).toBe(pages[1]);
+    });
+
+    // 13 · VORIGE is presentation history, not an undo
+    it('steps back without un-revealing anything', async () => {
+      const withAnswer = await addRound(db, gameId, 'PRESENTATIE');
+      await activate(withAnswer);
+      const one = await addPageWithAnswer(withAnswer, 0, 'Vraag 1', 'Lima');
+      const two = await addPageWithAnswer(withAnswer, 1, 'Vraag 2', null);
+      await setScreen(client(), gameId, { kind: 'roundIntro', roundId: withAnswer }, 'test');
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null); // page 1
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null); // its answer
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null); // page 2
+
+      await advanceScreen(client(), gameId, 'PREVIOUS', 'admin', null);
+
+      expect(Number((await screen()).slide_id)).toBe(one);
+      // Still revealed: going back shows the page as it now is, rather than undoing it.
+      expect((await db.query('SELECT revealed_at FROM presentation_slide_state WHERE slide_id=$1', [one])).rows[0].revealed_at).not.toBeNull();
+      expect(two).toBeTruthy();
+    });
+
+    it('steps back from the first page to the intro', async () => {
       await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
       await advanceScreen(client(), gameId, 'PREVIOUS', 'admin', null);
-      expect(Number((await screen()).slide_id)).toBe(pages[0]);
+      expect((await screen()).mode).toBe('ROUND_INTRO');
     });
 
+    it('has nowhere to step back from the intro', async () => {
+      expect(await planStep(client(), gameId, 'PREVIOUS')).toMatchObject({ kind: 'none' });
+      await expect(advanceScreen(client(), gameId, 'PREVIOUS', 'admin', null)).rejects.toThrow(/start of the round/i);
+    });
+
+    // 14 · hidden pages are not part of the run
     it('steps over a held-back page in both directions', async () => {
       await db.query('UPDATE presentation_slides SET hidden=TRUE WHERE id=$1', [pages[1]]);
-
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
       await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
       expect(Number((await screen()).slide_id)).toBe(pages[2]);
 
@@ -100,56 +170,47 @@ describe.skipIf(!available)('stepping the projector, against a migrated database
       expect(Number((await screen()).slide_id)).toBe(pages[0]);
     });
 
-    // The preview is the step, asked without taking it. If these two could disagree the
-    // whole LIVE/NEXT pair would be a lie.
+    // The preview is the step, asked without taking it. If these could disagree the whole
+    // LIVE/NEXT pair would be a lie.
     it('previews exactly the step it will take', async () => {
       const planned = await planStep(client(), gameId, 'NEXT');
-      expect(planned).toMatchObject({ kind: 'target', target: { kind: 'slide', roundId, slideId: pages[1] } });
-
+      expect(planned).toMatchObject({ kind: 'target', target: { kind: 'slide', roundId, slideId: pages[0] } });
       const taken = await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
       expect(taken.kind === 'target' && taken.target).toEqual((planned as any).target);
     });
 
-    // The last page stays up normally; it is the step *after* it that ends the round.
-    it('keeps the round active while the last page is showing', async () => {
-      await setScreen(client(), gameId, { kind: 'slide', roundId, slideId: pages[2] }, 'test');
-      const round = await db.query('SELECT status FROM rounds WHERE id=$1', [roundId]);
-      expect(round.rows[0].status).toBe('ACTIVE');
-      expect(await planStep(client(), gameId, 'NEXT')).toMatchObject({ kind: 'completeRound' });
-    });
+    // 15 · completion comes after the last relevant state, not before
+    it('completes the round only after the last page and its answer', async () => {
+      const withAnswer = await addRound(db, gameId, 'PRESENTATIE');
+      await activate(withAnswer);
+      await addPageWithAnswer(withAnswer, 0, 'Laatste', 'Het antwoord');
+      await setScreen(client(), gameId, { kind: 'roundIntro', roundId: withAnswer }, 'test');
 
-    it('completes the round on the step past the last page', async () => {
-      await setScreen(client(), gameId, { kind: 'slide', roundId, slideId: pages[2] }, 'test');
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null); // the page
+      expect(await planStep(client(), gameId, 'NEXT')).toMatchObject({ kind: 'target' });
+
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null); // its answer
+      expect(await planStep(client(), gameId, 'NEXT')).toMatchObject({ kind: 'completeRound' });
 
       const result = await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
-
       expect(result).toMatchObject({ kind: 'completeRound', completed: true });
-      const round = await db.query('SELECT status FROM rounds WHERE id=$1', [roundId]);
-      expect(round.rows[0].status).toBe('COMPLETED');
-      // Nobody is playing anything, so the projector goes back to the standings.
+      expect((await db.query('SELECT status FROM rounds WHERE id=$1', [withAnswer])).rows[0].status).toBe('COMPLETED');
       expect((await screen()).mode).toBe('DASHBOARD');
     });
 
-    it('treats the last visible page as the last page, not the last row', async () => {
-      await db.query('UPDATE presentation_slides SET hidden=TRUE WHERE id=$1', [pages[2]]);
-      await setScreen(client(), gameId, { kind: 'slide', roundId, slideId: pages[1] }, 'test');
-
-      expect(await planStep(client(), gameId, 'NEXT')).toMatchObject({ kind: 'completeRound' });
-    });
-
-    it('has nowhere to step back from the first page', async () => {
-      expect(await planStep(client(), gameId, 'PREVIOUS')).toMatchObject({ kind: 'none' });
-      await expect(advanceScreen(client(), gameId, 'PREVIOUS', 'admin', null)).rejects.toThrow(/first page/i);
-    });
-
-    // A step carries the cursor the Admin was looking at. One from a tab that has fallen
-    // behind is refused rather than dragging the projector back.
+    // A step carries the screen revision the Admin was looking at.
     it('refuses a step issued against a revision that has moved on', async () => {
-      const stale = Number((await cursor(roundId)).revision);
+      const stale = Number((await db.query('SELECT revision FROM screen_state WHERE game_night_id=$1', [gameId])).rows[0].revision);
       await advanceScreen(client(), gameId, 'NEXT', 'admin', stale);
 
       await expect(advanceScreen(client(), gameId, 'NEXT', 'other-admin', stale)).rejects.toThrow(/moved on/i);
-      // and the projector stayed where the winning step put it
+      expect(Number((await screen()).slide_id)).toBe(pages[0]);
+    });
+
+    // Two clicks in a row are two steps, not one step twice.
+    it('takes two presses as two steps', async () => {
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
       expect(Number((await screen()).slide_id)).toBe(pages[1]);
     });
   });
@@ -157,54 +218,72 @@ describe.skipIf(!available)('stepping the projector, against a migrated database
   // ---------------------------------------------------------------------
   // Rounds that are one scene
   // ---------------------------------------------------------------------
-  it('refuses to step a roulette round, and says why', async () => {
+  /**
+   * A game round is a short story: its title card, then its one live scene, which its own
+   * controls drive. Stepping past the scene ends the round; stepping back returns to the
+   * card without touching anything the round has done.
+   */
+  it('walks a roulette round from intro to scene to completion', async () => {
     const roundId = await addRound(db, gameId, 'ROULETTE');
     await activate(roundId);
+    await setScreen(client(), gameId, { kind: 'roundIntro', roundId }, 'test');
 
-    const planned = await planStep(client(), gameId, 'NEXT');
-    expect(planned).toMatchObject({ kind: 'none' });
-    expect((planned as any).reason).toMatch(/one scene/i);
-    await expect(advanceScreen(client(), gameId, 'NEXT', 'admin', null)).rejects.toThrow(/one scene/i);
+    await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
+    expect((await screen()).mode).toBe('ROULETTE');
+
+    // Back to the card, and no financial state is touched by a navigation button.
+    await advanceScreen(client(), gameId, 'PREVIOUS', 'admin', null);
+    expect((await screen()).mode).toBe('ROUND_INTRO');
+
+    await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
+    expect(await planStep(client(), gameId, 'NEXT')).toMatchObject({ kind: 'completeRound' });
+  });
+
+  // 35 · a settled spin is never unspun by a navigation button
+  it('leaves a settled roulette run alone when stepping back', async () => {
+    const roundId = await addRound(db, gameId, 'ROULETTE');
+    await activate(roundId);
+    const { rows } = await db.query(
+      `INSERT INTO roulette_games(game_night_id,round_id,status,run_number,result_number,total_staked,total_payout)
+       VALUES($1,$2,'SETTLED',1,17,120,90) RETURNING id`,
+      [gameId, roundId],
+    );
+    await setScreen(client(), gameId, { kind: 'roundGame', roundId }, 'test');
+
+    await advanceScreen(client(), gameId, 'PREVIOUS', 'admin', null);
+
+    const run = await db.query('SELECT status,total_payout FROM roulette_games WHERE id=$1', [Number(rows[0].id)]);
+    expect(run.rows[0].status).toBe('SETTLED');
+    expect(Number(run.rows[0].total_payout)).toBe(90);
   });
 
   // ---------------------------------------------------------------------
   // Starting a round claims the big screen
   // ---------------------------------------------------------------------
   describe('what a round opens on', () => {
-    it('opens a presentation on its first page in the run', async () => {
-      const roundId = await addRound(db, gameId, 'PRESENTATIE');
-      const hiddenFirst = await addPage(roundId, 0, 'Spare', true);
-      const visible = await addPage(roundId, 1, 'Welkom');
-
-      const target = await initialScreenTarget(client(), gameId, roundId, 'PRESENTATIE');
-
-      expect(target).toEqual({ kind: 'slide', roundId, slideId: visible });
-      expect(target).not.toEqual({ kind: 'slide', roundId, slideId: hiddenFirst });
-    });
-
-    it('opens a quiz on its first question', async () => {
-      const roundId = await addRound(db, gameId, 'LIVE_QUIZ');
-      const { rows } = await db.query(
-        `INSERT INTO live_quiz_questions(game_night_id,round_id,sort_order,prompt,points) VALUES($1,$2,0,'Q1',10) RETURNING id`,
-        [gameId, roundId],
-      );
-      expect(await initialScreenTarget(client(), gameId, roundId, 'LIVE_QUIZ'))
-        .toEqual({ kind: 'quizQuestion', roundId, questionId: Number(rows[0].id) });
-    });
-
-    it('opens each game round on its own scene', async () => {
-      for (const type of ['ROULETTE', 'SLOTMACHINE', 'PAK_EEN_ZES', 'FOTORONDE'] as const) {
+    // 1-4 · every type, without exception, opens on its own title card
+    it('opens every round type on its intro', async () => {
+      for (const type of ['PRESENTATIE', 'LIVE_QUIZ', 'PUBQUIZ', 'ROULETTE', 'SLOTMACHINE', 'PAK_EEN_ZES', 'FOTORONDE'] as const) {
         const roundId = await addRound(db, gameId, type);
         expect(await initialScreenTarget(client(), gameId, roundId, type), type)
-          .toEqual({ kind: 'roundGame', roundId });
+          .toEqual({ kind: 'roundIntro', roundId });
       }
     });
 
-    // An empty round has nothing to show, and a blank scene on the wall is worse than the
-    // dashboard that was already there.
-    it('leaves the screen alone for a round with nothing in it', async () => {
+    // 5 · the content waits for a press, even on a round that has plenty of it
+    it('does not jump past the intro into the content', async () => {
       const roundId = await addRound(db, gameId, 'PRESENTATIE');
-      expect(await initialScreenTarget(client(), gameId, roundId, 'PRESENTATIE')).toBeNull();
+      await addPage(roundId, 0, 'Page 1');
+      expect(await initialScreenTarget(client(), gameId, roundId, 'PRESENTATIE'))
+        .toEqual({ kind: 'roundIntro', roundId });
+    });
+
+    // An empty round still gets its card: it is the round announcing itself, and has
+    // nothing to do with whether the round holds anything.
+    it('opens an empty round on its intro too', async () => {
+      const roundId = await addRound(db, gameId, 'PRESENTATIE');
+      expect(await initialScreenTarget(client(), gameId, roundId, 'PRESENTATIE'))
+        .toEqual({ kind: 'roundIntro', roundId });
     });
   });
 });
@@ -288,5 +367,74 @@ describe.skipIf(!available)('a slotmachine round ending itself', () => {
     expect(state.eligibleCount).toBe(0);
     expect(state.finished).toBe(false);
     await db.query("UPDATE players SET active=TRUE WHERE game_night_id=$1", [gameId]);
+  });
+});
+
+/**
+ * The whole story, walked end to end.
+ *
+ * Start a presentation and press VOLGENDE until the round ends, checking at every step
+ * that the projector snapshot and the Admin's LIVE pane are the same thing — they are fed
+ * by the same function, so this is really a check that nothing has grown a second path.
+ */
+describe.skipIf(!available)('walking a presentation from start to finish', () => {
+  let db: TestDb;
+  let gameId: number;
+  const client = () => db as any;
+
+  beforeAll(async () => { db = await migratedDb(); gameId = await seedGame(db, 840); });
+  afterAll(async () => { await db?.close(); });
+
+  it('goes intro → vraag 1 → antwoord 1 → vraag 2 → antwoord 2 → completed', async () => {
+    const roundId = await addRound(db, gameId, 'PRESENTATIE');
+    await db.query(`UPDATE rounds SET status='ACTIVE',started_at=NOW() WHERE id=$1`, [roundId]);
+    await db.query('UPDATE game_nights SET current_round_id=$2 WHERE id=$1', [gameId, roundId]);
+
+    const ids: number[] = [];
+    for (const [order, title] of [[0, 'Vraag 1'], [1, 'Vraag 2']] as const) {
+      const { rows } = await db.query(
+        `INSERT INTO presentation_slides(game_night_id,round_id,sort_order,title,body,reveal_text)
+         VALUES($1,$2,$3,$4,'','Het antwoord') RETURNING id`,
+        [gameId, roundId, order, title],
+      );
+      const id = Number(rows[0].id);
+      await db.query('INSERT INTO presentation_slide_state(slide_id,game_night_id,round_id) VALUES($1,$2,$3)', [id, gameId, roundId]);
+      ids.push(id);
+    }
+
+    await setScreen(client(), gameId, { kind: 'roundIntro', roundId }, 'test');
+
+    /** What the projector is pointed at, as both surfaces read it. */
+    const where = async () => {
+      const { rows } = await db.query(
+        'SELECT mode,slide_id FROM screen_state WHERE game_night_id=$1', [gameId],
+      );
+      const revealed = rows[0].slide_id
+        ? (await db.query('SELECT revealed_at FROM presentation_slide_state WHERE slide_id=$1', [rows[0].slide_id])).rows[0].revealed_at != null
+        : false;
+      return { mode: rows[0].mode, slideId: Number(rows[0].slide_id || 0) || null, revealed };
+    };
+
+    const seen: any[] = [await where()];
+    // One press per step, six presses to walk two pages and their answers and end.
+    for (let i = 0; i < 5; i += 1) {
+      // The preview promises this step before it is taken.
+      const planned = await planStep(client(), gameId, 'NEXT');
+      const taken = await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
+      expect(taken.kind, `step ${i}`).toBe(planned.kind);
+      if (taken.kind !== 'completeRound') seen.push(await where());
+    }
+
+    expect(seen).toEqual([
+      { mode: 'ROUND_INTRO', slideId: null, revealed: false },
+      { mode: 'SLIDE', slideId: ids[0], revealed: false },
+      { mode: 'SLIDE', slideId: ids[0], revealed: true },
+      { mode: 'SLIDE', slideId: ids[1], revealed: false },
+      { mode: 'SLIDE', slideId: ids[1], revealed: true },
+    ]);
+
+    // And the sixth press ends the round.
+    expect((await db.query('SELECT status FROM rounds WHERE id=$1', [roundId])).rows[0].status).toBe('COMPLETED');
+    expect((await where()).mode).toBe('DASHBOARD');
   });
 });

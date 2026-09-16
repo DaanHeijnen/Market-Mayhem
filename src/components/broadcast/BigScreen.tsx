@@ -21,8 +21,24 @@ const SLOT_SPIN_MS = 3200;
  * from `/api/next-screen-state`. There is no second rendering of a scene anywhere, so the
  * Admin cannot show the host something the room will not see.
  */
+/**
+ * One projector snapshot, drawn.
+ *
+ * Exported because the Admin's LIVE and NEXT panes render with this exact component, fed
+ * the exact same public DTO — the live one polled from `/api/screen-state`, the next one
+ * from `/api/next-screen-state`. There is no second rendering of a scene anywhere, so the
+ * Admin cannot show the host something the room will not see.
+ *
+ * The dashboard is reached only when the mode actually *is* DASHBOARD. It used to be the
+ * fallback for every unmatched case, which meant a scene whose payload failed to load —
+ * a slide pointer at a deleted slide, a mode this build does not know — rendered as a
+ * perfectly healthy-looking standings screen. A broken state that looks like a working one
+ * is worse than an ugly error, so those now say what went wrong instead.
+ */
 export function ScreenRender({ s, error = '' }: { s: any; error?: string }) {
   if (!s) return <div className="screen-loading">{error ? 'LIVE CONNECTION INTERRUPTED' : 'MARKET MAYHEM'}</div>;
+  if (s.mode === 'DASHBOARD') return <Dashboard s={s} error={error} />;
+  if (s.mode === 'ROUND_INTRO' && s.roundIntro) return <RoundIntroScene intro={s.roundIntro} />;
   if (s.mode === 'QUIZ_QUESTION' && s.quizQuestion) return <QuizScene question={s.quizQuestion} round={s.round} />;
   if (s.mode === 'SLIDE' && s.slide) return <SlideScene slide={s.slide} round={s.round} />;
   if (s.mode === 'PUBQUIZ_QUESTION' && s.pubquizQuestion) return <PubquizScene question={s.pubquizQuestion} round={s.round} />;
@@ -33,7 +49,35 @@ export function ScreenRender({ s, error = '' }: { s: any; error?: string }) {
   if (s.mode === 'SLOTMACHINE') return <SlotScene slot={s.slotmachine} round={s.round} />;
   if (s.mode === 'PAK_EEN_ZES') return <PakEenZesScene game={s.pakEenZes} round={s.round} />;
   if (s.mode === 'FOTORONDE') return <PhotoRoundScene photo={s.photoRound} round={s.round} />;
-  return <Dashboard s={s} error={error} />;
+  // Named rather than swallowed: the host can see which scene failed to arrive.
+  return <Scene className="screen-unavailable">
+    <div className="scene-eyebrow">{s.mode}</div>
+    <h1>SCENE NIET BESCHIKBAAR</h1>
+    <p className="scene-body">De projector wijst naar iets dat niet geladen kon worden. Kies iets anders in het Control Center.</p>
+  </Scene>;
+}
+
+/**
+ * The round's title card.
+ *
+ * No content of its own: it is the round row — its title, its description, the
+ * instructions the host wrote for the players — given a moment on screen before the round
+ * begins. That moment is the point. A round that opens on its first question gives the
+ * room nothing to orient on and the host nowhere to stand while explaining it.
+ */
+function RoundIntroScene({ intro }: { intro: any }) {
+  const meta: Record<string, string> = {
+    LIVE_QUIZ: 'LIVE QUIZ', PRESENTATIE: 'PRESENTATIE', PUBQUIZ: 'PUBQUIZ',
+    ROULETTE: 'ROULETTE', SLOTMACHINE: 'SLOTMACHINE', PAK_EEN_ZES: 'PAK EEN ZES', FOTORONDE: 'FOTORONDE',
+  };
+  return <Scene className={`round-intro-scene accent-${String(intro.type).toLowerCase()}`}>
+    <div className="scene-eyebrow">ROUND {String(intro.sortOrder).padStart(2, '0')} · {meta[intro.type] || intro.type}</div>
+    <h1 className="round-intro-title">{intro.title}</h1>
+    {intro.description && <p className="round-intro-description">{intro.description}</p>}
+    {intro.itemCount > 0 && <div className="round-intro-count">{intro.itemCount} {intro.itemCount === 1 ? 'onderdeel' : 'onderdelen'}</div>}
+    {/* Written for the players, so it belongs on the wall they are all looking at. */}
+    {intro.instructions && <p className="round-intro-instructions">{intro.instructions}</p>}
+  </Scene>;
 }
 
 export function BigScreen({ gameId }: { gameId: number }) {

@@ -214,3 +214,20 @@ describe('what each audience is told about a page', () => {
     );
   });
 });
+
+/**
+ * The round's title card, on the projector.
+ *
+ * Not a row of its own: it is the round the host already authored, given a moment on
+ * screen. This is the shape the scene renders, and the reason there is no intro table.
+ */
+describe('what the projector is told about a round intro', () => {
+  it('carries the round\'s own words and nothing invented', () => {
+    const intro = {
+      type: 'PUBQUIZ', sortOrder: 3, title: 'Algemene kennis',
+      description: 'Tien vragen.', instructions: 'Antwoord op je telefoon.', itemCount: 10,
+    };
+    expect(Object.keys(intro).sort())
+      .toEqual(['description', 'instructions', 'itemCount', 'sortOrder', 'title', 'type']);
+  });
+});

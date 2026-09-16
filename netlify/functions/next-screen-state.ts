@@ -2,7 +2,7 @@ import { requireAdmin } from '../lib/auth';
 import { database } from '../lib/db';
 import { ok, HttpError } from '../lib/http';
 import { resolveScreenTarget } from '../lib/game-state';
-import { planStep, navigationCapabilities, type NavigationDirection } from '../lib/screen-flow';
+import { planStep, navigationCapabilities, type NavigationDirection, type ScreenStep } from '../lib/screen-flow';
 import { getScreenState } from '../lib/queries';
 import { wrap, gameIdFrom } from './_wrap';
 
@@ -32,19 +32,33 @@ export default wrap(async request => {
   );
   const capabilities = navigationCapabilities(active.rows[0]?.type ?? null);
 
+  // Both directions in one request. The Admin needs the preview for one of them and the
+  // button state for both, and asking twice on every poll would double the work for an
+  // answer that comes from the same read.
+  //
   // planStep only reads, so it runs on the pool rather than opening a transaction for a
   // question the Admin asks on every poll.
-  const step = await planStep(pool as any, gameId, direction);
+  const [step, other] = await Promise.all([
+    planStep(pool as any, gameId, direction),
+    planStep(pool as any, gameId, direction === 'NEXT' ? 'PREVIOUS' : 'NEXT'),
+  ]);
+
+  const describe = (s: ScreenStep) => ({
+    // "Available" is the server's answer, so the button is disabled because the step is
+    // impossible rather than because the frontend guessed.
+    available: s.kind !== 'none',
+    step: s.kind,
+    label: s.kind === 'none' ? null : s.label,
+    reason: s.kind === 'none' ? s.reason : null,
+  });
+
+  const directions = {
+    [direction]: describe(step),
+    [direction === 'NEXT' ? 'PREVIOUS' : 'NEXT']: describe(other),
+  } as Record<NavigationDirection, ReturnType<typeof describe>>;
 
   if (step.kind !== 'target') {
-    return ok({
-      direction,
-      capabilities,
-      step: step.kind,
-      label: step.kind === 'completeRound' ? step.label : null,
-      reason: step.kind === 'none' ? step.reason : null,
-      preview: null,
-    });
+    return ok({ direction, capabilities, ...describe(step), directions, preview: null });
   }
 
   const resolved = await resolveScreenTarget(pool as any, gameId, step.target);
@@ -55,7 +69,10 @@ export default wrap(async request => {
     slideId: resolved.slideId,
     pubquizQuestionId: resolved.pubquizQuestionId,
     predictionId: resolved.predictionId,
+    // The step may be "reveal what is already up". The preview renders it as it will be,
+    // through the same DTO, rather than as it is.
+    previewReveal: step.reveal === true,
   });
 
-  return ok({ direction, capabilities, step: 'target', label: step.label, reason: null, preview });
+  return ok({ direction, capabilities, ...describe(step), directions, preview });
 }, 'GET');

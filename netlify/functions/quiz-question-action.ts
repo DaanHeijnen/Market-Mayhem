@@ -6,10 +6,10 @@ import { lockRound, assertRoundType, assertRoundActive } from '../lib/rounds';
 import {
   canTransitionQuestion,
   QUIZ_ACTION_TARGET,
-  rewardForAnswer,
   type QuizAction,
   type QuizQuestionStatus,
 } from '../lib/live-quiz';
+import { revealQuizQuestion } from '../lib/question-reveal';
 import { wrap } from './_wrap';
 
 const ACTIONS: QuizAction[] = ['OPEN', 'CLOSE', 'REVEAL', 'SETTLE', 'REOPEN'];
@@ -62,57 +62,26 @@ export default wrap(async request => {
       throw new HttpError(409, 'This question has moved on since — refresh and try again');
     }
 
-    let rewarded = 0;
-    let paidCoins = 0;
-
+    // Revealing is also paying, and that operation lives in question-reveal.ts because
+    // the central VOLGENDE performs the same step. It writes the status itself, so this
+    // returns straight after rather than falling through to the generic transition below.
     if (action === 'REVEAL') {
-      // Everyone who picked an option flagged correct. Ordered by player so concurrent
-      // transactions take the wallet locks in the same sequence.
-      const winners = await client.query(
-        `SELECT a.player_id
-         FROM quiz_answers a
-         JOIN live_quiz_question_options o ON o.id=a.option_id
-         JOIN players pl ON pl.id=a.player_id
-         JOIN wallets w ON w.player_id=a.player_id
-         WHERE a.question_id=$1 AND o.is_correct AND pl.active=TRUE
-         ORDER BY a.player_id FOR UPDATE OF pl,w`,
-        [questionId],
-      );
-      const reward = rewardForAnswer(Number(question.points), true);
-
-      for (const winner of winners.rows) {
-        if (reward <= 0) break;
-        // The partial unique index on (quiz_question_id, player_id, 'QUESTION_REWARD') is
-        // what makes this idempotent; ON CONFLICT DO NOTHING is how we notice.
-        const ledger = await client.query(
-          `INSERT INTO ledger_entries(game_night_id,player_id,amount,transaction_type,description,
-             attributed_round_id,quiz_question_id,created_by,idempotency_key,metadata)
-           VALUES($1,$2,$3,'QUESTION_REWARD',$4,$5,$6,$7,$8,$9::jsonb)
-           ON CONFLICT DO NOTHING RETURNING id`,
-          [
-            gameId, winner.player_id, reward,
-            `Quiz reward: ${question.prompt}`.slice(0, 200),
-            round.id, questionId, admin.username,
-            `quiz:${questionId}:reward:${winner.player_id}`,
-            JSON.stringify({ points: reward }),
-          ],
-        );
-        if (ledger.rows[0]) {
-          await client.query('UPDATE wallets SET current_balance=current_balance+$1,updated_at=NOW() WHERE player_id=$2', [reward, winner.player_id]);
-          rewarded += 1;
-          paidCoins += reward;
-        } else {
-          const existing = await client.query(
-            `SELECT amount FROM ledger_entries
-             WHERE quiz_question_id=$1 AND player_id=$2 AND transaction_type='QUESTION_REWARD'`,
-            [questionId, winner.player_id],
-          );
-          if (!existing.rows[0] || Number(existing.rows[0].amount) !== reward) {
-            throw new HttpError(409, 'Quiz reward idempotency conflict');
-          }
-        }
-      }
+      const outcome = await revealQuizQuestion(client, gameId, questionId, admin.username, ['CLOSED']);
+      await audit(client, gameId, admin.username, 'quiz question reveal', 'round', round.id, {
+        questionId, rewarded: outcome.rewarded, paidCoins: outcome.paidCoins,
+      });
+      const after = await client.query('SELECT revision FROM live_quiz_question_state WHERE question_id=$1', [questionId]);
+      return {
+        status: 'REVEALED',
+        revision: Number(after.rows[0]?.revision ?? 0),
+        rewarded: outcome.rewarded,
+        paidCoins: outcome.paidCoins,
+        version: await incrementGameVersion(client, gameId),
+      };
     }
+
+    const rewarded = 0;
+    const paidCoins = 0;
 
     const stamps: Record<QuizQuestionStatus, string> = {
       READY: '',

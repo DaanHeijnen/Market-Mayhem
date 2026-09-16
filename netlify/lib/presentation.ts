@@ -56,18 +56,18 @@ export type PresentationPage = { id: number; hidden: boolean };
  * `first` is where NEXT starts from when the cursor is nowhere at all — a round that has
  * just been entered.
  */
-export function visibleNeighbours(pages: PresentationPage[], currentId: number | null) {
+export function visibleNeighbours<T extends PresentationPage>(pages: T[], currentId: number | null) {
   const at = pages.findIndex(page => page.id === currentId);
   const visible = pages.filter(page => !page.hidden);
 
-  let previous: PresentationPage | null = null;
-  let next: PresentationPage | null = null;
+  let previous: T | null = null;
+  let next: T | null = null;
   if (at >= 0) {
     for (let i = at - 1; i >= 0; i -= 1) if (!pages[i].hidden) { previous = pages[i]; break; }
     for (let i = at + 1; i < pages.length; i += 1) if (!pages[i].hidden) { next = pages[i]; break; }
   }
 
-  const currentPage = at >= 0 ? pages[at] : null;
+  const currentPage: T | null = at >= 0 ? pages[at] : null;
   return {
     /** Where the cursor stands in the full authored list, or -1 when it stands nowhere. */
     at,

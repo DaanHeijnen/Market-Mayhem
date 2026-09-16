@@ -49,16 +49,20 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
 
   const livePrediction = s.predictions.find((p: any) => p.id === live.predictionId) || null;
 
+  // What the two central buttons may do, answered by the server rather than guessed here.
+  const [steps, setSteps] = useState<Record<'NEXT' | 'PREVIOUS', { available: boolean; step: string; label: string | null; reason: string | null }>>({
+    NEXT: { available: false, step: 'none', label: null, reason: null },
+    PREVIOUS: { available: false, step: 'none', label: null, reason: null },
+  });
+
   const showNow = (target: Record<string, unknown>) => run('/api/show-on-screen', target);
   // One endpoint for both directions, and the same one the VOLGENDE preview asked. The
   // cursor revision travels with it, so a step from a tab that has fallen behind is
   // refused instead of pulling the projector backwards.
-  const step = (direction: 'NEXT' | 'PREVIOUS') => run('/api/advance-screen', { direction, revision: runtime?.revision });
-  // Which directions this round type supports at all. Mirrors navigationCapabilities in
-  // netlify/lib/screen-flow.ts, which is what the server actually enforces.
-  const navigable = activeRound && ['PRESENTATIE', 'LIVE_QUIZ', 'PUBQUIZ'].includes(activeRound.type)
-    ? { next: true, previous: true }
-    : { next: false, previous: false };
+  // One endpoint for both directions, and the same one the VOLGENDE preview asked. The
+  // screen revision travels with it, so a step from a tab that has fallen behind is
+  // refused instead of pulling the room backwards.
+  const step = (direction: 'NEXT' | 'PREVIOUS') => run('/api/advance-screen', { direction, revision: s.screen?.revision });
 
   const rouletteAction = (action: string) => activeRoulette && run('/api/roulette-action', { rouletteGameId: activeRoulette.id, action }, true);
   const quizAction = (action: string) => currentQuestion && run('/api/quiz-question-action', { questionId: currentQuestion.id, action, revision: currentQuestion.revision });
@@ -149,14 +153,9 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
 
         {status === 'REVEALED' && <button className="btn btn-secondary" onClick={() => quizAction('SETTLE')}>MARK SETTLED</button>}
 
-        {/* Question navigation, which replaced the old generic previous/next block
-            stepping. It refuses to leave a question that still owes somebody a reward. */}
-        <span className="live-nav">
-          <button className="btn btn-secondary btn-compact" disabled={index <= 0} onClick={() => step('PREVIOUS')}>← VORIGE</button>
-          <span className="muted mono">{index + 1} / {questions.length}</span>
-          <button className="btn btn-secondary btn-compact" disabled={index >= questions.length - 1} onClick={() => step('NEXT')}>VOLGENDE →</button>
-          <button className="btn btn-blue btn-compact" onClick={() => showNow({ kind: 'quizQuestion', roundId: activeRound.id, questionId: currentQuestion.id })}>TOON OP SCHERM</button>
-        </span>
+        {/* No previous/next here. Stepping the evening is the pair under the two previews
+            and lives nowhere else — these are the actions that are not navigation. */}
+        <span className="muted live-meta mono">{index + 1} / {questions.length}</span>
 
         <span className="muted live-meta">
           {revealed && correct.length
@@ -172,38 +171,16 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
       const slides = activeRound.slides || [];
       if (!slides.length) return <span className="muted live-meta">This presentation round has no pages yet.</span>;
       if (!currentSlide) return <span className="muted live-meta">No page selected.</span>;
-      // Counted over the run rather than over everything authored, because that is what
-      // previous and next actually walk. A cursor left standing on a page the host has
-      // just held back is not in the run at all, and says so.
-      //
-      // Button affordance only. The rule lives in netlify/lib/presentation.ts and is
-      // enforced by slide-navigate — src and netlify are separate TypeScript projects, so
-      // this reads the same list rather than importing the same function.
-      const at = slides.findIndex((x: any) => x.id === currentSlide.id);
+      // Position only, for the counter below. Which page comes next is the server's
+      // answer, asked once by the central step bar — not re-derived here.
       const visible = slides.filter((x: any) => !x.hidden);
-      const around = {
-        at,
-        previous: slides.slice(0, Math.max(at, 0)).filter((x: any) => !x.hidden).slice(-1)[0] || null,
-        next: at < 0 ? null : slides.slice(at + 1).find((x: any) => !x.hidden) || null,
-        visibleCount: visible.length,
-        visibleIndex: currentSlide.hidden ? -1 : visible.findIndex((x: any) => x.id === currentSlide.id),
-      };
+      const visibleIndex = currentSlide.hidden ? -1 : visible.findIndex((x: any) => x.id === currentSlide.id);
       const hasSecret = Boolean(currentSlide.revealText || currentSlide.hideTitleUntilReveal);
-      const liveHere = live.mode === 'SLIDE' && live.slideId === currentSlide.id;
       return <>
         {hasSecret && (currentSlide.revealedAt
           ? <button className="btn btn-secondary" onClick={() => revealSlide(false)}>VERBERG ANTWOORD</button>
           : <button className="btn btn-success" onClick={() => revealSlide(true)}>TOON ANTWOORD</button>)}
-        <span className="live-nav">
-          <button className="btn btn-secondary btn-compact" disabled={!around.previous} onClick={() => step('PREVIOUS')}>← VORIGE</button>
-          <span className="muted mono">{around.visibleIndex >= 0 ? `${around.visibleIndex + 1} / ${around.visibleCount}` : `— / ${around.visibleCount}`}</span>
-          <button className="btn btn-secondary btn-compact" disabled={!around.next && around.at >= 0} onClick={() => step('NEXT')}>VOLGENDE →</button>
-          <button
-            className="btn btn-blue btn-compact"
-            disabled={currentSlide.hidden || liveHere}
-            onClick={() => showNow({ kind: 'slide', roundId: activeRound.id, slideId: currentSlide.id })}
-          >{liveHere ? 'OP HET SCHERM' : 'TOON OP SCHERM'}</button>
-        </span>
+        <span className="muted live-meta mono">{visibleIndex >= 0 ? `${visibleIndex + 1} / ${visible.length}` : `— / ${visible.length}`}</span>
         {currentSlide.hidden
           ? <span className="muted live-meta">
             This page is held back, so it is skipped by previous/next and cannot go on the big screen.
@@ -384,30 +361,43 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
           <div className="label muted">LIVE — OP DE PROJECTOR</div>
           <a className="btn btn-secondary btn-compact" href={`/screen/${gameId}`} target="_blank" rel="noreferrer">OPEN FULL SCREEN ↗</a>
         </div>
-        <LiveScreenPreview gameId={gameId} />
-        <div className="presenter-actions">{liveActions()}</div>
+        <LiveScreenPreview gameId={gameId} version={s.version} />
       </div>
 
       <div className="presenter-col">
         <div className="label muted">VOLGENDE — WAT VOLGENDE OP HET SCHERM ZET</div>
-        <NextScreenPreview gameId={gameId} version={s.version} />
-        <div className="presenter-step-actions">
-          <button
-            className="btn btn-secondary"
-            disabled={!navigable.previous}
-            title={navigable.previous ? undefined : 'Deze ronde stapt niet terug'}
-            onClick={() => step('PREVIOUS')}
-          >← VORIGE</button>
-          <button
-            className="btn btn-lime go-live-btn"
-            disabled={!navigable.next}
-            title={navigable.next ? undefined : 'Deze ronde is één scene en wordt met haar eigen knoppen bediend'}
-            onClick={() => step('NEXT')}
-          >VOLGENDE →</button>
-        </div>
-        <button className="btn btn-secondary btn-full" onClick={() => showNow({ kind: 'dashboard', remember: true })}>TOON MARKET DASHBOARD</button>
+        <NextScreenPreview gameId={gameId} version={s.version} onSteps={setSteps} />
       </div>
     </div>
+
+    {/* The one place the evening moves forward. Every round type walks its own sequence,
+        but the host only ever presses these two. */}
+    <div className="presenter-step-bar">
+      <button
+        className="btn btn-secondary btn-step"
+        disabled={!steps.PREVIOUS.available}
+        title={steps.PREVIOUS.reason || undefined}
+        onClick={() => step('PREVIOUS')}
+      >← VORIGE</button>
+      <button
+        className="btn btn-lime btn-step btn-step-primary"
+        disabled={!steps.NEXT.available}
+        title={steps.NEXT.reason || undefined}
+        onClick={() => step('NEXT')}
+      >{steps.NEXT.step === 'completeRound' ? 'RONDE AFRONDEN →' : 'VOLGENDE →'}</button>
+    </div>
+    {(steps.NEXT.reason || steps.PREVIOUS.reason) && <div className="muted presenter-step-note">
+      {steps.NEXT.reason || steps.PREVIOUS.reason}
+    </div>}
+
+    {/* Round-type actions that are not navigation: opening betting, closing answers,
+        judging a photo. Navigation is the pair above and lives nowhere else. */}
+    {liveActions() && <Card className="round-actions-card">
+      <div className="label muted">{activeMeta?.label.toUpperCase()} — ACTIES</div>
+      <div className="presenter-actions">{liveActions()}</div>
+    </Card>}
+
+    <button className="btn btn-secondary btn-full" onClick={() => showNow({ kind: 'dashboard', remember: true })}>TOON MARKET DASHBOARD</button>
 
     {activeRound?.type === 'SLOTMACHINE' && <SlotLivePanel slot={s.activeSlot} config={s.slotConfig?.status} activePlayers={activePlayers} />}
 
@@ -1036,7 +1026,7 @@ function ScaledScreen({ children }: { children: any }) {
  * button itself calls and renders the answer through the projector's own snapshot builder.
  * So this is not a description of the next step — it is the next step, drawn early.
  */
-function NextScreenPreview({ gameId, version }: { gameId: number; version: number }) {
+function NextScreenPreview({ gameId, version, onSteps }: { gameId: number; version: number; onSteps: (steps: any) => void }) {
   const [state, setState] = useState<any>(null);
 
   useEffect(() => {
@@ -1045,12 +1035,19 @@ function NextScreenPreview({ gameId, version }: { gameId: number; version: numbe
       try {
         const response = await fetch(`/api/next-screen-state?gameId=${gameId}&direction=NEXT`, { credentials: 'include' });
         const data = await response.json();
-        if (!cancelled) setState(response.ok ? data : null);
-      } catch { if (!cancelled) setState(null); }
+        if (cancelled) return;
+        setState(response.ok ? data : null);
+        // The same answer drives the preview and the buttons, so a disabled VOLGENDE and
+        // an empty preview always agree about why.
+        if (response.ok && data.directions) onSteps(data.directions);
+        else onSteps({ NEXT: { available: false, step: 'none', label: null, reason: null }, PREVIOUS: { available: false, step: 'none', label: null, reason: null } });
+      } catch {
+        if (!cancelled) setState(null);
+      }
     })();
     return () => { cancelled = true; };
     // Re-asked whenever the game moves, which is what keeps it in step with LIVE.
-  }, [gameId, version]);
+  }, [gameId, version, onSteps]);
 
   if (!state) return <div className="screen-preview next-preview-empty"><span className="muted">Loading…</span></div>;
   if (state.step === 'completeRound') {
@@ -1065,27 +1062,40 @@ function NextScreenPreview({ gameId, version }: { gameId: number; version: numbe
   return <ScaledScreen><ScreenRender s={state.preview} /></ScaledScreen>;
 }
 
-function LiveScreenPreview({ gameId }: { gameId: number }) {
-  const previewRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(1);
+/**
+ * What is on the projector, right now.
+ *
+ * This used to be an iframe of `/screen/:gameId`, which was the right idea and the wrong
+ * mechanism: the embedded page polled on its own schedule, backed off on its own rules and
+ * failed on its own terms, so what the host saw here could lag or fall back to the
+ * standings while the room was looking at something else entirely.
+ *
+ * Now it is the projector's own component fed the projector's own snapshot, fetched here.
+ * There is one renderer and one DTO, so "Admin LIVE equals the big screen" is true by
+ * construction rather than by two things happening to agree.
+ */
+function LiveScreenPreview({ gameId, version }: { gameId: number; version: number }) {
+  const [snapshot, setSnapshot] = useState<any>(null);
+  const [failed, setFailed] = useState('');
 
   useEffect(() => {
-    const preview = previewRef.current;
-    if (!preview) return;
-    const updateScale = () => setScale(preview.clientWidth / SCREEN_WIDTH);
-    updateScale();
-    const observer = new ResizeObserver(updateScale);
-    observer.observe(preview);
-    return () => observer.disconnect();
-  }, []);
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`/api/screen-state?gameId=${gameId}`, { credentials: 'include' });
+        const data = await response.json();
+        if (cancelled) return;
+        if (!response.ok) { setFailed(data?.error || 'Kon het projectorbeeld niet laden'); return; }
+        setFailed('');
+        setSnapshot(data);
+      } catch {
+        if (!cancelled) setFailed('Kon het projectorbeeld niet laden');
+      }
+    })();
+    return () => { cancelled = true; };
+    // Re-read whenever the game moves — the same version every other panel reacts to, so
+    // LIVE cannot be a poll behind what the rest of this page is showing.
+  }, [gameId, version]);
 
-  return <div className="screen-preview" ref={previewRef}>
-    <iframe
-      title="Live Big Screen"
-      src={`/screen/${gameId}`}
-      width={SCREEN_WIDTH}
-      height={SCREEN_HEIGHT}
-      style={{ transform: `scale(${scale})` }}
-    />
-  </div>;
+  return <ScaledScreen><ScreenRender s={snapshot} error={failed} /></ScaledScreen>;
 }

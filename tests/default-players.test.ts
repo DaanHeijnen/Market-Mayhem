@@ -337,6 +337,44 @@ describe.skipIf(!available)('the standard players, against a migrated database',
   });
 
   // ---------------------------------------------------------------------
+  // What Full Reset must not touch
+  // ---------------------------------------------------------------------
+  describe('Full Reset and the slotmachine artwork', () => {
+    // The twelve reel images are uploaded by hand, one at a time, and re-doing that before
+    // every real night would make the reset unusable. They are configuration, not runtime,
+    // and this is the test that keeps them that way.
+    it('keeps the uploaded reel symbols and the odds behind them', async () => {
+      const gameId = await newGame();
+      await initializeDefaultPlayers(client(), gameId, 'test');
+      await db.query(
+        `INSERT INTO slot_configs(game_night_id,total_weight,updated_by) VALUES($1,100,'admin')
+         ON CONFLICT (game_night_id) DO NOTHING`,
+        [gameId],
+      );
+      for (let position = 1; position <= 3; position += 1) {
+        await db.query(
+          'INSERT INTO slot_reel_symbols(game_night_id,position,media_key) VALUES($1,$2,$3)',
+          [gameId, position, `${gameId}/image/symbol${position}.png`],
+        );
+      }
+      await db.query(
+        `INSERT INTO slot_outcome_types(game_night_id,outcome_type,weight,payout_multiplier)
+         VALUES($1,'THREE_LINE',10,5)`,
+        [gameId],
+      );
+
+      await performFullReset(client(), gameId, 'admin');
+
+      const symbols = await db.query('SELECT position,media_key FROM slot_reel_symbols WHERE game_night_id=$1 ORDER BY position', [gameId]);
+      expect(symbols.rows).toHaveLength(3);
+      expect(symbols.rows[0].media_key).toBe(`${gameId}/image/symbol1.png`);
+      // The chances and payouts that go with them survive too.
+      const outcomes = await db.query('SELECT weight FROM slot_outcome_types WHERE game_night_id=$1', [gameId]);
+      expect(outcomes.rows).toHaveLength(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------
   // 10-14 · through the reset the Admin actually presses
   // ---------------------------------------------------------------------
   describe('Full Reset', () => {

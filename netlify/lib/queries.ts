@@ -237,7 +237,7 @@ export async function getAdminState(gameId: number) {
        WHERE l.game_night_id=$1 ORDER BY l.created_at DESC,l.id DESC LIMIT 12`, [gameId],
     ),
     pool.query(
-      `SELECT mode,round_id,prediction_id,quiz_question_id,slide_id,payload,
+      `SELECT mode,round_id,prediction_id,quiz_question_id,slide_id,pubquiz_question_id,payload,revision,
               staged_mode,staged_round_id,staged_prediction_id,staged_quiz_question_id,staged_slide_id,
               previous_mode,previous_round_id,previous_prediction_id,previous_quiz_question_id,previous_slide_id
        FROM screen_state WHERE game_night_id=$1`, [gameId],
@@ -360,15 +360,19 @@ export async function getAdminState(gameId: number) {
     // Typed columns now rather than ids inside a JSON payload, so a pointer at deleted
     // content is a null instead of a number naming nothing.
     screen: (() => {
-      const slot = (mode: any, roundId: any, predictionId: any, questionId: any, slideId: any) => ({
+      const slot = (mode: any, roundId: any, predictionId: any, questionId: any, slideId: any, pubquizQuestionId: any = null) => ({
         mode: mode || null,
         roundId: Number(roundId || 0) || null,
         predictionId: Number(predictionId || 0) || null,
         questionId: Number(questionId || 0) || null,
         slideId: Number(slideId || 0) || null,
+        pubquizQuestionId: Number(pubquizQuestionId || 0) || null,
       });
       return {
-        ...slot(screenRow?.mode || game.current_screen_mode, screenRow?.round_id, screenRow?.prediction_id, screenRow?.quiz_question_id, screenRow?.slide_id),
+        ...slot(screenRow?.mode || game.current_screen_mode, screenRow?.round_id, screenRow?.prediction_id, screenRow?.quiz_question_id, screenRow?.slide_id, screenRow?.pubquiz_question_id),
+        // What a central VOLGENDE is guarded against: the Admin sends back the number it
+        // was looking at, and a step from a stale tab is refused.
+        revision: Number(screenRow?.revision ?? 0),
         staged: slot(screenRow?.staged_mode, screenRow?.staged_round_id, screenRow?.staged_prediction_id, screenRow?.staged_quiz_question_id, screenRow?.staged_slide_id),
         previous: slot(screenRow?.previous_mode, screenRow?.previous_round_id, screenRow?.previous_prediction_id, screenRow?.previous_quiz_question_id, screenRow?.previous_slide_id),
         // Which Fotoronde photo is enlarged on the projector — presentational only.
@@ -948,6 +952,15 @@ export type ScreenOverride = {
   slideId: number | null;
   pubquizQuestionId: number | null;
   predictionId: number | null;
+  /**
+   * Draw this as though the host had already revealed it.
+   *
+   * The NEXT preview has to show "the answer to question 2" while question 2 is still
+   * unanswered, and that state does not exist in the database yet. Rather than a second
+   * renderer that knows how to fake it, the row is handed to the same DTO with its reveal
+   * stamped — so the preview is the real scene, one step early.
+   */
+  previewReveal?: boolean;
 };
 
 /**
@@ -987,8 +1000,17 @@ export async function getScreenState(gameId: number, override?: ScreenOverride) 
 
   const [round, quizRow, prediction, players, ledgerEvents, predictionEvents, rouletteEvents, ticker, totals, roulette, recentResults, slot, slotSpins, pakEenZesGame, pakPredictionCount, screenSlotTurn, screenPhotoRound, pubRow, pubOptions, pubAnswers] = await Promise.all([
     pool.query(
-      `SELECT id,game_night_id,sort_order,title,description,type,status,instructions,default_points
-       FROM rounds WHERE id=COALESCE($1::bigint,$2::bigint) AND game_night_id=$3`,
+      `SELECT r.id,r.game_night_id,r.sort_order,r.title,r.description,r.type,r.status,r.instructions,r.default_points,
+              COALESCE(
+                (SELECT COUNT(*)::int FROM presentation_slides x WHERE x.round_id=r.id AND x.hidden=FALSE),0
+              ) +
+              COALESCE(
+                (SELECT COUNT(*)::int FROM pubquiz_questions x WHERE x.round_id=r.id AND x.hidden=FALSE),0
+              ) +
+              COALESCE(
+                (SELECT COUNT(*)::int FROM live_quiz_questions x WHERE x.round_id=r.id),0
+              ) AS item_count
+       FROM rounds r WHERE r.id=COALESCE($1::bigint,$2::bigint) AND r.game_night_id=$3`,
       [screenRoundId, game.current_round_id, gameId],
     ),
     // The question and its options, or the slide — whichever the scene names. Both come
@@ -1143,7 +1165,15 @@ export async function getScreenState(gameId: number, override?: ScreenOverride) 
       : Promise.resolve({ rows: [] } as any),
   ]);
   const quizOptions = quizOptionRows.rows;
-  const slideRow = slideRows.rows[0] ?? null;
+  let slideRow = slideRows.rows[0] ?? null;
+  let pubPreviewRow = pubRow.rows[0] ?? null;
+  let quizPreviewRow = quizRow.rows[0] ?? null;
+  if (override?.previewReveal) {
+    // Only ever on a preview, which is built from a copy — the stored rows are untouched.
+    if (slideRow) slideRow = { ...slideRow, revealed_at: new Date() };
+    if (pubPreviewRow) pubPreviewRow = { ...pubPreviewRow, status: 'REVEALED' };
+    if (quizPreviewRow) quizPreviewRow = { ...quizPreviewRow, status: 'REVEALED' };
+  }
 
   type EconEvent = { playerId: number; delta: number; time: number; key: string };
   const events: EconEvent[] = [];
@@ -1190,6 +1220,18 @@ export async function getScreenState(gameId: number, override?: ScreenOverride) 
     version: Number(game.game_state_version),
     game: { id: Number(game.id), name: game.name }, mode: screenMode,
     round: publicRound(round.rows[0]),
+    // The round's title card. Built from the round row the host already filled in, and
+    // only sent for the scene that draws it — `instructions` is written for players, so
+    // it is public, but it has no business travelling with every other scene.
+    roundIntro: screenMode === 'ROUND_INTRO' && round.rows[0] ? {
+      type: round.rows[0].type,
+      sortOrder: Number(round.rows[0].sort_order),
+      title: round.rows[0].title,
+      description: round.rows[0].description ?? '',
+      instructions: round.rows[0].instructions ?? '',
+      // How much is coming, so the room knows what it is in for.
+      itemCount: Number(round.rows[0].item_count ?? 0),
+    } : null,
     // The projector's player list is already active-only, so its length is the same
     // eligible count the Admin bar uses.
     //
@@ -1197,14 +1239,14 @@ export async function getScreenState(gameId: number, override?: ScreenOverride) 
     // question's correct options and its context photo key, and the slide's reveal line
     // and hidden title, are simply not put on the wire until the host reveals them, so a
     // viewer with the projector URL has nothing to read early.
-    quizQuestion: quizRow.rows[0] ? screenQuizQuestion(quizRow.rows[0], quizOptions, players.rows.length) : null,
+    quizQuestion: quizPreviewRow ? screenQuizQuestion(quizPreviewRow, quizOptions, players.rows.length) : null,
     slide: slideRow ? screenSlide(slideRow) : null,
     // Built by its own explicit DTO, like the quiz scene: the answer key and the per-option
     // tally are simply not on the wire before the reveal, so there is nothing for a viewer
     // with the projector URL to read early.
-    pubquizQuestion: pubRow.rows[0]
+    pubquizQuestion: pubPreviewRow
       ? screenPubquizQuestion(
-        pubRow.rows[0],
+        pubPreviewRow,
         pubOptions.rows,
         pubAnswers.rows.map((a: any) => ({ optionId: Number(a.option_id) })),
         players.rows.length,

@@ -168,7 +168,7 @@ describe.skipIf(!available)('a pubquiz round', () => {
   // ---------------------------------------------------------------------
   describe('navigation', () => {
     it('steps in both directions', () => {
-      expect(navigationCapabilities('PUBQUIZ')).toEqual({ next: true, previous: true });
+      expect(navigationCapabilities('PUBQUIZ')).toEqual({ canGoNext: true, canGoPrevious: true });
     });
 
     it('puts the next question straight on the big screen', async () => {
@@ -232,16 +232,47 @@ describe.skipIf(!available)('a pubquiz round', () => {
         .rejects.toThrow(/hidden/i);
     });
 
-    // Stepping away from a question the room has answered but not been told about would
-    // strand their answers with no reveal.
-    it('refuses to move on from a question that is still open', async () => {
-      const first = await addQuestion(roundId, 0, 'Q1');
-      await addQuestion(roundId, 1, 'Q2');
-      await setScreen(client(), gameId, { kind: 'pubquizQuestion', roundId, questionId: first.id }, 'test');
-      await db.query("UPDATE pubquiz_question_state SET status='OPEN' WHERE question_id=$1", [first.id]);
+    // The chronology, in one test: asking a question and answering it are two presses of
+    // the same button, and the second one is what pays.
+    it('asks a question, then answers it, then moves on', async () => {
+      const first = await addQuestion(roundId, 0, 'Q1', { correct: 0 });
+      const second = await addQuestion(roundId, 1, 'Q2');
+      await setScreen(client(), gameId, { kind: 'roundIntro', roundId }, 'test');
 
-      expect(await planStep(client(), gameId, 'NEXT')).toMatchObject({ kind: 'none' });
-      await expect(advanceScreen(client(), gameId, 'NEXT', 'admin', null)).rejects.toThrow(/still OPEN/);
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
+      expect(Number((await screen()).pubquiz_question_id)).toBe(first.id);
+      expect(await status(first.id)).toBe('OPEN');
+
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
+      expect(Number((await screen()).pubquiz_question_id)).toBe(first.id);
+      expect(await status(first.id)).toBe('REVEALED');
+
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
+      expect(Number((await screen()).pubquiz_question_id)).toBe(second.id);
+      expect(await status(second.id)).toBe('OPEN');
+    });
+
+    // Stepping is where the coins move for a pubquiz, so it has to be exactly as
+    // idempotent as the reveal button is.
+    it('pays a correct answer once, whether revealed by button or by stepping', async () => {
+      const q = await addQuestion(roundId, 0, 'Q1', { correct: 0, points: 40 });
+      await db.query(
+        'INSERT INTO pubquiz_answers(game_night_id,round_id,question_id,option_id,player_id) VALUES($1,$2,$3,$4,501)',
+        [gameId, roundId, q.id, q.optionIds[0]],
+      );
+      await db.query('UPDATE wallets SET current_balance=100 WHERE player_id=501', []);
+      await setScreen(client(), gameId, { kind: 'roundIntro', roundId }, 'test');
+
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null); // asks it
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null); // answers it, and pays
+
+      const paid = await db.query(
+        "SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::int AS total FROM ledger_entries WHERE pubquiz_question_id=$1 AND transaction_type='PUBQUIZ_REWARD'",
+        [q.id],
+      );
+      expect(paid.rows[0].n).toBe(1);
+      expect(paid.rows[0].total).toBe(40);
+      expect(Number((await db.query('SELECT current_balance::int AS b FROM wallets WHERE player_id=501')).rows[0].b)).toBe(140);
     });
 
     // The last question stays up normally; the step *after* it ends the round.
@@ -267,21 +298,18 @@ describe.skipIf(!available)('a pubquiz round', () => {
       expect(await planStep(client(), gameId, 'NEXT')).toMatchObject({ kind: 'completeRound' });
     });
 
-    // A step carries the cursor the Admin was looking at; one from a tab that has fallen
-    // behind must not drag the projector back.
+    // A step carries the screen revision the Admin was looking at; one from a tab that has
+    // fallen behind must not drag the room back.
     it('refuses a step issued against a revision that has moved on', async () => {
       const first = await addQuestion(roundId, 0, 'Q1');
-      const second = await addQuestion(roundId, 1, 'Q2');
-      await addQuestion(roundId, 2, 'Q3');
-      await setScreen(client(), gameId, { kind: 'pubquizQuestion', roundId, questionId: first.id }, 'test');
-      await db.query("UPDATE pubquiz_question_state SET status='REVEALED' WHERE question_id=$1", [first.id]);
-      const stale = Number((await db.query('SELECT revision FROM round_runtime WHERE round_id=$1', [roundId])).rows[0].revision);
+      await addQuestion(roundId, 1, 'Q2');
+      await setScreen(client(), gameId, { kind: 'roundIntro', roundId }, 'test');
+      const stale = Number((await db.query('SELECT revision FROM screen_state WHERE game_night_id=$1', [gameId])).rows[0].revision);
 
       await advanceScreen(client(), gameId, 'NEXT', 'admin', stale);
-      await db.query("UPDATE pubquiz_question_state SET status='REVEALED' WHERE question_id=$1", [second.id]);
 
       await expect(advanceScreen(client(), gameId, 'NEXT', 'other-admin', stale)).rejects.toThrow(/moved on/i);
-      expect(Number((await screen()).pubquiz_question_id)).toBe(second.id);
+      expect(Number((await screen()).pubquiz_question_id)).toBe(first.id);
     });
 
     // The preview is the step, asked without taking it.
@@ -302,23 +330,22 @@ describe.skipIf(!available)('a pubquiz round', () => {
   // 25 · starting the round
   // ---------------------------------------------------------------------
   describe('starting the round', () => {
-    it('opens on the first question in the run, already open for answers', async () => {
+    it('opens on its title card rather than on the first question', async () => {
+      await addQuestion(roundId, 0, 'Q1');
+      expect(await initialScreenTarget(client(), gameId, roundId, 'PUBQUIZ'))
+        .toEqual({ kind: 'roundIntro', roundId });
+    });
+
+    // The first question is one press away, and that press is what opens it for answers.
+    it('asks the first question in the run on the first VOLGENDE', async () => {
       await addQuestion(roundId, 0, 'Spare', { hidden: true });
       const visible = await addQuestion(roundId, 1, 'Q1');
+      await setScreen(client(), gameId, { kind: 'roundIntro', roundId }, 'test');
 
-      const target = await initialScreenTarget(client(), gameId, roundId, 'PUBQUIZ');
+      await advanceScreen(client(), gameId, 'NEXT', 'admin', null);
 
-      expect(target).toEqual({ kind: 'pubquizQuestion', roundId, questionId: visible.id });
+      expect(Number((await screen()).pubquiz_question_id)).toBe(visible.id);
       expect(await status(visible.id)).toBe('OPEN');
-    });
-
-    it('leaves the screen alone for a round with no questions', async () => {
-      expect(await initialScreenTarget(client(), gameId, roundId, 'PUBQUIZ')).toBeNull();
-    });
-
-    it('leaves the screen alone when every question is held back', async () => {
-      await addQuestion(roundId, 0, 'Spare', { hidden: true });
-      expect(await initialScreenTarget(client(), gameId, roundId, 'PUBQUIZ')).toBeNull();
     });
   });
 });

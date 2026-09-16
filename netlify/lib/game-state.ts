@@ -37,6 +37,7 @@ export function screenModeValue(value: unknown): ScreenMode {
 export function screenTargetFromRequest(p: any): ScreenTarget {
   const kind = String(p?.kind || '');
   if (kind === 'dashboard') return { kind: 'dashboard' };
+  if (kind === 'roundIntro') return { kind: 'roundIntro', roundId: intValue(p.roundId, 'roundId', { min: 1 }) };
   if (kind === 'prediction') return { kind: 'prediction', predictionId: intValue(p.predictionId, 'predictionId', { min: 1 }) };
   if (kind === 'quizQuestion') {
     return {
@@ -60,7 +61,7 @@ export function screenTargetFromRequest(p: any): ScreenTarget {
     };
   }
   if (kind === 'round') return { kind: 'roundGame', roundId: intValue(p.roundId, 'roundId', { min: 1 }) };
-  throw new HttpError(400, 'kind must be dashboard, round, quizQuestion, slide, pubquizQuestion or prediction');
+  throw new HttpError(400, 'kind must be dashboard, roundIntro, round, quizQuestion, slide, pubquizQuestion or prediction');
 }
 
 export async function incrementGameVersion(client: PoolClient, gameId: number) {
@@ -75,6 +76,7 @@ export async function incrementGameVersion(client: PoolClient, gameId: number) {
 /** What the projector can be pointed at. One shape per scene, so nothing is half-specified. */
 export type ScreenTarget =
   | { kind: 'dashboard' }
+  | { kind: 'roundIntro'; roundId: number }
   | { kind: 'quizQuestion'; roundId: number; questionId: number }
   | { kind: 'slide'; roundId: number; slideId: number }
   | { kind: 'pubquizQuestion'; roundId: number; questionId: number }
@@ -137,6 +139,12 @@ async function resolveTarget(
   // is playing.
   if (options.requireActiveRound && round.rows[0].status !== 'ACTIVE') {
     throw new HttpError(409, 'Only the active round can be presented');
+  }
+
+  // The intro belongs to the round rather than to anything inside it, so it is legal for
+  // every type and needs nothing but the round to exist.
+  if (target.kind === 'roundIntro') {
+    return { ...blank, mode: 'ROUND_INTRO', roundId: target.roundId };
   }
 
   const scene = SCENE_FOR_ROUND_TYPE[type];
@@ -237,7 +245,7 @@ export async function setScreen(
        pubquiz_question_id=EXCLUDED.pubquiz_question_id,
        -- The payload is presentational extras only (which Fotoronde photo is enlarged),
        -- and they belong to the scene that set them, so a new scene starts without them.
-       payload='{}'::jsonb,updated_at=NOW(),updated_by=EXCLUDED.updated_by`,
+       payload='{}'::jsonb,revision=screen_state.revision+1,updated_at=NOW(),updated_by=EXCLUDED.updated_by`,
     [gameId, resolved.mode, resolved.roundId, resolved.predictionId, resolved.quizQuestionId, resolved.slideId, resolved.pubquizQuestionId, actor],
   );
   await client.query('UPDATE game_nights SET current_screen_mode=$2,updated_at=NOW() WHERE id=$1', [gameId, resolved.mode]);

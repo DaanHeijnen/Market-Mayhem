@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from 'react';
  */
 export const ROULETTE_CHIPS = [1, 5, 10, 25] as const;
 import { mutation } from '../../lib/api';
+import { prepareImageForUpload, readJsonResponse } from '../../lib/upload';
 import { CoinIcon } from '../shared/CoinIcon';
 import { RouletteTable, type RouletteMarker, type RoulettePosition } from '../shared/RouletteTable';
 
@@ -647,14 +648,20 @@ function PhotoUploadField({ gameId, roundId, subjectKey, replacing, disabled }: 
     setUploading(true);
     setError('');
     try {
+      // Shrunk before it is sent. A phone camera photo is routinely larger than the
+      // platform will accept, and an oversized body is rejected before our handler runs —
+      // which is where the old "Unexpected end of JSON" came from.
+      const prepared = await prepareImageForUpload(file);
       const form = new FormData();
       form.append('gameId', String(gameId));
       form.append('roundId', String(roundId));
       form.append('subjectKey', subjectKey);
-      form.append('file', file);
+      form.append('file', prepared);
       const response = await fetch('/api/upload-photo-submission', { method: 'POST', credentials: 'include', body: form });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Uploaden mislukt');
+      // Read without assuming JSON: anything that never reached our handler carries a
+      // different kind of body, and it should read as a message rather than a crash.
+      const result = await readJsonResponse(response);
+      if (!result.ok) throw new Error(result.error);
       // The next poll brings the submission back with its preview, so there is nothing
       // to set locally.
     } catch (e) {

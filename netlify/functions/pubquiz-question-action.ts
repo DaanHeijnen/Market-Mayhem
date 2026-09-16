@@ -5,11 +5,11 @@ import { incrementGameVersion } from '../lib/game-state';
 import { lockRound, assertRoundType, assertRoundActive } from '../lib/rounds';
 import {
   canTransitionPubquiz,
-  pubquizReward,
   PUBQUIZ_ACTION_TARGET,
   type PubquizAction,
   type PubquizStatus,
 } from '../lib/pubquiz';
+import { revealPubquizQuestion } from '../lib/question-reveal';
 import { wrap } from './_wrap';
 
 const ACTIONS: PubquizAction[] = ['OPEN', 'CLOSE', 'REVEAL', 'REOPEN'];
@@ -63,50 +63,26 @@ export default wrap(async request => {
       throw new HttpError(409, 'This question has moved on since — refresh and try again');
     }
 
-    let rewarded = 0;
-    let paidCoins = 0;
-
+    // Revealing is also paying, and that operation lives in question-reveal.ts because
+    // the central VOLGENDE performs the same step. It writes the status itself, so this
+    // returns straight after rather than falling through to the generic transition below.
     if (action === 'REVEAL') {
-      const reward = pubquizReward(Number(question.points), true);
-      // Everyone who picked the option flagged correct. Ordered by player so two
-      // transactions take the wallet locks in the same sequence and cannot deadlock.
-      const winners = await client.query(
-        `SELECT a.player_id
-         FROM pubquiz_answers a
-         JOIN pubquiz_question_options o ON o.id=a.option_id
-         JOIN players pl ON pl.id=a.player_id
-         JOIN wallets w ON w.player_id=a.player_id
-         WHERE a.question_id=$1 AND o.is_correct AND pl.active=TRUE
-         ORDER BY a.player_id FOR UPDATE OF pl,w`,
-        [questionId],
-      );
-
-      for (const winner of winners.rows) {
-        if (reward <= 0) break;
-        // `ledger_unique_pubquiz_reward` on (question, player, 'PUBQUIZ_REWARD') is what
-        // makes this idempotent; ON CONFLICT DO NOTHING is how we notice it did.
-        const ledger = await client.query(
-          `INSERT INTO ledger_entries(game_night_id,player_id,amount,transaction_type,description,
-             attributed_round_id,pubquiz_question_id,created_by,idempotency_key,metadata)
-           VALUES($1,$2,$3,'PUBQUIZ_REWARD',$4,$5,$6,$7,$8,$9::jsonb)
-           ON CONFLICT DO NOTHING RETURNING id`,
-          [
-            gameId, winner.player_id, reward,
-            `Pubquiz reward: ${question.question}`.slice(0, 200),
-            round.id, questionId, admin.username,
-            `pubquiz:${questionId}:reward:${winner.player_id}`,
-            JSON.stringify({ points: reward }),
-          ],
-        );
-        if (ledger.rows[0]) {
-          await client.query('UPDATE wallets SET current_balance=current_balance+$1,updated_at=NOW() WHERE player_id=$2', [reward, winner.player_id]);
-          rewarded += 1;
-          paidCoins += reward;
-        }
-        // No row means this player was already paid for this question, by an earlier pass
-        // of this same reveal. The wallet move went with it; there is nothing to repair.
-      }
+      const outcome = await revealPubquizQuestion(client, gameId, questionId, admin.username, ['CLOSED']);
+      await audit(client, gameId, admin.username, 'pubquiz question reveal', 'round', round.id, {
+        questionId, rewarded: outcome.rewarded, paidCoins: outcome.paidCoins,
+      });
+      const after = await client.query('SELECT revision FROM pubquiz_question_state WHERE question_id=$1', [questionId]);
+      return {
+        status: 'REVEALED',
+        revision: Number(after.rows[0]?.revision ?? 0),
+        rewarded: outcome.rewarded,
+        paidCoins: outcome.paidCoins,
+        version: await incrementGameVersion(client, gameId),
+      };
     }
+
+    const rewarded = 0;
+    const paidCoins = 0;
 
     const stamps: Record<PubquizStatus, string> = {
       READY: '',

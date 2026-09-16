@@ -168,7 +168,6 @@ describe('admin pages render', () => {
     const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
     expect(html).toContain('VORIGE');
     expect(html).toContain('VOLGENDE');
-    expect(html).toContain('TOON OP SCHERM');
     expect(html).toContain('SLUIT VRAAG'); // question 31 is OPEN
     expect(html).toContain('1 / 3');
   });
@@ -196,8 +195,25 @@ describe('admin pages render', () => {
       const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
       expect(html).toContain('LIVE — OP DE PROJECTOR');
       expect(html).toContain('VOLGENDE — WAT VOLGENDE OP HET SCHERM ZET');
-      // the live side is the real screen, not a mock of it
-      expect(html).toContain(`src="/screen/1"`);
+      // Both panes are the projector's own renderer at projector size — not an iframe, and
+      // not a second interpretation of the state.
+      expect(html.match(/screen-preview/g)!.length).toBeGreaterThanOrEqual(2);
+      expect(html).not.toContain('<iframe');
+      // and the host can still open the real thing full screen
+      expect(html).toContain(`href="/screen/1"`);
+    });
+
+    // 21 · the dashboard is reached only when the projector is actually on the dashboard.
+    // It used to be the fallback for every unmatched mode, which made a scene that failed
+    // to load look like a perfectly healthy standings screen.
+    it('never falls back to the dashboard for a mode it cannot draw', () => {
+      const withBroken = adminState();
+      (withBroken as any).screen = { ...slot('SLIDE', { roundId: 3, slideId: 999 }), revision: 4 };
+      const html = render(createElement(ControlPage, { state: withBroken, gameId: 1, run }));
+      // Nothing has been fetched yet under a static render, so LIVE is honest about that
+      // rather than drawing something.
+      expect(html).toContain('screen-loading');
+      expect(html).not.toContain('value-chip');
     });
 
     // The whole point of the change: there is no intermediate state the host has chosen
@@ -210,20 +226,31 @@ describe('admin pages render', () => {
       expect(html).not.toContain('NOT LIVE YET');
     });
 
-    it('offers VORIGE and VOLGENDE for a round that steps', () => {
+    // 16-18 · one pair of buttons, directly under the two previews
+    it('has exactly one VORIGE and one VOLGENDE, in one bar below the previews', () => {
       const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
-      expect(html).toContain('← VORIGE');
-      expect(html).toContain('VOLGENDE →');
-      expect(html).not.toMatch(/<button [^>]*disabled[^>]*>VOLGENDE →<\/button>/);
+      expect(html.match(/← VORIGE/g)).toHaveLength(1);
+      expect(html.match(/VOLGENDE →/g)).toHaveLength(1);
+      expect(html).toContain('presenter-step-bar');
+      expect(html.indexOf('VOLGENDE — WAT VOLGENDE')).toBeLessThan(html.indexOf('presenter-step-bar'));
     });
 
-    // Backwards navigation is not forced onto state machines where stepping back would
-    // mean unspinning a wheel that has already paid out.
-    it('disables both for a round that is one scene', () => {
-      const state = adminState();
-      state.activeRound = { ...state.activeRound, type: 'ROULETTE' };
-      state.rounds = state.rounds.map((r: any) => (r.id === state.activeRound.id ? state.activeRound : r));
-      const html = render(createElement(ControlPage, { state, gameId: 1, run }));
+    // 19 · the small per-type navigation is gone. Round-type actions that are not
+    // navigation stay, in their own place.
+    it('keeps no navigation anywhere but that bar', () => {
+      const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
+      expect(html).not.toContain('live-nav');
+      expect(html).not.toContain('TOON OP SCHERM');
+      expect(html).not.toContain('GO LIVE');
+      // the quiz's own phase action is not navigation and is still offered
+      expect(html).toContain('SLUIT VRAAG');
+      expect(html).toContain('ACTIES');
+    });
+
+    // The server decides whether a step is possible, so before it has answered the
+    // buttons are off rather than optimistically enabled.
+    it('waits for the server before enabling either button', () => {
+      const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
       expect(html).toMatch(/<button [^>]*disabled[^>]*>VOLGENDE →<\/button>/);
       expect(html).toMatch(/<button [^>]*disabled[^>]*>← VORIGE<\/button>/);
     });

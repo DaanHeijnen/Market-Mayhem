@@ -3,99 +3,286 @@ import { HttpError } from './http';
 import { setScreen, type ScreenTarget } from './game-state';
 import { completeRound } from './round-lifecycle';
 import { visibleNeighbours } from './presentation';
-import { questionIsLive } from './live-quiz';
-import { pubquizIsLive } from './pubquiz';
+import { slideIsRevealed } from './presentation';
+import { isRevealed as quizIsRevealed } from './live-quiz';
+import { pubquizIsRevealed } from './pubquiz';
+import { revealPubquizQuestion, revealQuizQuestion } from './question-reveal';
 import { SCENE_FOR_ROUND_TYPE, type RoundType } from './round-types';
 
 /**
- * Where NEXT and PREVIOUS go, for every round type, in one place.
+ * The chronology of a game night: what VOLGENDE means, everywhere, once.
  *
- * This exists because the Admin needs to answer the same question twice: once to draw the
- * preview of what NEXT will put on the projector, and once to actually put it there. Those
- * were about to become two implementations of the same rules, which is how a preview ends
- * up lying. They are one function instead, and the preview is literally the thing the
- * button will do, asked without doing it.
+ * A round is a story. It opens on its own title card, walks through whatever it holds —
+ * pages and their answers, questions and their reveals, or a single live game scene — and
+ * ends. One pair of buttons walks that story, and this module is the only place that knows
+ * what the next sentence is.
  *
- * It replaces Preview → Go Live. There is no staged slot any more: the host sees what is
- * live and what comes next, and pressing NEXT makes the second the first.
+ * That matters twice over. The Admin has to answer the same question to *draw* the NEXT
+ * preview and to *take* the step, and those were on their way to becoming two
+ * implementations of one rule — which is precisely how a preview starts lying. Here they
+ * are the same function: `planStep` is the step, asked without taking it, and
+ * `advanceScreen` is `planStep` plus the write.
+ *
+ * Central does not mean uniform. Each type keeps its own sequence below, because a
+ * presentation page and a roulette table have nothing in common except that the host
+ * presses the same button to leave them.
+ *
+ *   PRESENTATIE  INTRO → page → its reveal, if it has one → next page → … → COMPLETED
+ *   PUBQUIZ      INTRO → question (opens) → its reveal, which pays → next → … → COMPLETED
+ *   LIVE_QUIZ    INTRO → question (opens) → its reveal, which pays → next → … → COMPLETED
+ *   game rounds  INTRO → the round's own scene, which its own controls drive
+ *
+ * VORIGE is not the inverse of any of that. See `planStep` for why.
  */
 
 export type ScreenStep =
-  /** Put this on the projector. */
-  | { kind: 'target'; target: ScreenTarget; label: string }
+  /** Put this on the projector. `reveal` additionally opens or reveals what it points at. */
+  | { kind: 'target'; target: ScreenTarget; label: string; reveal?: boolean }
   /** There is nothing after this, and stepping forward ends the round. */
   | { kind: 'completeRound'; roundId: number; label: string }
-  /** This round does not step in that direction, and why. */
+  /** Nothing to step to in that direction, and why. */
   | { kind: 'none'; reason: string };
 
 export type NavigationDirection = 'NEXT' | 'PREVIOUS';
 
 /**
- * Whether a round type can be stepped through at all, and in which directions.
+ * Which directions are available right now.
  *
- * Backwards is not universally safe and is not offered universally. A presentation page
- * has no state to undo, so both directions are free. A quiz question can be stepped back
- * to, but only once the current one is settled, which the step itself enforces. The four
- * game rounds are a single live scene driven by their own controls — a roulette table has
- * no "previous" that would not mean unspinning a wheel that has already paid out.
+ * Sent to the Admin rather than guessed there, so a button is disabled because the server
+ * said so and not because the frontend re-derived a rule it might have got wrong.
  */
 export function navigationCapabilities(type: RoundType | null) {
-  if (type === 'PRESENTATIE') return { next: true, previous: true };
-  if (type === 'LIVE_QUIZ') return { next: true, previous: true };
-  if (type === 'PUBQUIZ') return { next: true, previous: true };
-  return { next: false, previous: false };
+  // Every type now has an intro to step out of and back to, so every type navigates.
+  // What differs is how far forward it goes, which is the sequence below.
+  if (!type) return { canGoNext: false, canGoPrevious: false };
+  return { canGoNext: true, canGoPrevious: true };
 }
 
-type ActiveRound = { id: number; type: RoundType; status: string };
+type ActiveRound = {
+  id: number;
+  type: RoundType;
+  status: string;
+  title: string;
+};
 
 async function loadActive(client: PoolClient, gameId: number): Promise<ActiveRound | null> {
   const { rows } = await client.query(
-    `SELECT r.id,r.type,r.status FROM rounds r
+    `SELECT r.id,r.type,r.status,r.title FROM rounds r
      JOIN game_nights g ON g.current_round_id=r.id
      WHERE g.id=$1 AND r.status='ACTIVE'`,
     [gameId],
   );
-  return rows[0] ? { id: Number(rows[0].id), type: rows[0].type as RoundType, status: rows[0].status } : null;
+  return rows[0]
+    ? { id: Number(rows[0].id), type: rows[0].type as RoundType, status: rows[0].status, title: rows[0].title }
+    : null;
+}
+
+/** Where the projector is standing, which is what NEXT is measured from. */
+async function screenPosition(client: PoolClient, gameId: number, round: ActiveRound) {
+  const { rows } = await client.query(
+    `SELECT mode,round_id,quiz_question_id,slide_id,pubquiz_question_id,revision
+     FROM screen_state WHERE game_night_id=$1`,
+    [gameId],
+  );
+  const row = rows[0] || {};
+  const onThisRound = Number(row.round_id || 0) === round.id;
+  return {
+    mode: String(row.mode || 'DASHBOARD'),
+    revision: Number(row.revision ?? 0),
+    onThisRound,
+    onIntro: onThisRound && row.mode === 'ROUND_INTRO',
+    quizQuestionId: onThisRound && row.mode === 'QUIZ_QUESTION' ? Number(row.quiz_question_id || 0) || null : null,
+    slideId: onThisRound && row.mode === 'SLIDE' ? Number(row.slide_id || 0) || null : null,
+    pubquizQuestionId: onThisRound && row.mode === 'PUBQUIZ_QUESTION' ? Number(row.pubquiz_question_id || 0) || null : null,
+  };
+}
+
+type Position = Awaited<ReturnType<typeof screenPosition>>;
+
+const introStep = (round: ActiveRound): ScreenStep => ({
+  kind: 'target',
+  target: { kind: 'roundIntro', roundId: round.id },
+  label: round.title,
+});
+
+/**
+ * PRESENTATIE.
+ *
+ * A page with something to reveal is two steps, not one: the page, then its answer. A page
+ * with nothing to reveal is one step, and no empty answer card is invented for it —
+ * whether it has an answer is read from what the host authored (`reveal_text`, or a title
+ * that is itself the answer).
+ */
+async function planPresentation(
+  client: PoolClient,
+  round: ActiveRound,
+  at: Position,
+  direction: NavigationDirection,
+): Promise<ScreenStep> {
+  const { rows } = await client.query(
+    `SELECT s.id,s.hidden,s.title,s.reveal_text,s.hide_title_until_reveal,st.revealed_at
+     FROM presentation_slides s
+     LEFT JOIN presentation_slide_state st ON st.slide_id=s.id
+     WHERE s.round_id=$1 ORDER BY s.sort_order,s.id`,
+    [round.id],
+  );
+  const pages = rows.map((r: any, index: number) => ({
+    id: Number(r.id),
+    hidden: Boolean(r.hidden),
+    label: (r.title as string) || `Page ${index + 1}`,
+    hasAnswer: Boolean(r.reveal_text) || Boolean(r.hide_title_until_reveal),
+    revealed: slideIsRevealed(r.revealed_at),
+  }));
+
+  if (!pages.length) {
+    return direction === 'NEXT'
+      ? { kind: 'completeRound', roundId: round.id, label: 'This presentation has no pages' }
+      : introStep(round);
+  }
+  const around = visibleNeighbours(pages, at.slideId);
+  if (!around.visibleCount) {
+    return direction === 'NEXT'
+      ? { kind: 'completeRound', roundId: round.id, label: 'Every page is hidden' }
+      : introStep(round);
+  }
+
+  if (direction === 'PREVIOUS') {
+    if (at.slideId == null) return { kind: 'none', reason: 'This is the start of the round' };
+    const back = around.previous;
+    if (back) return { kind: 'target', target: { kind: 'slide', roundId: round.id, slideId: back.id }, label: back.label };
+    return introStep(round);
+  }
+
+  // From the intro, or from anywhere that is not this round's pages, the first page.
+  if (at.slideId == null || around.at < 0) {
+    const first = around.first!;
+    return { kind: 'target', target: { kind: 'slide', roundId: round.id, slideId: first.id }, label: first.label };
+  }
+
+  // Standing on a page that still has its answer to give: the answer is the next step,
+  // on the same page.
+  const current = pages[around.at];
+  if (current.hasAnswer && !current.revealed) {
+    return {
+      kind: 'target',
+      target: { kind: 'slide', roundId: round.id, slideId: current.id },
+      label: `${current.label} — antwoord`,
+      reveal: true,
+    };
+  }
+
+  const next = around.next;
+  if (next) return { kind: 'target', target: { kind: 'slide', roundId: round.id, slideId: next.id }, label: next.label };
+  return { kind: 'completeRound', roundId: round.id, label: 'End of the presentation' };
 }
 
 /**
- * Where the host currently is within the round.
+ * PUBQUIZ and LIVE_QUIZ.
  *
- * Read from `screen_state` when the projector is showing this round, and from the round's
- * own cursor otherwise. Those are two different concepts and stay two different concepts —
- * this only decides which one NEXT should be measured from, and the projector wins when it
- * is pointed at this round, because NEXT means "after what the room is looking at".
+ * The same shape, over two different sets of tables. A question is two steps: asking it —
+ * which opens it for answers, so the host presses one button rather than two — and
+ * revealing it, which is also when it pays.
  */
-async function positionIn(client: PoolClient, gameId: number, round: ActiveRound) {
-  const screen = await client.query(
-    'SELECT mode,round_id,quiz_question_id,slide_id,pubquiz_question_id FROM screen_state WHERE game_night_id=$1',
-    [gameId],
-  );
-  const row = screen.rows[0];
-  const onThisRound = row && Number(row.round_id || 0) === round.id;
-  const runtime = await client.query(
-    'SELECT current_quiz_question_id,current_slide_id,current_pubquiz_question_id FROM round_runtime WHERE round_id=$1',
-    [round.id],
-  );
-  const cursor = runtime.rows[0] || {};
-  return {
-    pubquizQuestionId: onThisRound && row.mode === 'PUBQUIZ_QUESTION'
-      ? Number(row.pubquiz_question_id || 0) || null
-      : Number(cursor.current_pubquiz_question_id || 0) || null,
-    quizQuestionId: onThisRound && row.mode === 'QUIZ_QUESTION'
-      ? Number(row.quiz_question_id || 0) || null
-      : Number(cursor.current_quiz_question_id || 0) || null,
-    slideId: onThisRound && row.mode === 'SLIDE'
-      ? Number(row.slide_id || 0) || null
-      : Number(cursor.current_slide_id || 0) || null,
-    projectorIsOnThisRound: Boolean(onThisRound),
-  };
+async function planQuestions(
+  client: PoolClient,
+  round: ActiveRound,
+  at: Position,
+  direction: NavigationDirection,
+  flavour: 'PUBQUIZ' | 'LIVE_QUIZ',
+): Promise<ScreenStep> {
+  const isPub = flavour === 'PUBQUIZ';
+  const { rows } = isPub
+    ? await client.query(
+      `SELECT q.id,q.hidden,q.question AS label,st.status FROM pubquiz_questions q
+       JOIN pubquiz_question_state st ON st.question_id=q.id
+       WHERE q.round_id=$1 ORDER BY q.sort_order,q.id`,
+      [round.id],
+    )
+    : await client.query(
+      `SELECT q.id,FALSE AS hidden,q.prompt AS label,st.status FROM live_quiz_questions q
+       JOIN live_quiz_question_state st ON st.question_id=q.id
+       WHERE q.round_id=$1 ORDER BY q.sort_order,q.id`,
+      [round.id],
+    );
+
+  const questions = rows.map((r: any) => ({
+    id: Number(r.id),
+    hidden: Boolean(r.hidden),
+    label: r.label as string,
+    status: r.status as string,
+    revealed: isPub ? pubquizIsRevealed(r.status) : quizIsRevealed(r.status),
+  }));
+
+  const currentId = isPub ? at.pubquizQuestionId : at.quizQuestionId;
+  const targetFor = (id: number): ScreenTarget => (isPub
+    ? { kind: 'pubquizQuestion', roundId: round.id, questionId: id }
+    : { kind: 'quizQuestion', roundId: round.id, questionId: id });
+
+  if (!questions.length) {
+    return direction === 'NEXT'
+      ? { kind: 'completeRound', roundId: round.id, label: 'This round has no questions' }
+      : introStep(round);
+  }
+  const around = visibleNeighbours(questions, currentId);
+  if (!around.visibleCount) {
+    return direction === 'NEXT'
+      ? { kind: 'completeRound', roundId: round.id, label: 'Every question is hidden' }
+      : introStep(round);
+  }
+
+  if (direction === 'PREVIOUS') {
+    if (currentId == null) return { kind: 'none', reason: 'This is the start of the round' };
+    const back = around.previous;
+    if (back) return { kind: 'target', target: targetFor(back.id), label: back.label };
+    return introStep(round);
+  }
+
+  if (currentId == null || around.at < 0) {
+    const first = around.first!;
+    return { kind: 'target', target: targetFor(first.id), label: first.label, reveal: true };
+  }
+
+  const current = questions[around.at];
+  // Asked but not answered yet: revealing is the next step, and it is what pays.
+  if (!current.revealed) {
+    return { kind: 'target', target: targetFor(current.id), label: `${current.label} — antwoord`, reveal: true };
+  }
+
+  const next = around.next;
+  if (next) return { kind: 'target', target: targetFor(next.id), label: next.label, reveal: true };
+  return { kind: 'completeRound', roundId: round.id, label: 'End of the round' };
+}
+
+/**
+ * ROULETTE, SLOTMACHINE, PAK_EEN_ZES, FOTORONDE.
+ *
+ * One live scene each, driven entirely by their own controls — opening betting, spinning,
+ * judging a photo. Their chronology is therefore short and honest: the intro, then the
+ * scene. VOLGENDE from the scene ends the round rather than pretending there is a next
+ * page, and VORIGE goes back to the title card without touching anything the round has
+ * done. A settled spin is never unspun by a navigation button.
+ */
+function planGameRound(round: ActiveRound, at: Position, direction: NavigationDirection): ScreenStep {
+  const scene = SCENE_FOR_ROUND_TYPE[round.type];
+  const onScene = at.onThisRound && at.mode === scene;
+
+  if (direction === 'PREVIOUS') {
+    if (onScene) return introStep(round);
+    return { kind: 'none', reason: 'This is the start of the round' };
+  }
+  if (!onScene) return { kind: 'target', target: { kind: 'roundGame', roundId: round.id }, label: round.title };
+  return { kind: 'completeRound', roundId: round.id, label: `End of ${round.title}` };
 }
 
 /**
  * The step NEXT or PREVIOUS would take, without taking it.
  *
- * Pure inspection: it writes nothing, so the Admin can ask for it on every poll.
+ * Reads only, so the Admin can ask for it on every poll to draw the NEXT preview.
+ *
+ * VORIGE deliberately moves the pointer and nothing else. It is presentation history, not
+ * an undo: going back to a page shows it as it now is, revealed answer and all, and going
+ * back past a roulette spin shows the table without unpaying anybody. Domain state is only
+ * ever moved forward, by the round's own controls or by NEXT.
  */
 export async function planStep(
   client: PoolClient,
@@ -105,133 +292,32 @@ export async function planStep(
   const round = await loadActive(client, gameId);
   if (!round) return { kind: 'none', reason: 'No round is being played' };
 
-  const capabilities = navigationCapabilities(round.type);
-  if (direction === 'NEXT' && !capabilities.next) {
-    return { kind: 'none', reason: `A ${round.type} round is one scene — it is driven by its own controls, not by stepping` };
-  }
-  if (direction === 'PREVIOUS' && !capabilities.previous) {
-    return { kind: 'none', reason: `A ${round.type} round has nothing to step back to` };
-  }
+  const at = await screenPosition(client, gameId, round);
 
-  const at = await positionIn(client, gameId, round);
+  // Anywhere that is not this round — the dashboard, a prediction, a round that has since
+  // ended — the way back in is the round's own title card.
+  if (!at.onThisRound) return introStep(round);
 
-  if (round.type === 'PRESENTATIE') {
-    const listed = await client.query(
-      'SELECT id,hidden,title FROM presentation_slides WHERE round_id=$1 ORDER BY sort_order,id',
-      [round.id],
-    );
-    const pages = listed.rows.map((r: any) => ({ id: Number(r.id), hidden: Boolean(r.hidden), title: r.title as string | null }));
-    if (!pages.length) return { kind: 'none', reason: 'This presentation round has no pages yet' };
-
-    const around = visibleNeighbours(pages, at.slideId);
-    if (!around.visibleCount) return { kind: 'none', reason: 'Every page in this round is hidden' };
-
-    // Not yet showing anything from this round: the first page in the run is next.
-    if (direction === 'NEXT' && (at.slideId == null || around.at < 0)) {
-      const first = around.first!;
-      return { kind: 'target', target: { kind: 'slide', roundId: round.id, slideId: first.id }, label: pageLabel(pages, first.id) };
-    }
-
-    const step = direction === 'NEXT' ? around.next : around.previous;
-    if (step) {
-      return { kind: 'target', target: { kind: 'slide', roundId: round.id, slideId: step.id }, label: pageLabel(pages, step.id) };
-    }
-    // Past the last page in the run, forward, is the end of the round — and only from
-    // there. The last page is shown normally first; it is the step *after* it that ends
-    // the presentation.
-    if (direction === 'NEXT') return { kind: 'completeRound', roundId: round.id, label: 'End of the presentation' };
-    return { kind: 'none', reason: 'This is the first page' };
+  if (at.onIntro && direction === 'PREVIOUS') {
+    return { kind: 'none', reason: 'This is the start of the round' };
   }
 
-  if (round.type === 'LIVE_QUIZ') {
-    const listed = await client.query(
-      `SELECT q.id,q.prompt,st.status FROM live_quiz_questions q
-       JOIN live_quiz_question_state st ON st.question_id=q.id
-       WHERE q.round_id=$1 ORDER BY q.sort_order,q.id`,
-      [round.id],
-    );
-    const questions = listed.rows.map((r: any) => ({ id: Number(r.id), prompt: r.prompt as string, status: r.status as string }));
-    if (!questions.length) return { kind: 'none', reason: 'This quiz round has no questions yet' };
-
-    const index = questions.findIndex(q => q.id === at.quizQuestionId);
-    if (direction === 'NEXT' && index < 0) {
-      return { kind: 'target', target: { kind: 'quizQuestion', roundId: round.id, questionId: questions[0].id }, label: questions[0].prompt };
-    }
-
-    // The same rule the quiz's own navigation enforces, asked here so the preview can say
-    // why NEXT is refused rather than letting the host find out by pressing it.
-    const current = index >= 0 ? questions[index] : null;
-    if (current && questionIsLive(current.status)) {
-      return { kind: 'none', reason: `The current question is still ${current.status} — settle it before moving on` };
-    }
-
-    const step = direction === 'NEXT' ? questions[index + 1] : questions[index - 1];
-    if (step) return { kind: 'target', target: { kind: 'quizQuestion', roundId: round.id, questionId: step.id }, label: step.prompt };
-    if (direction === 'NEXT') return { kind: 'completeRound', roundId: round.id, label: 'End of the quiz' };
-    return { kind: 'none', reason: 'This is the first question' };
-  }
-
-  if (round.type === 'PUBQUIZ') {
-    // The full authored list, held-back questions included: the cursor may be standing on
-    // one, and stepping from there still means the nearest question in the run.
-    const listed = await client.query(
-      `SELECT q.id,q.hidden,q.question,st.status FROM pubquiz_questions q
-       JOIN pubquiz_question_state st ON st.question_id=q.id
-       WHERE q.round_id=$1 ORDER BY q.sort_order,q.id`,
-      [round.id],
-    );
-    const questions = listed.rows.map((r: any) => ({
-      id: Number(r.id), hidden: Boolean(r.hidden), question: r.question as string, status: r.status as string,
-    }));
-    if (!questions.length) return { kind: 'none', reason: 'This pubquiz round has no questions yet' };
-
-    const around = visibleNeighbours(questions, at.pubquizQuestionId);
-    if (!around.visibleCount) return { kind: 'none', reason: 'Every question in this round is hidden' };
-
-    if (direction === 'NEXT' && (at.pubquizQuestionId == null || around.at < 0)) {
-      const first = around.first!;
-      return { kind: 'target', target: { kind: 'pubquizQuestion', roundId: round.id, questionId: first.id }, label: labelFor(questions, first.id) };
-    }
-
-    // Stepping away from a question the room has answered but not been told about would
-    // strand their answers with no reveal. Same shape as the quiz's rule, and said here so
-    // the preview can explain the refusal rather than letting the host discover it.
-    const current = around.at >= 0 ? questions[around.at] : null;
-    if (current && pubquizIsLive(current.status)) {
-      return { kind: 'none', reason: `The current question is still ${current.status} — close and reveal it before moving on` };
-    }
-
-    const step = direction === 'NEXT' ? around.next : around.previous;
-    if (step) {
-      return { kind: 'target', target: { kind: 'pubquizQuestion', roundId: round.id, questionId: step.id }, label: labelFor(questions, step.id) };
-    }
-    if (direction === 'NEXT') return { kind: 'completeRound', roundId: round.id, label: 'End of the pubquiz' };
-    return { kind: 'none', reason: 'This is the first question' };
-  }
-
-  return { kind: 'none', reason: `A ${round.type} round is one scene` };
-}
-
-function labelFor(questions: { id: number; question: string }[], id: number) {
-  return questions.find(q => q.id === id)?.question ?? 'Question';
-}
-
-function pageLabel(pages: { id: number; title: string | null }[], id: number) {
-  const index = pages.findIndex(p => p.id === id);
-  const page = pages[index];
-  return page?.title || `Page ${index + 1}`;
+  if (round.type === 'PRESENTATIE') return planPresentation(client, round, at, direction);
+  if (round.type === 'PUBQUIZ') return planQuestions(client, round, at, direction, 'PUBQUIZ');
+  if (round.type === 'LIVE_QUIZ') return planQuestions(client, round, at, direction, 'LIVE_QUIZ');
+  return planGameRound(round, at, direction);
 }
 
 /**
  * Take the step, and put it on the projector in the same breath.
  *
- * NEXT means "show the next thing", not "select the next thing". The intermediate GO LIVE
- * is gone: what the host presses is what the room sees.
+ * NEXT means "show the next thing", not "select the next thing" — what the host presses is
+ * what the room sees, with no intermediate confirmation.
  *
- * The round's own cursor moves with it, so progression and presentation stay in step while
- * remaining two separate ideas — `expectedRevision` guards that cursor, so a NEXT issued
- * from a tab that has fallen behind is refused rather than dragging the projector back to
- * where that tab thought it was.
+ * `expectedRevision` is the screen revision the Admin was looking at. A step from a tab
+ * that has fallen behind is refused rather than dragging the room back to where that tab
+ * thought the evening was. The screen rather than the round cursor, because the intro and
+ * the round-ending step belong to no item inside a round.
  */
 export async function advanceScreen(
   client: PoolClient,
@@ -240,17 +326,19 @@ export async function advanceScreen(
   actor: string,
   expectedRevision: number | null,
 ) {
+  // Held until this transaction commits, so two steps arriving together serialise here
+  // rather than racing each other to the projector.
+  const locked = await client.query(
+    'SELECT revision FROM screen_state WHERE game_night_id=$1 FOR UPDATE',
+    [gameId],
+  );
+  const revision = Number(locked.rows[0]?.revision ?? 0);
+  if (expectedRevision != null && revision !== expectedRevision) {
+    throw new HttpError(409, 'The big screen has moved on since — refresh and try again');
+  }
+
   const round = await loadActive(client, gameId);
   if (!round) throw new HttpError(409, 'No round is being played');
-
-  const runtime = await client.query(
-    'SELECT revision FROM round_runtime WHERE round_id=$1 FOR UPDATE',
-    [round.id],
-  );
-  const revision = Number(runtime.rows[0]?.revision ?? 0);
-  if (expectedRevision != null && revision !== expectedRevision) {
-    throw new HttpError(409, 'This round has moved on since — refresh and try again');
-  }
 
   const step = await planStep(client, gameId, direction);
   if (step.kind === 'none') throw new HttpError(409, step.reason);
@@ -260,25 +348,13 @@ export async function advanceScreen(
     return { kind: 'completeRound' as const, roundId: round.id, completed, revision };
   }
 
-  // `setScreen` moves the round's cursor with the projector, so there is one write and
-  // one place that decides where the round is. The revision check above is the guard:
-  // the runtime row is held FOR UPDATE from there until this transaction commits, so a
-  // step from a stale tab was already refused before anything moved.
+  // Reveal before showing, so the projector never renders the unrevealed version of a
+  // state the host has already stepped past.
+  if (step.reveal) await applyReveal(client, gameId, step.target, actor);
+
   await setScreen(client, gameId, step.target, actor);
 
-  // A pubquiz question that has never been asked opens the moment it reaches the
-  // projector: the host presses one button, not two, and the phones are ready before the
-  // room has finished reading the question. Guarded on READY, so stepping *back* onto a
-  // closed or revealed question never reopens scoring the room has already seen.
-  if (step.target.kind === 'pubquizQuestion') {
-    await client.query(
-      `UPDATE pubquiz_question_state SET status='OPEN',opened_at=NOW(),revision=revision+1,updated_at=NOW()
-       WHERE question_id=$1 AND status='READY'`,
-      [step.target.questionId],
-    );
-  }
-
-  const after = await client.query('SELECT revision FROM round_runtime WHERE round_id=$1', [round.id]);
+  const after = await client.query('SELECT revision FROM screen_state WHERE game_night_id=$1', [gameId]);
   return {
     kind: 'target' as const,
     target: step.target,
@@ -289,56 +365,63 @@ export async function advanceScreen(
 }
 
 /**
- * What the projector should show the moment a round starts.
+ * Open or reveal whatever the step points at.
  *
- * Starting a round now claims the big screen, for every type. The rule it replaces —
- * progression and presentation are separate, so starting changes nothing the room sees —
- * was right about the concepts and wrong about the host: it meant every round began with a
- * dashboard on the wall and a second click to fix it.
+ * Which of the two depends on where the question already is, and that is the whole of the
+ * pubquiz and quiz chronology: arriving on a fresh question asks it, and stepping again
+ * from an asked question answers it. Two presses, two meanings, one button.
  *
- * The two ideas are still separate. Starting is simply defined as including a presentation
- * decision, made here, once, for every type — rather than each surface guessing.
+ * Revealing is where the coins move, so it goes through the same `question-reveal`
+ * operation the reveal button uses rather than writing a status here — one rule, two
+ * callers. Every write is guarded on the state it expects, so a step that arrives twice
+ * changes nothing the second time.
+ */
+async function applyReveal(client: PoolClient, gameId: number, target: ScreenTarget, actor: string) {
+  if (target.kind === 'slide') {
+    // A slide's reveal pays nothing, so it is a plain guarded flag.
+    await client.query(
+      `UPDATE presentation_slide_state SET revealed_at=NOW(),revision=revision+1,updated_at=NOW()
+       WHERE slide_id=$1 AND revealed_at IS NULL`,
+      [target.slideId],
+    );
+    return;
+  }
+
+  if (target.kind === 'pubquizQuestion') {
+    const opened = await client.query(
+      `UPDATE pubquiz_question_state SET status='OPEN',opened_at=NOW(),revision=revision+1,updated_at=NOW()
+       WHERE question_id=$1 AND status='READY' RETURNING question_id`,
+      [target.questionId],
+    );
+    // It was fresh, so this step asked it. Answering it is the next press.
+    if (opened.rows[0]) return;
+    await revealPubquizQuestion(client, gameId, target.questionId, actor);
+    return;
+  }
+
+  if (target.kind === 'quizQuestion') {
+    const opened = await client.query(
+      `UPDATE live_quiz_question_state SET status='OPEN',opened_at=NOW(),revision=revision+1,updated_at=NOW()
+       WHERE question_id=$1 AND status='READY' RETURNING question_id`,
+      [target.questionId],
+    );
+    if (opened.rows[0]) return;
+    await revealQuizQuestion(client, gameId, target.questionId, actor);
+  }
+}
+
+/**
+ * What the projector shows the moment a round starts: the round's own title card.
+ *
+ * Deliberately not the first question. A round that opens on its content gives the room no
+ * moment to see what is starting, and gives the host nowhere to stand while explaining it.
+ * The content is one VOLGENDE away.
  */
 export async function initialScreenTarget(
-  client: PoolClient,
-  gameId: number,
+  _client: PoolClient,
+  _gameId: number,
   roundId: number,
-  type: RoundType,
+  _type: RoundType,
 ): Promise<ScreenTarget | null> {
-  if (type === 'PRESENTATIE') {
-    const { rows } = await client.query(
-      'SELECT id FROM presentation_slides WHERE round_id=$1 AND hidden=FALSE ORDER BY sort_order,id LIMIT 1',
-      [roundId],
-    );
-    // A round with nothing in the run has nothing to show, and putting an empty scene on
-    // the projector would be worse than leaving the dashboard up.
-    return rows[0] ? { kind: 'slide', roundId, slideId: Number(rows[0].id) } : null;
-  }
-
-  if (type === 'LIVE_QUIZ') {
-    const { rows } = await client.query(
-      'SELECT id FROM live_quiz_questions WHERE round_id=$1 ORDER BY sort_order,id LIMIT 1',
-      [roundId],
-    );
-    return rows[0] ? { kind: 'quizQuestion', roundId, questionId: Number(rows[0].id) } : null;
-  }
-
-  if (type === 'PUBQUIZ') {
-    const { rows } = await client.query(
-      'SELECT id FROM pubquiz_questions WHERE round_id=$1 AND hidden=FALSE ORDER BY sort_order,id LIMIT 1',
-      [roundId],
-    );
-    if (!rows[0]) return null;
-    // Starting the round opens the first question, so the room can answer it straight
-    // away rather than waiting for the host to press a second button.
-    await client.query(
-      `UPDATE pubquiz_question_state SET status='OPEN',opened_at=NOW(),revision=revision+1,updated_at=NOW()
-       WHERE question_id=$1 AND status='READY'`,
-      [Number(rows[0].id)],
-    );
-    return { kind: 'pubquizQuestion', roundId, questionId: Number(rows[0].id) };
-  }
-
-  // The four game rounds are one scene each, named by the round itself.
-  return SCENE_FOR_ROUND_TYPE[type] ? { kind: 'roundGame', roundId } : null;
+  return { kind: 'roundIntro', roundId };
 }

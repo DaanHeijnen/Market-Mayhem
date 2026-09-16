@@ -37,6 +37,8 @@ export function isRoundType(value: unknown): value is RoundType {
  */
 export const SCREEN_MODES = [
   'DASHBOARD',
+  // The round's own title card: where every round starts, drawn from the round row.
+  'ROUND_INTRO',
   'QUIZ_QUESTION',
   'SLIDE',
   'PUBQUIZ_QUESTION',
