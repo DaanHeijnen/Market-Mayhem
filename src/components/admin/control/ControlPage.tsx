@@ -66,7 +66,9 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
     if (slot.slideId) {
       const slide = (round?.slides || []).find((x: any) => x.id === slot.slideId);
       if (!slide) return { accent: 'muted', eyebrow: 'SLIDE REMOVED', title: '—', sub: 'This step no longer exists.', badge: 'IDLE' };
-      return { accent: 'cyan', eyebrow: 'PRESENTATIE', title: slide.title || '(no title)', sub: slide.body || 'A slide on the big screen.', badge: slide.revealedAt ? 'REVEALED' : 'HIDDEN' };
+      // The badge is about this page's secret, not about whether the page is in the run —
+      // "HIDDEN" used to say both and could only ever be right about one of them.
+      return { accent: 'cyan', eyebrow: 'PRESENTATIE', title: slide.title || '(no title)', sub: slide.body || 'A page on the big screen.', badge: slide.revealedAt ? 'REVEALED' : 'NOT REVEALED' };
     }
     if (slot.predictionId) {
       const prediction = s.predictions.find((p: any) => p.id === slot.predictionId);
@@ -200,21 +202,46 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
 
     if (activeRound.type === 'PRESENTATIE') {
       const slides = activeRound.slides || [];
-      if (!slides.length) return <span className="muted live-meta">This presentation round has no slides yet.</span>;
-      if (!currentSlide) return <span className="muted live-meta">No slide selected.</span>;
-      const index = slides.findIndex((x: any) => x.id === currentSlide.id);
+      if (!slides.length) return <span className="muted live-meta">This presentation round has no pages yet.</span>;
+      if (!currentSlide) return <span className="muted live-meta">No page selected.</span>;
+      // Counted over the run rather than over everything authored, because that is what
+      // previous and next actually walk. A cursor left standing on a page the host has
+      // just held back is not in the run at all, and says so.
+      //
+      // Button affordance only. The rule lives in netlify/lib/presentation.ts and is
+      // enforced by slide-navigate — src and netlify are separate TypeScript projects, so
+      // this reads the same list rather than importing the same function.
+      const at = slides.findIndex((x: any) => x.id === currentSlide.id);
+      const visible = slides.filter((x: any) => !x.hidden);
+      const around = {
+        at,
+        previous: slides.slice(0, Math.max(at, 0)).filter((x: any) => !x.hidden).slice(-1)[0] || null,
+        next: at < 0 ? null : slides.slice(at + 1).find((x: any) => !x.hidden) || null,
+        visibleCount: visible.length,
+        visibleIndex: currentSlide.hidden ? -1 : visible.findIndex((x: any) => x.id === currentSlide.id),
+      };
       const hasSecret = Boolean(currentSlide.revealText || currentSlide.hideTitleUntilReveal);
+      const liveHere = live.mode === 'SLIDE' && live.slideId === currentSlide.id;
       return <>
         {hasSecret && (currentSlide.revealedAt
-          ? <button className="btn btn-secondary" onClick={() => revealSlide(false)}>VERBERG WEER</button>
+          ? <button className="btn btn-secondary" onClick={() => revealSlide(false)}>VERBERG ANTWOORD</button>
           : <button className="btn btn-success" onClick={() => revealSlide(true)}>TOON ANTWOORD</button>)}
         <span className="live-nav">
-          <button className="btn btn-secondary btn-compact" disabled={index <= 0} onClick={() => slideNavigate('PREVIOUS')}>← VORIGE</button>
-          <span className="muted mono">{index + 1} / {slides.length}</span>
-          <button className="btn btn-secondary btn-compact" disabled={index >= slides.length - 1} onClick={() => slideNavigate('NEXT')}>VOLGENDE →</button>
-          <button className="btn btn-blue btn-compact" onClick={() => showNow({ kind: 'slide', roundId: activeRound.id, slideId: currentSlide.id })}>TOON OP SCHERM</button>
+          <button className="btn btn-secondary btn-compact" disabled={!around.previous} onClick={() => slideNavigate('PREVIOUS')}>← VORIGE</button>
+          <span className="muted mono">{around.visibleIndex >= 0 ? `${around.visibleIndex + 1} / ${around.visibleCount}` : `— / ${around.visibleCount}`}</span>
+          <button className="btn btn-secondary btn-compact" disabled={!around.next && around.at >= 0} onClick={() => slideNavigate('NEXT')}>VOLGENDE →</button>
+          <button
+            className="btn btn-blue btn-compact"
+            disabled={currentSlide.hidden || liveHere}
+            onClick={() => showNow({ kind: 'slide', roundId: activeRound.id, slideId: currentSlide.id })}
+          >{liveHere ? 'OP HET SCHERM' : 'TOON OP SCHERM'}</button>
         </span>
-        {!hasSecret && <span className="muted live-meta">This slide has nothing hidden — nothing to reveal.</span>}
+        {currentSlide.hidden
+          ? <span className="muted live-meta">
+            This page is held back, so it is skipped by previous/next and cannot go on the big screen.
+            {' '}<button className="text-button" onClick={() => run('/api/set-slide-visibility', { slideId: currentSlide.id, hidden: false })}>MAAK ZICHTBAAR</button>
+          </span>
+          : !hasSecret && <span className="muted live-meta">This page has no secret — nothing to reveal.</span>}
       </>;
     }
 

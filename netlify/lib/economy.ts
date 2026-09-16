@@ -84,3 +84,26 @@ export function rouletteBetWins(type: RouletteBetType, selection: string, result
 }
 
 export const QUESTION_EMOJIS = ['🍆','🌽','🍑','😳'] as const;
+
+/**
+ * Whether a ledger row found under a replayed idempotency key is the request that is
+ * being replayed, or a different request that reused the key.
+ *
+ * The amount is only part of the comparison when the caller asked for a movement. A
+ * caller who asked for a destination ("make it 250") computes a different movement the
+ * second time round — the first request already moved the balance there — so comparing
+ * amounts would turn a successful replay into a 409. What identifies the intent in that
+ * case is the player, the reason and the round it was attributed to.
+ */
+export function isSameManualAdjustment(
+  existing: { transaction_type: string; player_id: unknown; amount: unknown; description: string; attributed_round_id: unknown },
+  intent: { playerId: number; requestedAmount: number | null; reason: string; roundId: number | null },
+) {
+  if (existing.transaction_type !== 'MANUAL_ADJUSTMENT') return false;
+  if (Number(existing.player_id) !== intent.playerId) return false;
+  if (existing.description !== intent.reason) return false;
+  const round = existing.attributed_round_id == null ? null : Number(existing.attributed_round_id);
+  if (round !== intent.roundId) return false;
+  if (intent.requestedAmount === null) return true;
+  return Number(existing.amount) === intent.requestedAmount;
+}

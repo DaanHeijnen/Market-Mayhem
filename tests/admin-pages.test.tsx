@@ -84,8 +84,8 @@ function adminState(overrides: Record<string, unknown> = {}) {
     rounds: [QUIZ_ROUND, FINALE_ROUND],
     activeRound: QUIZ_ROUND,
     players: [
-      { id: 1, display_name: 'Daan', public_color: '#9B2FF2', active: true, current_balance: 340, locked_prediction: 40, rank: 1, joined: true },
-      { id: 2, display_name: 'Jorrit', public_color: '#E8352F', active: true, current_balance: 260, locked_prediction: 0, rank: 2, joined: false },
+      { id: 1, display_name: 'Jordi', public_color: '#9B2FF2', active: true, current_balance: 340, locked_prediction: 40, rank: 1, joined: true, is_default: true },
+      { id: 2, display_name: 'Jorrit', public_color: '#E8352F', active: true, current_balance: 260, locked_prediction: 0, rank: 2, joined: false, is_default: false },
     ],
     predictions,
     activePredictions: [] as unknown[],
@@ -330,7 +330,7 @@ describe('admin pages render', () => {
     expect(html).toContain('Hoofdstad van Frankrijk?');
     expect(html).toContain('ROUND GROUPS');
     // No slide or subject editor in sight — this round is not those types.
-    expect(html).not.toContain('ADD A SLIDE');
+    expect(html).not.toContain('ADD A PAGE');
     expect(html).not.toContain('ADD A SUBJECT');
   });
 
@@ -339,9 +339,79 @@ describe('admin pages render', () => {
       rounds: [{ ...QUIZ_ROUND, id: 9, type: 'PRESENTATIE', title: 'Intro', questions: undefined, slides: [] }],
     });
     const html = render(createElement(RoundsPage, { state, gameId: 1, roundId: 9, run }));
-    expect(html).toContain('ADD A SLIDE');
+    expect(html).toContain('ADD A PAGE');
     expect(html).toContain('THE SECRET — WHAT STAYS OFF THE PROJECTOR UNTIL YOU REVEAL');
     expect(html).not.toContain('ADD A QUESTION');
+  });
+
+  /**
+   * The presentation editor has to answer four questions at a glance: what the pages are,
+   * what order they are in, which are part of the run, and which one the room is looking
+   * at. A held-back page is the one that is easy to get wrong — it has to stay fully
+   * visible here while being absent from the projector.
+   */
+  describe('the presentation editor', () => {
+    const page = (id: number, sortOrder: number, title: string, extra: Record<string, unknown> = {}) => ({
+      id, roundId: 9, sortOrder, title, body: '', mediaKey: null, mediaKind: null, mediaName: null,
+      revealText: null, hideTitleUntilReveal: false, hidden: false, revealedAt: null, revision: 0, ...extra,
+    });
+
+    const presentation = (overrides: Record<string, unknown> = {}) => adminState({
+      rounds: [{
+        ...QUIZ_ROUND, id: 9, type: 'PRESENTATIE', title: 'Intro', status: 'ACTIVE', questions: undefined,
+        slides: [page(1, 0, 'Welkom'), page(2, 1, 'Reserve', { hidden: true }), page(3, 2, 'Slot')],
+      }],
+      ...overrides,
+    });
+
+    const editor = (state: any) => render(createElement(RoundsPage, { state, gameId: 1, roundId: 9, run }));
+
+    it('lists every page, held back or not, in its authored order', () => {
+      const html = editor(presentation());
+      expect(html).toContain('Welkom');
+      expect(html).toContain('Reserve');
+      expect(html).toContain('Slot');
+      expect(html.indexOf('Welkom')).toBeLessThan(html.indexOf('Reserve'));
+      expect(html.indexOf('Reserve')).toBeLessThan(html.indexOf('Slot'));
+      expect(html).toContain('01 · PAGE');
+      expect(html).toContain('02 · PAGE · NOT IN THE RUN');
+    });
+
+    it('says which pages are in the run and which are held back', () => {
+      const html = editor(presentation());
+      expect(html.match(/>VISIBLE</g)).toHaveLength(2);
+      expect(html.match(/>HIDDEN</g)).toHaveLength(1);
+      expect(html).toContain('2 pages in the run, 1 held back');
+    });
+
+    it('offers MAKE VISIBLE on a held-back page and HIDE on the others', () => {
+      const html = editor(presentation());
+      expect(html.match(/>MAKE VISIBLE</g)).toHaveLength(1);
+      expect(html.match(/>HIDE</g)).toHaveLength(2);
+    });
+
+    // A held-back page gets no SHOW ON SCREEN, because the server would refuse it. The
+    // one step needed first is the button right beside it.
+    it('offers SHOW ON SCREEN only for pages that can actually be shown', () => {
+      const html = editor(presentation());
+      expect(html.match(/>SHOW ON SCREEN</g)).toHaveLength(2);
+    });
+
+    it('marks the page the projector is pointed at', () => {
+      const html = editor(presentation({ screen: slot('SLIDE', { roundId: 9, slideId: 3 }) }));
+      expect(html).toContain('ON SCREEN');
+      expect(html).toContain('is-live-card');
+      // and that page does not offer to be shown again
+      expect(html.match(/>SHOW ON SCREEN</g)).toHaveLength(1);
+    });
+
+    it('cannot send anything to the screen before the round is started', () => {
+      const state = presentation();
+      state.rounds[0].status = 'UPCOMING';
+      const html = editor(state);
+      expect(html).toContain('Start the round to put a page on the big screen');
+      expect(html).toMatch(/<button [^>]*disabled[^>]*>SHOW ON SCREEN<\/button>/);
+    });
   });
 
   it('renders the Fotoronde editor with per-subject credits', () => {
@@ -412,6 +482,16 @@ describe('admin pages render', () => {
     expect(html).toContain('EDIT');
     expect(html).toContain('ADJUST COINS');
     expect(html).toContain('DEACTIVATE');
+  });
+
+  // A reset restores the standard ten and removes everyone else, so which of the two a
+  // player is has to be visible on the card rather than only described in Settings.
+  it('says which players are the standard ten and which were added by hand', () => {
+    const html = render(createElement(PlayersPage, { state: adminState(), gameId: 1, run, setMsg: () => {} }));
+    expect(html).toContain('Standard player');
+    // one marker, for Jordi — Jorrit was added by hand and carries none
+    expect(html.match(/Standard player/g)).toHaveLength(1);
+    expect(html).toContain('a reset removes them and restores the standard ten');
   });
 
   it('gates the game reset on the typed phrase and keeps the wallet cap setting', () => {

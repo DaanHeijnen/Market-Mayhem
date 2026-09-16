@@ -40,13 +40,14 @@ export function SettingsPage({ state: s, gameId, run, onReset }: { state: any; g
     <Card className="reset-card danger-inline">
       <div className="label reset-text">RESET AVOND</div>
       <h2 className="display">Full Reset</h2>
-      <p className="muted">Wipes everything the test run produced and leaves the prepared evening exactly as you built it. Use this once you have tested the night and want to play it for real.</p>
+      <p className="muted">Wipes everything the test run produced and leaves the prepared evening exactly as you built it. Use this once you have tested the night and want to play it for real. The player list goes back to the ten standard players on 100 coins each.</p>
       <button className="text-button reset-detail-toggle" onClick={() => setResetDetail(x => !x)}>{resetDetail ? 'Hide what is reset and what is kept' : 'Show what is reset and what is kept'}</button>
       {resetDetail && <div className="reset-columns">
         <div>
           <div className="label reset-text">RESET</div>
           <ul className="danger-list">
-            <li>all wallets back to each player's starting coins</li>
+            <li>the ten standard players back on their starting coins</li>
+            <li>every player you added by hand during the test run</li>
             <li>the entire ledger and every deposit, payout and refund</li>
             <li>prediction deposits, results and participation</li>
             <li>roulette games, bets and spins</li>
@@ -67,7 +68,7 @@ export function SettingsPage({ state: s, gameId, run, onReset }: { state: any; g
             <li>slotmachine symbols, chances and payouts</li>
             <li>Pak een Zes, Fotoronde and roulette configuration</li>
             <li>teams and who is in them</li>
-            <li>all players, their join links and their sessions</li>
+            <li>the ten standard players, with their join links and sessions</li>
             <li>the game settings on this page</li>
           </ul>
         </div>
@@ -97,6 +98,7 @@ export function SettingsPage({ state: s, gameId, run, onReset }: { state: any; g
         <li>Fotoronde photos, judgements and credits</li>
         <li>screen state and game settings</li>
       </ul>}
+      <p className="muted">The ten standard players are created again afterwards, each on 100 coins. Everything else on the list is gone for good.</p>
       <p>Type exactly <b>yes delete</b> to confirm.</p>
       <input className="field" value={phrase} onChange={e => setPhrase(e.target.value)} placeholder="yes delete" />
       <button className="btn btn-danger btn-danger-large" disabled={phrase.trim() !== 'yes delete'} onClick={async () => { if (await run('/api/reset-game', { confirmation: phrase.trim() })) { setPhrase(''); onReset(); } }}>DELETE GAME SAVE</button>

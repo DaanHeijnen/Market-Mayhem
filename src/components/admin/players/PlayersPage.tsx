@@ -4,7 +4,13 @@ import { Card, CoinAmount, Empty, Status } from '../ui';
 
 const defaultColor = '#3D5AFE';
 
-type Adjustment = { playerId: number; amount: string; reason: string; roundId: string; idempotencyKey: string } | null;
+/**
+ * `mode` decides what the number in the box means: a movement to apply, or the balance to
+ * end on. Both go to the same route and both become one ledger entry — a destination is
+ * turned into a movement on the server, under the wallet's lock, so it cannot be computed
+ * against a balance this screen has already polled away from.
+ */
+type Adjustment = { playerId: number; mode: 'delta' | 'target'; amount: string; reason: string; roundId: string; idempotencyKey: string } | null;
 
 export function PlayersPage({ state: s, gameId, run, setMsg }: { state: any; gameId: number; run: RunMutation; setMsg: (value: string) => void }) {
   const [name, setName] = useState('');
@@ -58,7 +64,9 @@ export function PlayersPage({ state: s, gameId, run, setMsg }: { state: any; gam
     try {
       if (await run('/api/adjust-coins', {
         playerId: adjustment.playerId,
-        amount: Number(adjustment.amount),
+        ...(adjustment.mode === 'target'
+          ? { targetBalance: Number(adjustment.amount) }
+          : { amount: Number(adjustment.amount) }),
         reason: adjustment.reason,
         roundId: adjustment.roundId ? Number(adjustment.roundId) : null,
       }, true, adjustment.idempotencyKey)) setAdjustment(null);
@@ -74,6 +82,9 @@ export function PlayersPage({ state: s, gameId, run, setMsg }: { state: any; gam
   return <div className="page-stack">
     <Card>
       <div className="label muted">ADD PLAYER</div>
+      {/* Worth saying here rather than only in Settings: the ten standard players come
+          back after a reset, and anyone added on this card does not. */}
+      <p className="muted">The ten standard players are already here. Anyone you add is an extra for this night — a reset removes them and restores the standard ten.</p>
       <div className="inline-form">
         <input className="field" placeholder="Display name" value={name} onChange={e => setName(e.target.value)} />
         <label className="color-field"><span>Public color</span><input aria-label="Player color" type="color" value={color} onChange={e => setColor(e.target.value)} className="color-input" /></label>
@@ -86,7 +97,7 @@ export function PlayersPage({ state: s, gameId, run, setMsg }: { state: any; gam
         <div className="player-row">
           <div className="player-identity">
             <span className="player-dot" style={{ background: player.public_color }} />
-            <div><div className="display row-title">{player.display_name}</div><div className="player-meta"><CoinAmount value={player.current_balance} />{player.locked_prediction > 0 && <span className="muted">+ {player.locked_prediction} locked</span>}<span className="muted">· {player.active ? (player.joined ? 'Joined' : 'Not joined') : 'Deactivated'}</span></div></div>
+            <div><div className="display row-title">{player.display_name}</div><div className="player-meta"><CoinAmount value={player.current_balance} />{player.locked_prediction > 0 && <span className="muted">+ {player.locked_prediction} locked</span>}<span className="muted">· {player.active ? (player.joined ? 'Joined' : 'Not joined') : 'Deactivated'}</span>{player.is_default && <span className="muted">· Standard player</span>}</div></div>
           </div>
           {/* The design pairs the status with the one action a host reaches for most,
               right of the name. The rest of the controls live in the pill row below. */}
@@ -104,7 +115,7 @@ export function PlayersPage({ state: s, gameId, run, setMsg }: { state: any; gam
         </div> : player.active && <div className="actions actions-compact">
           <button className="btn btn-secondary btn-compact" onClick={() => setEditing({ ...player })}>EDIT</button>
           {player.joined && <button className="btn btn-secondary btn-compact" onClick={() => generateLink(player, true)}>NEW LINK + REVOKE SESSION</button>}
-          <button className="btn btn-secondary btn-compact" onClick={() => setAdjustment({ playerId: player.id, amount: '', reason: '', roundId: '', idempotencyKey: crypto.randomUUID() })}>ADJUST COINS</button>
+          <button className="btn btn-secondary btn-compact" onClick={() => setAdjustment({ playerId: player.id, mode: 'delta', amount: '', reason: '', roundId: '', idempotencyKey: crypto.randomUUID() })}>ADJUST COINS</button>
           <button className="btn btn-danger-ghost btn-compact" onClick={() => run('/api/remove-player', { playerId: player.id })}>DEACTIVATE</button>
         </div>}
 
@@ -117,7 +128,18 @@ export function PlayersPage({ state: s, gameId, run, setMsg }: { state: any; gam
         {adjustment?.playerId === player.id && <div className="inline-adjustment-panel">
           <div className="label muted">COIN ADJUSTMENT</div>
           <div className="form-grid compact admin-dense-form">
-            <input className="field" type="number" placeholder="25 or -10" value={adjustment?.amount ?? ''} onChange={e => updateAdjustment(player.id, { amount: e.target.value })} />
+            <select className="field" aria-label="Adjustment kind" value={adjustment?.mode ?? 'delta'} onChange={e => updateAdjustment(player.id, { mode: e.target.value as 'delta' | 'target', amount: '' })}>
+              <option value="delta">Adjust by</option>
+              <option value="target">Set to</option>
+            </select>
+            <input
+              className="field"
+              type="number"
+              min={adjustment?.mode === 'target' ? 0 : undefined}
+              placeholder={adjustment?.mode === 'target' ? `New balance, now ${player.current_balance}` : '25 or -10'}
+              value={adjustment?.amount ?? ''}
+              onChange={e => updateAdjustment(player.id, { amount: e.target.value })}
+            />
             <input className="field" placeholder="Mandatory reason" value={adjustment?.reason ?? ''} onChange={e => updateAdjustment(player.id, { reason: e.target.value })} />
             <select className="field" value={adjustment?.roundId ?? ''} onChange={e => updateAdjustment(player.id, { roundId: e.target.value })}>
               <option value="">General / no round</option>
@@ -125,7 +147,7 @@ export function PlayersPage({ state: s, gameId, run, setMsg }: { state: any; gam
             </select>
           </div>
           <div className="actions actions-compact">
-            <button className="btn btn-primary btn-compact" disabled={savingAdjustment || !adjustment?.amount || Number(adjustment?.amount) === 0 || !adjustment?.reason.trim()} onClick={saveAdjustment}>{savingAdjustment ? 'SAVING…' : 'SAVE'}</button>
+            <button className="btn btn-primary btn-compact" disabled={savingAdjustment || adjustment?.amount === '' || Number.isNaN(Number(adjustment?.amount)) || (adjustment?.mode === 'delta' ? Number(adjustment?.amount) === 0 : Number(adjustment?.amount) < 0) || !adjustment?.reason.trim()} onClick={saveAdjustment}>{savingAdjustment ? 'SAVING…' : 'SAVE'}</button>
             <button className="btn btn-secondary btn-compact" onClick={() => setAdjustment(null)}>CANCEL</button>
           </div>
         </div>}

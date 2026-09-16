@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isSlideMediaKind, slideIsRevealed, slideTitleIsPublic } from '../netlify/lib/presentation';
+import { isSlideMediaKind, slideIsRevealed, slideTitleIsPublic, visibleNeighbours } from '../netlify/lib/presentation';
 import { screenSlide, adminSlide } from '../netlify/lib/dto';
 
 const slide = (extra: Record<string, unknown> = {}) => ({
@@ -109,5 +109,83 @@ describe('what the projector receives about the roulette', () => {
 
   it('is null when there is no table', () => {
     expect(screenRoulette(null)).toBeNull();
+  });
+});
+
+/**
+ * Which page previous/next land on.
+ *
+ * The brief's own example, written out: with page 2 held back, stepping forward from
+ * page 1 reaches page 3, and making page 2 visible again restores 1 → 2 → 3 without
+ * anything being renumbered.
+ */
+describe('stepping through a presentation', () => {
+  const pages = (...hidden: number[]) =>
+    [1, 2, 3].map(id => ({ id, hidden: hidden.includes(id) }));
+
+  it('skips a held-back page going forward', () => {
+    expect(visibleNeighbours(pages(2), 1).next).toEqual({ id: 3, hidden: false });
+  });
+
+  it('skips it going back as well', () => {
+    expect(visibleNeighbours(pages(2), 3).previous).toEqual({ id: 1, hidden: false });
+  });
+
+  it('restores the plain order once the page is visible again', () => {
+    expect(visibleNeighbours(pages(), 1).next).toEqual({ id: 2, hidden: false });
+    expect(visibleNeighbours(pages(), 3).previous).toEqual({ id: 2, hidden: false });
+  });
+
+  it('skips a run of held-back pages rather than only one', () => {
+    expect(visibleNeighbours([...pages(2, 3), { id: 4, hidden: false }], 1).next).toEqual({ id: 4, hidden: false });
+  });
+
+  it('has nowhere to go past the last visible page', () => {
+    expect(visibleNeighbours(pages(3), 2).next).toBeNull();
+    expect(visibleNeighbours(pages(1), 2).previous).toBeNull();
+  });
+
+  // The case a filtered list gets wrong: the host holds back the page that is currently
+  // up, so the cursor stands on a page that is no longer in the run. Stepping still has
+  // to mean the nearest visible page in that direction.
+  it('still steps sensibly from a page that was just held back', () => {
+    const around = visibleNeighbours(pages(2), 2);
+    expect(around.currentIsHidden).toBe(true);
+    expect(around.previous).toEqual({ id: 1, hidden: false });
+    expect(around.next).toEqual({ id: 3, hidden: false });
+    // and it is nowhere in the run, so the counter cannot claim a position
+    expect(around.visibleIndex).toBe(-1);
+    expect(around.visibleCount).toBe(2);
+  });
+
+  it('starts at the first visible page when the cursor is nowhere', () => {
+    expect(visibleNeighbours(pages(1), null).first).toEqual({ id: 2, hidden: false });
+    expect(visibleNeighbours(pages(1), null).at).toBe(-1);
+  });
+
+  it('counts the run, not the authored list', () => {
+    expect(visibleNeighbours(pages(2), 1).visibleCount).toBe(2);
+    expect(visibleNeighbours(pages(), 1).visibleCount).toBe(3);
+    expect(visibleNeighbours(pages(1, 2, 3), 1).visibleCount).toBe(0);
+  });
+});
+
+describe('what each audience is told about a page', () => {
+  it('tells the Admin whether a page is in the run', () => {
+    expect(adminSlide(slide({ hidden: true })).hidden).toBe(true);
+    expect(adminSlide(slide({ hidden: false })).hidden).toBe(false);
+    // absent on the row entirely — an older query, or the projector's — reads as visible
+    expect(adminSlide(slide()).hidden).toBe(false);
+  });
+
+  // The projector is only ever pointed at a page in the run, so the flag would always say
+  // the same thing — and which pages a host is holding back is planning, not something
+  // the room is entitled to.
+  it('tells the projector nothing about held-back pages', () => {
+    const shown = screenSlide(slide({ hidden: false, revealed_at: new Date() }));
+    expect(shown).not.toHaveProperty('hidden');
+    expect(Object.keys(shown)).toEqual(
+      expect.not.arrayContaining(['hidden', 'hideTitleUntilReveal', 'mediaName', 'roundId', 'revision']),
+    );
   });
 });

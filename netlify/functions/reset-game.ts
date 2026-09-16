@@ -2,6 +2,7 @@ import { requireAdmin, audit } from '../lib/auth';
 import { withTransaction } from '../lib/db';
 import { body, ok, intValue, HttpError } from '../lib/http';
 import { incrementGameVersion } from '../lib/game-state';
+import { resetPlayersToDefaults } from '../lib/default-players';
 import { wrap } from './_wrap';
 import { requireGameResetPhrase } from '../lib/settings';
 
@@ -63,11 +64,22 @@ export default wrap(async request => {
     await client.query('DELETE FROM wallets WHERE game_night_id=$1', [gameId]);
     await client.query('DELETE FROM players WHERE game_night_id=$1', [gameId]);
     await client.query('DELETE FROM teams WHERE game_night_id=$1', [gameId]);
+    // Everything the night held is gone, including its players — so the last step is to
+    // put back the roster a night starts from. Without it the Admin would be left staring
+    // at an empty player list with no way to get the standard ten back, which is not what
+    // "reset to the beginning" means. Same domain function the Full Reset uses, so the
+    // two destructive actions cannot drift into disagreeing about who is playing.
+    const roster = await resetPlayersToDefaults(client, gameId, admin.username);
     await client.query(
       `INSERT INTO screen_state(game_night_id,mode,payload,updated_by)
        VALUES($1,'DASHBOARD','{}'::jsonb,$2)`,
       [gameId, admin.username],
     );
-    return { ok: true, version: await incrementGameVersion(client, gameId) };
+    return {
+      ok: true,
+      playersCreated: roster.created,
+      startingBalanceEntries: roster.startingBalanceEntries,
+      version: await incrementGameVersion(client, gameId),
+    };
   }));
 });

@@ -177,7 +177,9 @@ export async function enterRound(client: PoolClient, gameId: number, roundId: nu
     await client.query(
       `UPDATE round_runtime SET current_slide_id=COALESCE(
          current_slide_id,
-         (SELECT id FROM presentation_slides WHERE round_id=$1 ORDER BY sort_order,id LIMIT 1)
+         -- The first page *in the run*. Starting a round on a page the host has held
+         -- back would put the cursor somewhere previous/next cannot reach.
+         (SELECT id FROM presentation_slides WHERE round_id=$1 AND hidden=FALSE ORDER BY sort_order,id LIMIT 1)
        ),updated_at=NOW() WHERE round_id=$1`,
       [roundId],
     );

@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg';
 import { HttpError } from './http';
 import { incrementGameVersion } from './game-state';
+import { resetPlayersToDefaults } from './default-players';
 
 /**
  * Full Reset: wipe the *played* night, keep the *prepared* night.
@@ -76,7 +77,10 @@ export const PRESERVED_TABLES = [
   'slot_configs',          // slotmachine total
   'slot_reel_symbols',     // uploaded symbols
   'slot_outcome_types',    // chances and payouts
-  'players',               // so the Admin need not re-create everyone
+  // The ten standard players are put back rather than re-created: same rows, so their
+  // join links and sessions survive. Anyone added by hand during the test run is
+  // removed — a reset returns the night to the roster it starts from.
+  'players',               // reset to the standard ten, in place
   'wallets',               // kept, but set back to each player's starting balance
   'player_join_tokens',    // so issued join links keep working into the real night
   'player_sessions',       // so testers stay signed in
@@ -93,6 +97,8 @@ export const PRESERVED_TABLES = [
 export type FullResetSummary = {
   deleted: Record<string, number>;
   playersReset: number;
+  playersCreated: number;
+  playersRemoved: number;
   roundsReset: number;
   questionsReset: number;
   slidesReset: number;
@@ -147,38 +153,12 @@ export async function performFullReset(client: PoolClient, gameId: number, actor
     deleted[table] = result.rowCount ?? 0;
   }
 
-  // Wallets go back to each player's own immutable starting snapshot, not to today's
-  // Settings value — that snapshot is what the player was created with, and the
-  // exchange graph is drawn from it.
-  const wallets = await client.query(
-    `UPDATE wallets w
-     SET current_balance=p.starting_balance_snapshot,updated_at=NOW()
-     FROM players p
-     WHERE p.id=w.player_id AND w.game_night_id=$1
-     RETURNING w.player_id,p.starting_balance_snapshot AS amount`,
-    [gameId],
-  );
-
-  // One fresh STARTING_BALANCE entry per player, so the ledger sums to the wallet again.
-  //
-  // Deliberately not a correcting transaction against the test run: the brief asks for a
-  // functionally clean slate, and a compensating entry would leave the test night visible
-  // in the history as though it had really happened. The old rows are gone, so this pair
-  // is the whole story — which is also what keeps wallet and ledger from drifting apart.
-  let startingBalanceEntries = 0;
-  for (const row of wallets.rows) {
-    const amount = Number(row.amount);
-    // A zero starting balance is legitimate, and ledger_entries forbids a zero amount —
-    // so those players simply get no opening entry, and their wallet is already correct.
-    // create-player skips it for the same reason.
-    if (amount === 0) continue;
-    await client.query(
-      `INSERT INTO ledger_entries(game_night_id,player_id,amount,transaction_type,description,created_by)
-       VALUES($1,$2,$3,'STARTING_BALANCE','Starting balance',$4)`,
-      [gameId, row.player_id, amount, actor],
-    );
-    startingBalanceEntries += 1;
-  }
+  // The roster the night starts from, restored: the ten standard players on their
+  // starting balance, with one opening ledger entry each and nobody else on the list.
+  // Deliberately after the deletes above — those clear the night's runtime, and this
+  // then owns everything that is player-shaped, so wallets and ledger are rebuilt in
+  // one place instead of two.
+  const roster = await resetPlayersToDefaults(client, gameId, actor);
 
   // Rounds keep their number, title, description and content — only their progress goes.
   const rounds = await client.query(
@@ -210,7 +190,7 @@ export async function performFullReset(client: PoolClient, gameId: number, actor
   await client.query(
     `UPDATE round_runtime rt SET
        current_quiz_question_id=(SELECT id FROM live_quiz_questions WHERE round_id=rt.round_id ORDER BY sort_order,id LIMIT 1),
-       current_slide_id=(SELECT id FROM presentation_slides WHERE round_id=rt.round_id ORDER BY sort_order,id LIMIT 1),
+       current_slide_id=(SELECT id FROM presentation_slides WHERE round_id=rt.round_id AND hidden=FALSE ORDER BY sort_order,id LIMIT 1),
        revision=0,updated_at=NOW()
      WHERE game_night_id=$1`,
     [gameId],
@@ -257,12 +237,14 @@ export async function performFullReset(client: PoolClient, gameId: number, actor
 
   return {
     deleted,
-    playersReset: wallets.rowCount ?? 0,
+    playersReset: roster.created + roster.restored,
+    playersCreated: roster.created,
+    playersRemoved: roster.removed,
     roundsReset: rounds.rowCount ?? 0,
     questionsReset: questions.rowCount ?? 0,
     slidesReset: slides.rowCount ?? 0,
     predictionsReset: predictions.rowCount ?? 0,
-    startingBalanceEntries,
+    startingBalanceEntries: roster.startingBalanceEntries,
     version,
   };
 }

@@ -199,7 +199,7 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
     </Card>
 
     {round.type === 'LIVE_QUIZ' && <QuizEditor round={round} gameId={gameId} run={run} readOnly={readOnly} />}
-    {round.type === 'PRESENTATIE' && <PresentationEditor round={round} gameId={gameId} run={run} readOnly={readOnly} />}
+    {round.type === 'PRESENTATIE' && <PresentationEditor state={s} round={round} gameId={gameId} run={run} readOnly={readOnly} />}
     {round.type === 'FOTORONDE' && <FotorondeEditor round={round} gameId={gameId} run={run} readOnly={readOnly} />}
     {round.type === 'SLOTMACHINE' && <SlotmachineEditor state={s} round={round} gameId={gameId} run={run} readOnly={readOnly} />}
     {round.type === 'ROULETTE' && <Card>
