@@ -2,7 +2,7 @@ import { requirePlayer } from '../lib/auth';
 import { withTransaction } from '../lib/db';
 import { body, ok, intValue, requestIdempotencyKey, HttpError } from '../lib/http';
 import { incrementGameVersion } from '../lib/game-state';
-import { normalizeRouletteSelection, payoutForStake, roulettePayoutMultiplier, type RouletteBetType } from '../lib/economy';
+import { isRouletteChip, normalizeRouletteSelection, payoutForStake, roulettePayoutMultiplier, ROULETTE_CHIPS, type RouletteBetType } from '../lib/economy';
 import { wrap } from './_wrap';
 
 type DraftBet = { betType: RouletteBetType; selection: string; stake: number; multiplier: number };
@@ -20,7 +20,13 @@ export default wrap(async request => {
     if (!['NUMBER','COLOR','PARITY','RANGE'].includes(type)) throw new HttpError(400, `Invalid roulette bet type at position ${index + 1}`);
     let selection: string;
     try { selection = normalizeRouletteSelection(type, raw.selection); } catch (error) { throw new HttpError(400, (error as Error).message); }
+    // A chip, or nothing. The phone offers exactly this set and the server accepts exactly
+    // this set — there is no free amount to validate a range against, which is what the
+    // old min/max pair was standing in for.
     const stake = intValue(raw.stake, `stake ${index + 1}`, { min: 1, max: 1_000_000 });
+    if (!isRouletteChip(stake)) {
+      throw new HttpError(400, `Chip ${index + 1} must be one of ${ROULETTE_CHIPS.join(', ')}`);
+    }
     return { betType: type, selection, stake, multiplier: roulettePayoutMultiplier(type) };
   });
 

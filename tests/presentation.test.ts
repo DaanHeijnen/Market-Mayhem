@@ -97,7 +97,32 @@ describe('what the projector receives about the roulette', () => {
   // Built, not spread: the row it replaced was a SELECT rg.* going onto a public snapshot.
   it('sends only the fields it was built with', () => {
     expect(Object.keys(screenRoulette(table('OPEN'))!).sort())
-      .toEqual(['id', 'publicBets', 'resultNumber', 'roundId', 'spunAt', 'status']);
+      .toEqual(['id', 'publicBets', 'resultNumber', 'roundId', 'runNumber', 'spunAt', 'status']);
+  });
+
+  // A run's financial summary is the one thing that must not arrive early: before the
+  // wheel has paid out, the key is absent rather than zero.
+  it('sends no settlement summary until the run has paid out', () => {
+    for (const status of ['OPEN', 'LOCKED', 'SPINNING', 'RESULT']) {
+      expect(screenRoulette(table(status)), status).not.toHaveProperty('settlement');
+    }
+  });
+
+  it('sends the three totals once the run is settled, with net already subtracted', () => {
+    const settled = screenRoulette({
+      ...table('SETTLED'), total_staked: 1200, total_payout: 900,
+      participant_count: 8, eligible_players: 10,
+    })!;
+    expect(settled.settlement).toEqual({
+      staked: 1200,
+      payout: 900,
+      // Players are 300 down over the run. Sent computed so the projector cannot render
+      // gross payout and net result the wrong way round.
+      net: -300,
+      participants: 8,
+      eligiblePlayers: 10,
+      participationPercentage: 80,
+    });
   });
 
   // The room is meant to see whose chips these are; it has no use for a player id.

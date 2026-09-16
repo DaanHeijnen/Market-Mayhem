@@ -1,18 +1,25 @@
 import { requireAdmin, audit } from '../lib/auth';
 import { withTransaction } from '../lib/db';
 import { body, ok, intValue, HttpError } from '../lib/http';
-import { incrementGameVersion } from '../lib/game-state';
+import { incrementGameVersion, setScreen } from '../lib/game-state';
 import { lockRound } from '../lib/rounds';
 import { enterRound } from '../lib/round-lifecycle';
+import { initialScreenTarget } from '../lib/screen-flow';
 import { wrap } from './_wrap';
 
 /**
  * Start a round.
  *
- * Changes progression only. Scheduled markets open for phones in the background and the
- * round's own runtime is prepared, but the projector stays exactly where it was until the
- * Admin explicitly shows something — `enterRound` writes no screen state and this handler
- * does not call `setScreen`.
+ * Three things, in one transaction: the round becomes ACTIVE, its own runtime is prepared,
+ * and the projector is pointed at it.
+ *
+ * That last one is a deliberate reversal. Starting used to leave the big screen alone, on
+ * the principle that progression and presentation are separate concerns — which they are,
+ * and still are. But in practice every round began with a dashboard on the wall and a
+ * second click to fix it, and the two ideas being separate is not a reason to make the
+ * host say the same thing twice. Starting a round is now *defined* as including the
+ * presentation decision, and `initialScreenTarget` is the one place that decides what each
+ * type opens on, so no frontend has to guess.
  */
 export default wrap(async request => {
   const admin = await requireAdmin(request);
@@ -46,6 +53,11 @@ export default wrap(async request => {
 
     await enterRound(client, gameId, roundId, round.type);
 
+    // A round with nothing to show — an empty presentation, a quiz with no questions —
+    // returns null and leaves the screen alone rather than opening on a blank scene.
+    const target = await initialScreenTarget(client, gameId, roundId, round.type);
+    if (target) await setScreen(client, gameId, target, admin.username);
+
     const opened = await client.query(
       `UPDATE predictions
        SET status='OPEN',opened_at=NOW(),closes_at=NOW()+(prediction_time_seconds::text||' seconds')::interval,updated_at=NOW()
@@ -56,7 +68,12 @@ export default wrap(async request => {
 
     await audit(client, gameId, admin.username, `started round ${round.sortOrder} (${round.type})`, 'round', roundId, {
       openedPredictions: opened.rowCount,
+      shownOnScreen: target?.kind ?? null,
     });
-    return { openedPredictions: opened.rowCount, version: await incrementGameVersion(client, gameId) };
+    return {
+      openedPredictions: opened.rowCount,
+      shownOnScreen: target?.kind ?? null,
+      version: await incrementGameVersion(client, gameId),
+    };
   }));
 });

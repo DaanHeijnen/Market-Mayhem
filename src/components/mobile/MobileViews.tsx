@@ -1,4 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
+
+/**
+ * The stakes a chip can be.
+ *
+ * Mirrors ROULETTE_CHIPS in netlify/lib/economy.ts — src and netlify are separate
+ * TypeScript projects. The server is authoritative and rejects anything else, so the worst
+ * a drift here can do is offer a chip that bounces; tests/roulette.test.ts keeps them in
+ * step.
+ */
+export const ROULETTE_CHIPS = [1, 5, 10, 25] as const;
 import { mutation } from '../../lib/api';
 import { CoinIcon } from '../shared/CoinIcon';
 import { RouletteTable, type RouletteMarker, type RoulettePosition } from '../shared/RouletteTable';
@@ -27,6 +37,7 @@ export function MobileViews({ state: s, gameId, view, predictionId, busy, act, g
 }) {
   const currentPrediction = s.predictions.find((p: any) => p.id === predictionId);
   if (s.quizQuestion) return <LiveQuestionView state={s} question={s.quizQuestion} busy={busy} act={act} gameId={gameId} />;
+  if (s.pubquizQuestion) return <PubquizQuestionView state={s} question={s.pubquizQuestion} busy={busy} act={act} gameId={gameId} />;
   // Backend-driven, like the live question above it: while a slotmachine block is the
   // live content the phone becomes its controller, and it goes away again on its own
   // when the Admin moves to the next block. There is no route to reach it by hand.
@@ -206,7 +217,7 @@ function PublicPredictionPill({ p }: { p: any }) {
 
 function RouletteView({ state: s, busy, act, go, gameId }: { state: any; busy: boolean; act: (x: () => Promise<unknown>) => void; go: (x?: string) => void; gameId: number }) {
   const rg = s.roulette;
-  const [chip, setChip] = useState(5);
+  const [chip, setChip] = useState<number>(ROULETTE_CHIPS[1]);
   const [pending, setPending] = useState<Array<RoulettePosition & { stake: number }>>([]);
   const [submissionKey, setSubmissionKey] = useState(() => crypto.randomUUID());
   useEffect(() => { setPending([]); setSubmissionKey(crypto.randomUUID()); }, [rg?.id]);
@@ -237,7 +248,10 @@ function RouletteView({ state: s, busy, act, go, gameId }: { state: any; busy: b
       {rg.result_number != null && <div className="roulette-result-badge"><span>WINNING NUMBER</span><b>{rg.result_number}</b></div>}
       {rg.status === 'OPEN' ? <>
         <div className="roulette-help"><b>1.</b> Choose a chip <b>2.</b> Tap one or more table positions <b>3.</b> Confirm</div>
-        <div className="chip-picker">{[1, 5, 10, 25].map(v => <button key={v} className={`chip ${chip === v ? 'selected' : ''}`} onClick={() => setChip(v)}>{v}</button>)}<label className="custom-chip">Custom<input type="number" min="1" max={Math.max(1, s.player.balance)} value={chip} onChange={e => setChip(Math.max(1, Number(e.target.value) || 1))} /></label></div>
+        {/* The chips are the whole set of stakes. The free-amount field that used to sit
+            beside them is gone: the server accepts these four values and nothing else, so
+            an input offering anything more could only ever produce a rejected bet. */}
+        <div className="chip-picker">{ROULETTE_CHIPS.map(v => <button key={v} className={`chip ${chip === v ? 'selected' : ''}`} disabled={v > s.player.balance} onClick={() => setChip(v)}>{v}</button>)}</div>
         <RouletteTable onSelect={addPosition} markers={markers} />
         {pending.length > 0 && <div className="pending-bets"><div className="row-between"><b>Next chips</b><button className="text-button" onClick={() => setPending([])}>Clear</button></div>{pending.map((b, i) => <div className="pending-bet" key={`${b.betType}-${b.selection}`}><span>{rouletteLabel(b)}</span><b>{b.stake}</b><button aria-label="Remove chip" onClick={() => setPending(x => x.filter((_, j) => j !== i))}>×</button></div>)}</div>}
         <div className="roulette-confirm"><div><span>Available</span><b>{s.player.balance}</b></div><div><span>New stake</span><b>{total}</b></div><button className="btn btn-primary btn-full" disabled={busy || pending.length === 0 || total > s.player.balance} onClick={() => act(async () => { await mutation('/api/place-roulette-bets', { gameId, rouletteGameId: rg.id, bets: pending }, true, submissionKey); setPending([]); setSubmissionKey(crypto.randomUUID()); })}>PLACE {pending.length} CHIP{pending.length === 1 ? '' : 'S'} · {total}</button></div>
@@ -314,6 +328,75 @@ function LiveQuestionView({ state: s, question, busy, act, gameId }: { state: an
       <b>{question.myAnswerCorrect ? 'CORRECT' : submitted ? 'NOT THIS TIME' : 'NO ANSWER SENT'}</b>
       <span>{
         question.myAnswerCorrect && question.points > 0 ? `+${question.points} coins credited automatically.`
+          : question.myAnswerCorrect ? 'Correct answer.'
+            : submitted ? 'No reward on this question.' : 'You did not answer this question.'
+      }</span>
+    </Card>}
+
+    <div className="live-question-wallet"><CoinIcon size={18} /> {s.player.balance} available</div>
+  </div>;
+}
+
+/**
+ * The pubquiz question, on a phone.
+ *
+ * The same shape as the live quiz view and deliberately so — a player should not have to
+ * learn two ways to answer a question in one evening. Two differences are real: the
+ * question's image is here from the start rather than after a reveal, and there is exactly
+ * one correct answer, so the reveal names it rather than listing a set.
+ *
+ * Which option is correct is absent from the payload until the host reveals, so there is
+ * nothing here to hide — the phone physically cannot know the answer early.
+ */
+function PubquizQuestionView({ state: s, question, busy, act, gameId }: { state: any; question: any; busy: boolean; act: (x: () => Promise<unknown>) => void; gameId: number }) {
+  const submitted = question.myOptionId != null;
+  const revealed = question.status === 'REVEALED';
+  const correct = question.options.find((o: any) => o.isCorrect) || null;
+
+  return <div className="live-question-mobile">
+    <div className="live-question-header">
+      <div className="label muted">PUBQUIZ · {question.points} POINT{question.points === 1 ? '' : 'S'}</div>
+      <div className="pill status-pill open">{question.status}</div>
+    </div>
+    <h2 className="live-question-prompt">{question.question}</h2>
+    {question.body && <p className="live-question-support muted">{question.body}</p>}
+    {question.mediaKey && <img className="pubquiz-phone-image" src={`/api/block-media?key=${encodeURIComponent(question.mediaKey)}`} alt="" />}
+    <p className="live-question-instruction muted">{
+      question.status === 'READY' ? 'Get ready.'
+        : question.status === 'OPEN' && !submitted ? 'Choose one answer.'
+          : question.status === 'OPEN' ? 'Answer saved. Watch the big screen.'
+            : question.status === 'CLOSED' ? submitted ? 'Answers are closed — yours is saved.' : 'Answers are closed.'
+              : revealed ? 'Result revealed.' : ''
+    }</p>
+
+    <div className="emoji-answer-grid">
+      {question.options.map((option: any, index: number) => {
+        const selected = question.myOptionId === option.id;
+        const resultClass = revealed ? (option.isCorrect ? 'correct' : selected ? 'incorrect' : '') : '';
+        return <button
+          key={option.id}
+          className={`emoji-answer ${selected ? 'selected' : ''} ${resultClass}`}
+          disabled={busy || question.status !== 'OPEN' || submitted}
+          onClick={() => act(() => mutation('/api/submit-pubquiz-answer', { gameId, questionId: question.id, optionId: option.id }))}
+        >
+          <span>{QUESTION_EMOJIS[index]}</span>
+          <b className="emoji-answer-text">{option.text}</b>
+          {selected && <small>{revealed ? (question.myAnswerCorrect ? 'CORRECT' : 'YOUR ANSWER') : 'LOCKED'}</small>}
+        </button>;
+      })}
+    </div>
+
+    {submitted && !revealed && <Card className="answer-locked"><b>ANSWER LOCKED</b><span>Your answer is saved — you do not need to send it again.</span></Card>}
+
+    {revealed && correct && <Card className="answer-reveal">
+      <b>JUISTE ANTWOORD</b>
+      <span className="answer-reveal-value">{correct.text}</span>
+    </Card>}
+
+    {revealed && <Card className={question.myAnswerCorrect ? 'answer-correct' : 'answer-wrong'}>
+      <b>{question.myAnswerCorrect ? 'CORRECT' : submitted ? 'NOT THIS TIME' : 'NO ANSWER SENT'}</b>
+      <span>{
+        question.myPoints > 0 ? `+${question.myPoints} coins credited automatically.`
           : question.myAnswerCorrect ? 'Correct answer.'
             : submitted ? 'No reward on this question.' : 'You did not answer this question.'
       }</span>
@@ -434,7 +517,7 @@ function SlotControllerView({ state: s, slot, busy, act, gameId }: { state: any;
               <label className="slot-field">
                 <span className="label muted">INZET PER SPIN</span>
                 <div className="slot-stake-picker">
-                  {[1, 5, 10, 25].map(value => <button key={value} className={`chip ${stakePerSpin === value ? 'selected' : ''}`} disabled={value > s.player.balance} onClick={() => setStakePerSpin(value)}>{value}</button>)}
+                  {ROULETTE_CHIPS.map(value => <button key={value} className={`chip ${stakePerSpin === value ? 'selected' : ''}`} disabled={value > s.player.balance} onClick={() => setStakePerSpin(value)}>{value}</button>)}
                   <input className="field slot-stake-input" type="number" min={1} max={Math.max(1, s.player.balance)} value={stakePerSpin} onChange={e => setStakePerSpin(Math.max(1, Number(e.target.value) || 1))} />
                 </div>
               </label>

@@ -2,11 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { RunMutation } from '../types';
 import { Accordion, Card, Countdown, ProgressBar, Status } from '../ui';
+import { ScreenRender } from '../../broadcast/BigScreen';
 import { CoinIcon } from '../../shared/CoinIcon';
 import { QUIZ_OPTION_EMOJIS, roundContentCount, roundItems, roundMeta } from '../roundMeta';
-
-/** A presentable thing, described for the staged card. */
-type Described = { accent: string; eyebrow: string; title: string; sub: string; badge: string };
 
 export function ControlPage({ state: s, gameId, run }: { state: any; gameId: number; run: RunMutation }) {
   const nav = useNavigate();
@@ -29,15 +27,8 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
   const isFresh = activePlayers.length === 0 && s.rounds.length === 0 && s.predictions.length === 0;
 
   const live = s.screen || {};
-  const staged = live.staged || {};
   const pendingRequests = (s.predictionRequests || []).filter((r: any) => r.status === 'PENDING');
-  const sameAsLive = staged.mode === live.mode
-    && (staged.roundId || null) === (live.roundId || null)
-    && (staged.questionId || null) === (live.questionId || null)
-    && (staged.slideId || null) === (live.slideId || null)
-    && (staged.predictionId || null) === (live.predictionId || null);
 
-  const findRound = (id: number | null) => (id ? s.rounds.find((r: any) => r.id === id) || null : null);
 
   /**
    * The question or slide the round's cursor is on.
@@ -52,49 +43,26 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
   const currentSlide = activeRound?.type === 'PRESENTATIE'
     ? (activeRound.slides || []).find((x: any) => x.id === runtime?.currentSlideId) || null
     : null;
+  const currentPubquiz = activeRound?.type === 'PUBQUIZ'
+    ? (activeRound.pubquizQuestions || []).find((q: any) => q.id === runtime?.currentPubquizQuestionId) || null
+    : null;
 
-  const describe = (slot: any): Described => {
-    if (!slot?.mode) return { accent: 'muted', eyebrow: 'NOTHING STAGED', title: '—', sub: 'Pick a step from the round below.', badge: 'IDLE' };
-    if (slot.mode === 'DASHBOARD') return { accent: 'ink', eyebrow: 'MARKET DASHBOARD', title: 'Coin value chart & live ticker', sub: 'The exchange dashboard with every player\u2019s trend line.', badge: 'DASHBOARD' };
-
-    const round = findRound(slot.roundId);
-    if (slot.questionId) {
-      const question = (round?.questions || []).find((q: any) => q.id === slot.questionId);
-      if (!question) return { accent: 'muted', eyebrow: 'QUESTION REMOVED', title: '—', sub: 'This step no longer exists.', badge: 'IDLE' };
-      return { accent: 'violet', eyebrow: 'LIVE QUIZ', title: question.prompt, sub: `${question.points} point${question.points === 1 ? '' : 's'} · phones show the answer buttons.`, badge: question.status };
-    }
-    if (slot.slideId) {
-      const slide = (round?.slides || []).find((x: any) => x.id === slot.slideId);
-      if (!slide) return { accent: 'muted', eyebrow: 'SLIDE REMOVED', title: '—', sub: 'This step no longer exists.', badge: 'IDLE' };
-      // The badge is about this page's secret, not about whether the page is in the run —
-      // "HIDDEN" used to say both and could only ever be right about one of them.
-      return { accent: 'cyan', eyebrow: 'PRESENTATIE', title: slide.title || '(no title)', sub: slide.body || 'A page on the big screen.', badge: slide.revealedAt ? 'REVEALED' : 'NOT REVEALED' };
-    }
-    if (slot.predictionId) {
-      const prediction = s.predictions.find((p: any) => p.id === slot.predictionId);
-      if (!prediction) return { accent: 'muted', eyebrow: 'MARKET REMOVED', title: '—', sub: 'This market no longer exists.', badge: 'IDLE' };
-      return { accent: 'blue', eyebrow: `PREDICTION #${prediction.display_number}`, title: prediction.question, sub: 'Players vote and bet on this from their phones.', badge: prediction.status };
-    }
-    if (round) {
-      const meta = roundMeta(round.type);
-      return { accent: meta.accent, eyebrow: meta.label.toUpperCase(), title: round.title, sub: meta.description, badge: round.status };
-    }
-    return { accent: 'muted', eyebrow: 'NOTHING STAGED', title: '—', sub: 'Pick a step from the round below.', badge: 'IDLE' };
-  };
-
-  const stagedView = describe(staged);
   const livePrediction = s.predictions.find((p: any) => p.id === live.predictionId) || null;
 
-  // Staging and going live both take the same shapes, because a step the host can stage
-  // and then not go live with would be a trap.
-  const stageTarget = (target: Record<string, unknown>) => run('/api/stage-item', target);
   const showNow = (target: Record<string, unknown>) => run('/api/show-on-screen', target);
-  const goLive = () => run('/api/go-live', {});
+  // One endpoint for both directions, and the same one the VOLGENDE preview asked. The
+  // cursor revision travels with it, so a step from a tab that has fallen behind is
+  // refused instead of pulling the projector backwards.
+  const step = (direction: 'NEXT' | 'PREVIOUS') => run('/api/advance-screen', { direction, revision: runtime?.revision });
+  // Which directions this round type supports at all. Mirrors navigationCapabilities in
+  // netlify/lib/screen-flow.ts, which is what the server actually enforces.
+  const navigable = activeRound && ['PRESENTATIE', 'LIVE_QUIZ', 'PUBQUIZ'].includes(activeRound.type)
+    ? { next: true, previous: true }
+    : { next: false, previous: false };
 
   const rouletteAction = (action: string) => activeRoulette && run('/api/roulette-action', { rouletteGameId: activeRoulette.id, action }, true);
   const quizAction = (action: string) => currentQuestion && run('/api/quiz-question-action', { questionId: currentQuestion.id, action, revision: currentQuestion.revision });
-  const quizNavigate = (action: string) => activeRound && run('/api/quiz-navigate', { roundId: activeRound.id, action, revision: runtime?.revision });
-  const slideNavigate = (action: string) => activeRound && run('/api/slide-navigate', { roundId: activeRound.id, action, revision: runtime?.revision });
+  const pubquizAction = (action: string) => currentPubquiz && run('/api/pubquiz-question-action', { questionId: currentPubquiz.id, action, revision: currentPubquiz.revision });
   const revealSlide = (revealed: boolean) => currentSlide && run('/api/reveal-slide', { slideId: currentSlide.id, revealed, revision: currentSlide.revision });
   const questionPhoto = (show: boolean) => currentQuestion && run('/api/show-question-photo', { questionId: currentQuestion.id, show });
   const pezAction = (action: string) => activeRound && run('/api/pak-een-zes-action', { roundId: activeRound.id, action });
@@ -184,9 +152,9 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
         {/* Question navigation, which replaced the old generic previous/next block
             stepping. It refuses to leave a question that still owes somebody a reward. */}
         <span className="live-nav">
-          <button className="btn btn-secondary btn-compact" disabled={index <= 0} onClick={() => quizNavigate('PREVIOUS')}>← VORIGE</button>
+          <button className="btn btn-secondary btn-compact" disabled={index <= 0} onClick={() => step('PREVIOUS')}>← VORIGE</button>
           <span className="muted mono">{index + 1} / {questions.length}</span>
-          <button className="btn btn-secondary btn-compact" disabled={index >= questions.length - 1} onClick={() => quizNavigate('NEXT')}>VOLGENDE →</button>
+          <button className="btn btn-secondary btn-compact" disabled={index >= questions.length - 1} onClick={() => step('NEXT')}>VOLGENDE →</button>
           <button className="btn btn-blue btn-compact" onClick={() => showNow({ kind: 'quizQuestion', roundId: activeRound.id, questionId: currentQuestion.id })}>TOON OP SCHERM</button>
         </span>
 
@@ -227,9 +195,9 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
           ? <button className="btn btn-secondary" onClick={() => revealSlide(false)}>VERBERG ANTWOORD</button>
           : <button className="btn btn-success" onClick={() => revealSlide(true)}>TOON ANTWOORD</button>)}
         <span className="live-nav">
-          <button className="btn btn-secondary btn-compact" disabled={!around.previous} onClick={() => slideNavigate('PREVIOUS')}>← VORIGE</button>
+          <button className="btn btn-secondary btn-compact" disabled={!around.previous} onClick={() => step('PREVIOUS')}>← VORIGE</button>
           <span className="muted mono">{around.visibleIndex >= 0 ? `${around.visibleIndex + 1} / ${around.visibleCount}` : `— / ${around.visibleCount}`}</span>
-          <button className="btn btn-secondary btn-compact" disabled={!around.next && around.at >= 0} onClick={() => slideNavigate('NEXT')}>VOLGENDE →</button>
+          <button className="btn btn-secondary btn-compact" disabled={!around.next && around.at >= 0} onClick={() => step('NEXT')}>VOLGENDE →</button>
           <button
             className="btn btn-blue btn-compact"
             disabled={currentSlide.hidden || liveHere}
@@ -245,16 +213,65 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
       </>;
     }
 
+    if (activeRound.type === 'PUBQUIZ') {
+      const questions = activeRound.pubquizQuestions || [];
+      if (!questions.length) return <span className="muted live-meta">This pubquiz round has no questions yet.</span>;
+      if (!currentPubquiz) return <span className="muted live-meta">No question selected.</span>;
+      const status = currentPubquiz.status;
+      const part = currentPubquiz.results?.participation;
+      const correctOption = (currentPubquiz.options || []).find((o: any) => o.isCorrect);
+      return <>
+        {status === 'READY' && <button className="btn btn-success" onClick={() => pubquizAction('OPEN')}>OPEN ANTWOORDEN</button>}
+        {status === 'OPEN' && <button className="btn btn-secondary" onClick={() => pubquizAction('CLOSE')}>SLUIT ANTWOORDEN</button>}
+        {status === 'CLOSED' && <>
+          <button className="btn btn-success" onClick={() => pubquizAction('REVEAL')}>TOON ANTWOORD + PUNTEN</button>
+          <button className="btn btn-secondary" onClick={() => pubquizAction('REOPEN')}>HEROPEN</button>
+        </>}
+
+        {/* People, not answers: the number the host reads to decide when to close. */}
+        <span className="muted live-meta">
+          <b>{part?.answered ?? 0} / {part?.eligible ?? 0} spelers geantwoord</b>
+          {` · ${part?.percentage ?? 0}%`}
+          {` · ${currentPubquiz.points} punt${currentPubquiz.points === 1 ? '' : 'en'}`}
+        </span>
+
+        {/* The distribution is the host's alone before the reveal — the projector and the
+            phones receive no counts at all until then. */}
+        <span className="muted live-meta">
+          {(currentPubquiz.options || []).map((option: any, index: number) => {
+            const count = currentPubquiz.results?.tally.find((t: any) => t.optionId === option.id)?.count ?? 0;
+            return <span key={option.id} className={`pubquiz-admin-tally ${option.isCorrect ? 'is-correct' : ''}`}>
+              {QUIZ_OPTION_EMOJIS[index]} {count}
+            </span>;
+          })}
+          {status === 'REVEALED' && correctOption && ` · juist: ${correctOption.text}`}
+        </span>
+      </>;
+    }
+
     if (activeRound.type === 'ROULETTE') {
       if (!activeRoulette) return <span className="muted live-meta">No table yet — starting the round creates one.</span>;
       return <>
         {activeRoulette.status === 'DRAFT' && <button className="btn btn-success" onClick={() => rouletteAction('OPEN')}>OPEN BETTING</button>}
         {activeRoulette.status === 'OPEN' && <button className="btn btn-secondary" onClick={() => rouletteAction('CLOSE')}>CLOSE BETTING</button>}
         {activeRoulette.status === 'LOCKED' && <button className="btn btn-blue" onClick={() => rouletteAction('SPIN')}>SPIN</button>}
-        {activeRoulette.status === 'SPINNING' && <button className="btn btn-secondary" disabled>SPINNING…</button>}
-        {activeRoulette.status === 'RESULT' && <button className="btn btn-success" onClick={() => rouletteAction('SETTLE')}>CONFIRM + SETTLE</button>}
+        {activeRoulette.status === 'SPINNING' && <button className="btn btn-secondary" disabled>DRAAIT… WORDT AUTOMATISCH UITBETAALD</button>}
+        {/* No settle button. The spin pays out the moment its result is final, so what the
+            host does next is decide whether to run the wheel again. */}
+        {['SETTLED', 'CANCELLED'].includes(activeRoulette.status) && <button className="btn btn-success" onClick={() => rouletteAction('OPEN_AGAIN')}>OPEN BETTING OPNIEUW</button>}
         {['DRAFT', 'OPEN', 'LOCKED'].includes(activeRoulette.status) && <button className="btn btn-danger-ghost" onClick={() => rouletteAction('CANCEL')}>CANCEL + REFUND</button>}
-        <span className="muted live-meta">{activeRoulette.bet_count} bets · {activeRoulette.total_stake} staked{activeRoulette.result_number != null ? ` · result ${activeRoulette.result_number}` : ''}</span>
+        {/* People, not chips. A player with five chips on the table is one participant,
+            and how many of the room is in is what decides whether to close betting. */}
+        <span className="muted live-meta">
+          <b>{activeRoulette.participantCount} / {activeRoulette.eligiblePlayers} spelers</b>
+          {` · ${activeRoulette.participationPercentage}% deelname`}
+          {` · totale inzet ${activeRoulette.total_stake}`}
+          {` · spin ${activeRoulette.runNumber}`}
+        </span>
+        {activeRoulette.totals && <span className="muted live-meta">
+          Uitslag {activeRoulette.result_number} · inzet {activeRoulette.totals.staked} · uitbetaald {activeRoulette.totals.payout}
+          {' · netto '}<b className={activeRoulette.totals.net >= 0 ? 'pos' : 'neg'}>{activeRoulette.totals.net > 0 ? '+' : ''}{activeRoulette.totals.net}</b>
+        </span>}
       </>;
     }
 
@@ -357,13 +374,14 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
       </div>)}
     </div>}
 
-    {/* The presenter pair. Live is the real projector output scaled down, so it cannot
-        drift from what the audience sees; staged cannot be an iframe because it is not
-        on screen yet, so it renders the step's identity in its accent colour. */}
+    {/* LIVE and VOLGENDE. Both are the projector's own rendering of a projector DTO —
+        the first of what is on screen, the second of what pressing VOLGENDE will put
+        there. There is no staged slot between them any more: the host presses VOLGENDE
+        and the room sees it, which is the only way a preview can be trusted. */}
     <div className="presenter-grid">
       <div className="presenter-col">
         <div className="presenter-label">
-          <div className="label muted">LIVE — ON THE PROJECTOR NOW</div>
+          <div className="label muted">LIVE — OP DE PROJECTOR</div>
           <a className="btn btn-secondary btn-compact" href={`/screen/${gameId}`} target="_blank" rel="noreferrer">OPEN FULL SCREEN ↗</a>
         </div>
         <LiveScreenPreview gameId={gameId} />
@@ -371,19 +389,23 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
       </div>
 
       <div className="presenter-col">
-        <div className="label muted">{sameAsLive ? 'PREVIEW — ALREADY LIVE' : 'PREVIEW — STAGED, NOT LIVE YET'}</div>
-        <div className={`staged-card accent-${stagedView.accent} ${sameAsLive ? '' : 'is-pending'}`}>
-          <div className="row-between">
-            <div className="staged-eyebrow">{stagedView.eyebrow}</div>
-            <div className="staged-badge">{stagedView.badge}</div>
-          </div>
-          <div className="staged-title">{stagedView.title}</div>
-          <p className="staged-sub">{stagedView.sub}</p>
+        <div className="label muted">VOLGENDE — WAT VOLGENDE OP HET SCHERM ZET</div>
+        <NextScreenPreview gameId={gameId} version={s.version} />
+        <div className="presenter-step-actions">
+          <button
+            className="btn btn-secondary"
+            disabled={!navigable.previous}
+            title={navigable.previous ? undefined : 'Deze ronde stapt niet terug'}
+            onClick={() => step('PREVIOUS')}
+          >← VORIGE</button>
+          <button
+            className="btn btn-lime go-live-btn"
+            disabled={!navigable.next}
+            title={navigable.next ? undefined : 'Deze ronde is één scene en wordt met haar eigen knoppen bediend'}
+            onClick={() => step('NEXT')}
+          >VOLGENDE →</button>
         </div>
-        <button className="btn btn-lime go-live-btn" disabled={sameAsLive || !staged.mode} onClick={goLive}>
-          {sameAsLive ? 'ALREADY LIVE' : 'GO LIVE →'}
-        </button>
-        <button className="btn btn-secondary btn-full" onClick={() => showNow({ kind: 'dashboard', remember: true })}>SHOW MARKET DASHBOARD</button>
+        <button className="btn btn-secondary btn-full" onClick={() => showNow({ kind: 'dashboard', remember: true })}>TOON MARKET DASHBOARD</button>
       </div>
     </div>
 
@@ -404,27 +426,33 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
         <div className="run-of-show-track">
           {roundSteps.map((step: any, index: number) => {
             const isQuiz = activeRound.type === 'LIVE_QUIZ';
-            const isCurrent = isQuiz ? step.id === runtime?.currentQuizQuestionId : step.id === runtime?.currentSlideId;
-            const isLive = isQuiz ? live.questionId === step.id : live.slideId === step.id;
-            const isStaged = !isLive && (isQuiz ? staged.questionId === step.id : staged.slideId === step.id);
+            const isPub = activeRound.type === 'PUBQUIZ';
+            const isCurrent = isQuiz ? step.id === runtime?.currentQuizQuestionId
+              : isPub ? step.id === runtime?.currentPubquizQuestionId
+                : step.id === runtime?.currentSlideId;
+            const isLive = isQuiz ? live.questionId === step.id
+              : isPub ? live.pubquizQuestionId === step.id
+                : live.slideId === step.id;
             return <button
               key={step.id}
-              className={`run-step accent-${activeMeta?.accent} ${isLive ? 'is-live' : ''} ${isStaged ? 'is-staged' : ''} ${isCurrent ? 'is-current' : ''}`}
-              onClick={() => stageTarget(isQuiz
+              className={`run-step accent-${activeMeta?.accent} ${isLive ? 'is-live' : ''} ${isCurrent ? 'is-current' : ''}`}
+              onClick={() => showNow(isQuiz
                 ? { kind: 'quizQuestion', roundId: activeRound.id, questionId: step.id }
-                : { kind: 'slide', roundId: activeRound.id, slideId: step.id })}
+                : isPub
+                  ? { kind: 'pubquizQuestion', roundId: activeRound.id, questionId: step.id }
+                  : { kind: 'slide', roundId: activeRound.id, slideId: step.id })}
             >
               <span className="accent-dot" />
               <span className="run-step-copy">
-                <span className="run-step-kicker">{isQuiz ? `Q${index + 1} · ${step.points}p` : `Slide ${index + 1}`}</span>
-                <span className="run-step-label">{isQuiz ? step.prompt : (step.title || step.body || '(no title)')}</span>
+                <span className="run-step-kicker">{isQuiz || isPub ? `Q${index + 1} · ${step.points}p` : `Slide ${index + 1}`}</span>
+                <span className="run-step-label">{isQuiz ? step.prompt : isPub ? step.question : (step.title || step.body || '(no title)')}</span>
               </span>
             </button>;
           })}
 
           {!activeMeta?.stepped && <button
             className={`run-step accent-${activeMeta?.accent} ${live.roundId === activeRound.id && !live.questionId && !live.slideId ? 'is-live' : ''}`}
-            onClick={() => stageTarget({ kind: 'round', roundId: activeRound.id })}
+            onClick={() => showNow({ kind: 'round', roundId: activeRound.id })}
           >
             <span className="accent-dot" />
             <span className="run-step-copy">
@@ -435,8 +463,8 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
 
           {roundPredictions.map((prediction: any) => <button
             key={`prediction-${prediction.id}`}
-            className={`run-step accent-blue ${live.predictionId === prediction.id ? 'is-live' : ''} ${staged.predictionId === prediction.id ? 'is-staged' : ''}`}
-            onClick={() => stageTarget({ kind: 'prediction', predictionId: prediction.id })}
+            className={`run-step accent-blue ${live.predictionId === prediction.id ? 'is-live' : ''}`}
+            onClick={() => showNow({ kind: 'prediction', predictionId: prediction.id })}
           >
             <span className="accent-dot" />
             <span className="run-step-copy">
@@ -461,7 +489,7 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
               {p.status === 'OPEN' && <div className="mono countdown-inline"><Countdown closesAt={p.closes_at} /></div>}
               {['DRAFT', 'SCHEDULED'].includes(p.status)
                 ? <button className="btn btn-primary btn-compact" onClick={() => run('/api/open-prediction', { predictionId: p.id })}>OPEN NOW</button>
-                : <button className="btn btn-secondary btn-compact" onClick={() => stageTarget({ kind: 'prediction', predictionId: p.id })}>STAGE</button>}
+                : <button className="btn btn-secondary btn-compact" onClick={() => showNow({ kind: 'prediction', predictionId: p.id })}>STAGE</button>}
               {p.status === 'OPEN' && <button className="btn btn-secondary btn-compact" onClick={() => run('/api/lock-prediction', { predictionId: p.id })}>LOCK NOW</button>}
               {p.status === 'LOCKED' && <><button className="btn btn-success btn-compact" onClick={() => run('/api/set-prediction-result', { predictionId: p.id, result: 'YES' })}>RESULT YES</button><button className="btn btn-danger btn-compact" onClick={() => run('/api/set-prediction-result', { predictionId: p.id, result: 'NO' })}>RESULT NO</button></>}
               {p.status === 'RESULT' && <button className="btn btn-primary btn-compact" onClick={() => run('/api/settle-prediction', { predictionId: p.id }, true)}>SETTLE PAYOUTS</button>}
@@ -973,6 +1001,69 @@ function RoundsInGame({ state: s, gameId, run, nav }: { state: any; gameId: numb
 
 const SCREEN_WIDTH = 1920;
 const SCREEN_HEIGHT = 1080;
+
+/**
+ * A projector snapshot, drawn at projector size and scaled into the Admin column.
+ *
+ * Same component the big screen uses, same DTO — so LIVE and NEXT are not the Admin's
+ * interpretation of the state, they are the state.
+ */
+function ScaledScreen({ children }: { children: any }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const update = () => setScale(node.clientWidth / SCREEN_WIDTH);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  return <div className="screen-preview" ref={ref}>
+    <div className="screen-preview-stage" style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT, transform: `scale(${scale})` }}>
+      {children}
+    </div>
+  </div>;
+}
+
+/**
+ * What the projector will show if the host presses VOLGENDE.
+ *
+ * The snapshot comes from `/api/next-screen-state`, which asks the same `planStep` the
+ * button itself calls and renders the answer through the projector's own snapshot builder.
+ * So this is not a description of the next step — it is the next step, drawn early.
+ */
+function NextScreenPreview({ gameId, version }: { gameId: number; version: number }) {
+  const [state, setState] = useState<any>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`/api/next-screen-state?gameId=${gameId}&direction=NEXT`, { credentials: 'include' });
+        const data = await response.json();
+        if (!cancelled) setState(response.ok ? data : null);
+      } catch { if (!cancelled) setState(null); }
+    })();
+    return () => { cancelled = true; };
+    // Re-asked whenever the game moves, which is what keeps it in step with LIVE.
+  }, [gameId, version]);
+
+  if (!state) return <div className="screen-preview next-preview-empty"><span className="muted">Loading…</span></div>;
+  if (state.step === 'completeRound') {
+    return <div className="screen-preview next-preview-empty">
+      <b className="display">EINDE VAN DE RONDE</b>
+      <span className="muted">{state.label} — VOLGENDE sluit deze ronde af.</span>
+    </div>;
+  }
+  if (state.step !== 'target' || !state.preview) {
+    return <div className="screen-preview next-preview-empty"><span className="muted">{state.reason || 'Niets om naartoe te stappen.'}</span></div>;
+  }
+  return <ScaledScreen><ScreenRender s={state.preview} /></ScaledScreen>;
+}
 
 function LiveScreenPreview({ gameId }: { gameId: number }) {
   const previewRef = useRef<HTMLDivElement>(null);

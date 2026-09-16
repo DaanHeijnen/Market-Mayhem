@@ -53,6 +53,23 @@ export function maxPredictionStake(balance: number, minimumStake: number, maximu
   return cap >= minimumStake ? cap : 0;
 }
 
+/**
+ * The chips a player may put on the table.
+ *
+ * A closed set rather than a minimum and a maximum. The phone offers exactly these and
+ * the server accepts exactly these, so there is one list and no arithmetic in between —
+ * a stake that is not a chip is not a stake, whatever the client sends.
+ *
+ * This replaced a free-text amount field. The server used to take any integer from 1 to a
+ * million, which meant the real limit on a bet was whatever the phone's input happened to
+ * allow, and a crafted request was bounded by nothing the host had chosen.
+ */
+export const ROULETTE_CHIPS = [1, 5, 10, 25] as const;
+
+export function isRouletteChip(value: unknown): value is number {
+  return typeof value === 'number' && (ROULETTE_CHIPS as readonly number[]).includes(value);
+}
+
 export type RouletteBetType = 'NUMBER'|'COLOR'|'PARITY'|'RANGE';
 export const RED_NUMBERS = new Set([1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]);
 
