@@ -4,7 +4,7 @@ import { body, ok, intValue } from '../lib/http';
 import { incrementGameVersion, promoteStaged } from '../lib/game-state';
 import { wrap } from './_wrap';
 
-// Push the staged step to the projector, then advance the preview to the next step.
+/** Push the staged step to the projector. */
 export default wrap(async request => {
   const admin = await requireAdmin(request);
   const p = await body<any>(request);
@@ -12,7 +12,7 @@ export default wrap(async request => {
 
   return ok(await withTransaction(async client => {
     const result = await promoteStaged(client, gameId, admin.username);
-    await audit(client, gameId, admin.username, `went live with ${result.liveKind || 'dashboard'}`, 'screen', result.liveId ?? undefined);
-    return { version: await incrementGameVersion(client, gameId) };
+    await audit(client, gameId, admin.username, `went live with ${result.mode}`, 'screen', result.roundId ?? undefined);
+    return { mode: result.mode, version: await incrementGameVersion(client, gameId) };
   }));
 });

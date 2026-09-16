@@ -30,46 +30,43 @@ export default wrap(async request => {
   const admin = await requireAdmin(request);
   const p = await body<any>(request);
   const gameId = intValue(p.gameId, 'gameId', { min: 1 });
-  const blockId = intValue(p.blockId, 'blockId', { min: 1 });
+  const roundId = intValue(p.roundId, 'roundId', { min: 1 });
   const action = String(p.action || '').toUpperCase() as Action;
   if (!(action in ACTIONS)) throw new HttpError(400, 'Invalid Pak een Zes action');
   const target = ACTIONS[action] as PakEenZesStatus;
 
   return ok(await withTransaction(async client => {
-    const game = await client.query('SELECT current_round_id,current_round_block_id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
+    const game = await client.query('SELECT current_round_id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
     if (!game.rows[0]) throw new HttpError(404, 'Game not found');
-    if (Number(game.rows[0].current_round_block_id || 0) !== blockId) throw new HttpError(409, 'Show this Pak een Zes block before running it');
 
-    const blockResult = await client.query(
-      `SELECT b.id,b.round_id,b.type,r.status AS round_status
-       FROM round_blocks b JOIN rounds r ON r.id=b.round_id
-       WHERE b.id=$1 AND b.game_night_id=$2 FOR UPDATE OF b`,
-      [blockId, gameId],
+    const roundResult = await client.query(
+      `SELECT id,type,status AS round_status FROM rounds WHERE id=$1 AND game_night_id=$2 FOR UPDATE`,
+      [roundId, gameId],
     );
-    const block = blockResult.rows[0];
-    if (!block) throw new HttpError(404, 'Pak een Zes block not found');
-    if (block.type !== 'PAK_EEN_ZES') throw new HttpError(409, 'Block is not a Pak een Zes');
-    if (block.round_status !== 'ACTIVE' || Number(game.rows[0].current_round_id || 0) !== Number(block.round_id)) {
+    const block = roundResult.rows[0];
+    if (!block) throw new HttpError(404, 'Round not found');
+    if (block.type !== 'PAK_EEN_ZES') throw new HttpError(409, 'That round is not a Pak een Zes');
+    if (block.round_status !== 'ACTIVE' || Number(game.rows[0].current_round_id || 0) !== roundId) {
       throw new HttpError(409, 'The Pak een Zes round is not active');
     }
 
     // Create the game on first use rather than when the block is authored, so an
     // unplayed block carries no state.
     await client.query(
-      `INSERT INTO pak_een_zes_games(game_night_id,round_id,round_block_id,status)
-       SELECT $1,$2,$3,'READY'
+      `INSERT INTO pak_een_zes_games(game_night_id,round_id,status)
+       SELECT $1,$2,'READY'
        WHERE NOT EXISTS (
          SELECT 1 FROM pak_een_zes_games
-         WHERE game_night_id=$1 AND round_block_id=$3 AND status IN ('READY','PREDICTING','LOCKED','DRAWING')
+         WHERE game_night_id=$1 AND round_id=$2 AND status IN ('READY','PREDICTING','LOCKED','DRAWING')
        )`,
-      [gameId, Number(block.round_id), blockId],
+      [gameId, roundId, roundId],
     );
 
     const existing = await client.query(
       `SELECT id,status FROM pak_een_zes_games
-       WHERE game_night_id=$1 AND round_block_id=$2
+       WHERE game_night_id=$1 AND round_id=$2
        ORDER BY id DESC LIMIT 1 FOR UPDATE`,
-      [gameId, blockId],
+      [gameId, roundId],
     );
     const current = existing.rows[0];
     if (!current) throw new HttpError(409, 'Pak een Zes game could not be created');
@@ -116,7 +113,7 @@ export default wrap(async request => {
       );
     }
 
-    await audit(client, gameId, admin.username, `pak een zes ${action.toLowerCase()}`, 'round_block', blockId, {
+    await audit(client, gameId, admin.username, `pak een zes ${action.toLowerCase()}`, 'round', roundId, {
       pakEenZesGameId,
       from: status,
       to: target,

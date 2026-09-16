@@ -14,8 +14,12 @@ function liveTables(): string[] {
     const sql = readFileSync(join(MIGRATIONS, file), 'utf8');
     // In document order: 0010 drops the abandoned first attempt at the slotmachine
     // schema and then recreates it in the same file, so create-then-drop would lose it.
-    for (const m of sql.matchAll(/(CREATE|DROP) TABLE (?:IF (?:NOT )?EXISTS )?([a-z_]+)/g)) {
-      if (m[1] === 'CREATE') tables.add(m[2]); else tables.delete(m[2]);
+    // 0016 renames one table and drops another, so both have to be followed too — a
+    // table this misses is a table the classification test cannot hold anyone to.
+    for (const m of sql.matchAll(/(?:(CREATE|DROP) TABLE (?:IF (?:NOT )?EXISTS )?([a-z_0-9]+)|ALTER TABLE ([a-z_0-9]+) RENAME TO ([a-z_0-9]+))/g)) {
+      if (m[1] === 'CREATE') tables.add(m[2]);
+      else if (m[1] === 'DROP') tables.delete(m[2]);
+      else { tables.delete(m[3]); tables.add(m[4]); }
     }
   }
   return [...tables].sort();
@@ -110,7 +114,7 @@ describe('the runtime/configuration classification', () => {
       'pak_een_zes_draws',
       'photo_rounds',
       'photo_submissions',
-      'round_question_answers',
+      'quiz_answers',
       'prediction_requests',
     ]) {
       expect(runtime.has(table), table).toBe(true);

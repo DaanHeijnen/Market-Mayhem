@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import type { RunMutation } from '../types';
 import { Accordion, Card, Countdown, ProgressBar, Status } from '../ui';
 import { CoinIcon } from '../../shared/CoinIcon';
-import { blockLabel, blockMeta } from '../blockMeta';
+import { QUIZ_OPTION_EMOJIS, roundContentCount, roundItems, roundMeta } from '../roundMeta';
 
 /** A presentable thing, described for the staged card. */
 type Described = { accent: string; eyebrow: string; title: string; sub: string; badge: string };
@@ -22,49 +22,81 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
   const toggle = (key: keyof typeof open) => () => setOpen(current => ({ ...current, [key]: !current[key] }));
 
   const activePlayers = s.players.filter((p: any) => p.active);
-  const activeRound = s.rounds.find((r: any) => r.id === s.game.current_round_id) || null;
+  const activeRound = s.activeRound || null;
+  const activeMeta = activeRound ? roundMeta(activeRound.type) : null;
+  const runtime = s.roundRuntime || null;
   const activeRoulette = s.activeRoulette;
   const isFresh = activePlayers.length === 0 && s.rounds.length === 0 && s.predictions.length === 0;
 
   const live = s.screen || {};
   const staged = live.staged || {};
-  const runOfShow: any[] = s.runOfShow || [];
-  const sameAsLive = staged.mode === live.mode && (staged.blockId || null) === (live.blockId || null) && (staged.predictionId || null) === (live.predictionId || null);
   const pendingRequests = (s.predictionRequests || []).filter((r: any) => r.status === 'PENDING');
+  const sameAsLive = staged.mode === live.mode
+    && (staged.roundId || null) === (live.roundId || null)
+    && (staged.questionId || null) === (live.questionId || null)
+    && (staged.slideId || null) === (live.slideId || null)
+    && (staged.predictionId || null) === (live.predictionId || null);
 
-  const findBlock = (id: number | null) => {
-    if (!id) return null;
-    for (const round of s.rounds) { const found = round.blocks.find((b: any) => b.id === id); if (found) return found; }
-    return null;
-  };
+  const findRound = (id: number | null) => (id ? s.rounds.find((r: any) => r.id === id) || null : null);
+
+  /**
+   * The question or slide the round's cursor is on.
+   *
+   * Progression, not presentation: this is where the game is, which is not necessarily
+   * what the projector is showing. The live panel drives the cursor; the preview pair
+   * above it shows the screen.
+   */
+  const currentQuestion = activeRound?.type === 'LIVE_QUIZ'
+    ? (activeRound.questions || []).find((q: any) => q.id === runtime?.currentQuizQuestionId) || null
+    : null;
+  const currentSlide = activeRound?.type === 'PRESENTATIE'
+    ? (activeRound.slides || []).find((x: any) => x.id === runtime?.currentSlideId) || null
+    : null;
 
   const describe = (slot: any): Described => {
-    if (!slot?.mode) return { accent: 'muted', eyebrow: 'NOTHING STAGED', title: '—', sub: 'Pick a step from the run of show below.', badge: 'IDLE' };
-    if (slot.mode === 'DASHBOARD') return { accent: 'ink', eyebrow: 'MARKET DASHBOARD', title: 'Coin value chart & live ticker', sub: 'The exchange dashboard with every player’s trend line.', badge: 'DASHBOARD' };
-    if (slot.blockId) {
-      const block = findBlock(slot.blockId);
-      if (!block) return { accent: 'muted', eyebrow: 'CONTENT REMOVED', title: '—', sub: 'This step no longer exists.', badge: 'IDLE' };
-      const meta = blockMeta(block.type);
-      return { accent: meta.accent, eyebrow: meta.label.toUpperCase(), title: blockLabel(block), sub: meta.description, badge: block.interactive_status || 'STATIC' };
+    if (!slot?.mode) return { accent: 'muted', eyebrow: 'NOTHING STAGED', title: '—', sub: 'Pick a step from the round below.', badge: 'IDLE' };
+    if (slot.mode === 'DASHBOARD') return { accent: 'ink', eyebrow: 'MARKET DASHBOARD', title: 'Coin value chart & live ticker', sub: 'The exchange dashboard with every player\u2019s trend line.', badge: 'DASHBOARD' };
+
+    const round = findRound(slot.roundId);
+    if (slot.questionId) {
+      const question = (round?.questions || []).find((q: any) => q.id === slot.questionId);
+      if (!question) return { accent: 'muted', eyebrow: 'QUESTION REMOVED', title: '—', sub: 'This step no longer exists.', badge: 'IDLE' };
+      return { accent: 'violet', eyebrow: 'LIVE QUIZ', title: question.prompt, sub: `${question.points} point${question.points === 1 ? '' : 's'} · phones show the answer buttons.`, badge: question.status };
     }
-    const prediction = s.predictions.find((p: any) => p.id === slot.predictionId);
-    if (!prediction) return { accent: 'muted', eyebrow: 'MARKET REMOVED', title: '—', sub: 'This market no longer exists.', badge: 'IDLE' };
-    return { accent: 'blue', eyebrow: `PREDICTION #${prediction.display_number}`, title: prediction.question, sub: 'Players vote and bet on this from their phones.', badge: prediction.status };
+    if (slot.slideId) {
+      const slide = (round?.slides || []).find((x: any) => x.id === slot.slideId);
+      if (!slide) return { accent: 'muted', eyebrow: 'SLIDE REMOVED', title: '—', sub: 'This step no longer exists.', badge: 'IDLE' };
+      return { accent: 'cyan', eyebrow: 'PRESENTATIE', title: slide.title || '(no title)', sub: slide.body || 'A slide on the big screen.', badge: slide.revealedAt ? 'REVEALED' : 'HIDDEN' };
+    }
+    if (slot.predictionId) {
+      const prediction = s.predictions.find((p: any) => p.id === slot.predictionId);
+      if (!prediction) return { accent: 'muted', eyebrow: 'MARKET REMOVED', title: '—', sub: 'This market no longer exists.', badge: 'IDLE' };
+      return { accent: 'blue', eyebrow: `PREDICTION #${prediction.display_number}`, title: prediction.question, sub: 'Players vote and bet on this from their phones.', badge: prediction.status };
+    }
+    if (round) {
+      const meta = roundMeta(round.type);
+      return { accent: meta.accent, eyebrow: meta.label.toUpperCase(), title: round.title, sub: meta.description, badge: round.status };
+    }
+    return { accent: 'muted', eyebrow: 'NOTHING STAGED', title: '—', sub: 'Pick a step from the round below.', badge: 'IDLE' };
   };
 
   const stagedView = describe(staged);
-  const liveBlock = findBlock(live.blockId);
   const livePrediction = s.predictions.find((p: any) => p.id === live.predictionId) || null;
 
-  const stage = (step: any) => step.kind === 'block'
-    ? run('/api/stage-item', { kind: 'block', roundId: step.roundId, blockId: step.id })
-    : run('/api/stage-item', { kind: 'prediction', predictionId: step.id });
+  // Staging and going live both take the same shapes, because a step the host can stage
+  // and then not go live with would be a trap.
+  const stageTarget = (target: Record<string, unknown>) => run('/api/stage-item', target);
+  const showNow = (target: Record<string, unknown>) => run('/api/show-on-screen', target);
   const goLive = () => run('/api/go-live', {});
+
   const rouletteAction = (action: string) => activeRoulette && run('/api/roulette-action', { rouletteGameId: activeRoulette.id, action }, true);
-  const questionAction = (action: string) => liveBlock && run('/api/question-action', { blockId: liveBlock.id, action });
-  const questionPhoto = (show: boolean) => liveBlock && run('/api/show-question-photo', { blockId: liveBlock.id, show });
-  const pezAction = (action: string) => liveBlock && run('/api/pak-een-zes-action', { blockId: liveBlock.id, action });
-  const photoAction = (action: string) => liveBlock && run('/api/photo-round-action', { blockId: liveBlock.id, action });
+  const quizAction = (action: string) => currentQuestion && run('/api/quiz-question-action', { questionId: currentQuestion.id, action, revision: currentQuestion.revision });
+  const quizNavigate = (action: string) => activeRound && run('/api/quiz-navigate', { roundId: activeRound.id, action, revision: runtime?.revision });
+  const slideNavigate = (action: string) => activeRound && run('/api/slide-navigate', { roundId: activeRound.id, action, revision: runtime?.revision });
+  const revealSlide = (revealed: boolean) => currentSlide && run('/api/reveal-slide', { slideId: currentSlide.id, revealed, revision: currentSlide.revision });
+  const questionPhoto = (show: boolean) => currentQuestion && run('/api/show-question-photo', { questionId: currentQuestion.id, show });
+  const pezAction = (action: string) => activeRound && run('/api/pak-een-zes-action', { roundId: activeRound.id, action });
+  const photoAction = (action: string) => activeRound && run('/api/photo-round-action', { roundId: activeRound.id, action });
 
   const adjust = async () => {
     if (adjusting) return;
@@ -86,18 +118,30 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
     }
   };
 
-  // Contextual controls for whatever is live. Mirrors the design's buildActions, and
-  // keeps CANCEL + REFUND, which the design omits but the game still needs.
+  /**
+   * Contextual controls for the round being played.
+   *
+   * Dispatches on the round's type, not on what is on the projector — the host drives the
+   * game from here whether or not the audience is looking at it. Each branch is the
+   * lifecycle of one game form, which is why there is no shared "next step" button: a
+   * quiz advances between questions, a roulette opens and spins, and a Fotoronde opens
+   * and closes submissions. Those were never the same action.
+   */
   const liveActions = () => {
-    if (liveBlock?.type === 'DUOLINGO_QUESTION') {
-      const status = liveBlock.interactive_status || 'READY';
-      // Computed on the server so this, the projector and the round list cannot disagree
-      // about how far along the room is.
-      const part = liveBlock.participation || { answered: 0, eligible: activePlayers.length, remaining: 0, percentage: 0 };
+    if (!activeRound) {
+      return livePrediction ? predictionActions() : <span className="muted live-meta">No round is being played. Start one from the list on the right.</span>;
+    }
+
+    if (activeRound.type === 'LIVE_QUIZ') {
+      const questions = activeRound.questions || [];
+      if (!questions.length) return <span className="muted live-meta">This quiz round has no questions yet.</span>;
+      if (!currentQuestion) return <span className="muted live-meta">No question selected.</span>;
+      const index = questions.findIndex((q: any) => q.id === currentQuestion.id);
+      const status = currentQuestion.status;
+      const part = currentQuestion.participation || { answered: 0, eligible: activePlayers.length, remaining: 0, percentage: 0 };
       const revealed = status === 'REVEALED' || status === 'SETTLED';
-      const answers = liveBlock.payload?.answers || [];
-      const correctIndex = Number(liveBlock.payload?.correctAnswerIndex);
-      const photoShowing = s.screen?.questionContextPhotoBlockId === liveBlock.id;
+      const correct = currentQuestion.options.filter((o: any) => o.isCorrect).map((o: any) => o.text);
+
       return <>
         {/* The host's one question is "can I close yet?", so the count, the percentage
             and the bar come before the buttons rather than trailing them as meta text. */}
@@ -119,30 +163,63 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
           </div>
         </div>}
 
-        {status === 'READY' && <button className="btn btn-blue" onClick={() => questionAction('OPEN')}>OPEN ANSWERS</button>}
-        {status === 'OPEN' && <button className="btn btn-secondary" onClick={() => questionAction('CLOSE')}>SLUIT VRAAG</button>}
-        {status === 'CLOSED' && <button className="btn btn-success" onClick={() => questionAction('REVEAL')}>TOON JUISTE ANTWOORD</button>}
+        {status === 'READY' && <button className="btn btn-blue" onClick={() => quizAction('OPEN')}>OPEN ANSWERS</button>}
+        {status === 'OPEN' && <button className="btn btn-secondary" onClick={() => quizAction('CLOSE')}>SLUIT VRAAG</button>}
+        {status === 'CLOSED' && <>
+          <button className="btn btn-success" onClick={() => quizAction('REVEAL')}>TOON JUISTE ANTWOORD + BETAAL</button>
+          <button className="btn btn-secondary" onClick={() => quizAction('REOPEN')}>HEROPEN</button>
+        </>}
 
         {/* The photo is the beat after the reveal, so its button only exists from there
             on — and only when a photo was actually uploaded, which keeps the step
             skippable rather than a dead control. */}
-        {revealed && liveBlock.hasContextPhoto && (photoShowing
+        {revealed && currentQuestion.contextMediaKey && (currentQuestion.contextPhotoShown
           ? <button className="btn btn-secondary" onClick={() => questionPhoto(false)}>TERUG NAAR DE VRAAG</button>
           : <button className="btn btn-blue" onClick={() => questionPhoto(true)}>TOON CONTEXTFOTO</button>)}
 
-        {status === 'REVEALED' && <button className="btn btn-secondary" onClick={() => questionAction('SETTLE')}>MARK SETTLED</button>}
+        {status === 'REVEALED' && <button className="btn btn-secondary" onClick={() => quizAction('SETTLE')}>MARK SETTLED</button>}
+
+        {/* Question navigation, which replaced the old generic previous/next block
+            stepping. It refuses to leave a question that still owes somebody a reward. */}
+        <span className="live-nav">
+          <button className="btn btn-secondary btn-compact" disabled={index <= 0} onClick={() => quizNavigate('PREVIOUS')}>← VORIGE</button>
+          <span className="muted mono">{index + 1} / {questions.length}</span>
+          <button className="btn btn-secondary btn-compact" disabled={index >= questions.length - 1} onClick={() => quizNavigate('NEXT')}>VOLGENDE →</button>
+          <button className="btn btn-blue btn-compact" onClick={() => showNow({ kind: 'quizQuestion', roundId: activeRound.id, questionId: currentQuestion.id })}>TOON OP SCHERM</button>
+        </span>
 
         <span className="muted live-meta">
-          {revealed && Number.isInteger(correctIndex)
-            ? `Juiste antwoord: ${answers[correctIndex] || `answer ${correctIndex + 1}`}`
+          {revealed && correct.length
+            ? `Juiste antwoord: ${correct.join(' / ')}`
             : `${part.answered} of ${part.eligible} answered`}
-          {` · ${Number(liveBlock.payload?.rewardCoins || 0)} coin reward`}
-          {revealed && !liveBlock.hasContextPhoto ? ' · no context photo on this question' : ''}
+          {` · ${currentQuestion.points} point${currentQuestion.points === 1 ? '' : 's'}`}
+          {revealed && !currentQuestion.contextMediaKey ? ' · no context photo on this question' : ''}
         </span>
       </>;
     }
-    if (liveBlock?.type === 'ROULETTE') {
-      if (!activeRoulette) return <span className="muted live-meta">No spin yet — going live on this block creates one.</span>;
+
+    if (activeRound.type === 'PRESENTATIE') {
+      const slides = activeRound.slides || [];
+      if (!slides.length) return <span className="muted live-meta">This presentation round has no slides yet.</span>;
+      if (!currentSlide) return <span className="muted live-meta">No slide selected.</span>;
+      const index = slides.findIndex((x: any) => x.id === currentSlide.id);
+      const hasSecret = Boolean(currentSlide.revealText || currentSlide.hideTitleUntilReveal);
+      return <>
+        {hasSecret && (currentSlide.revealedAt
+          ? <button className="btn btn-secondary" onClick={() => revealSlide(false)}>VERBERG WEER</button>
+          : <button className="btn btn-success" onClick={() => revealSlide(true)}>TOON ANTWOORD</button>)}
+        <span className="live-nav">
+          <button className="btn btn-secondary btn-compact" disabled={index <= 0} onClick={() => slideNavigate('PREVIOUS')}>← VORIGE</button>
+          <span className="muted mono">{index + 1} / {slides.length}</span>
+          <button className="btn btn-secondary btn-compact" disabled={index >= slides.length - 1} onClick={() => slideNavigate('NEXT')}>VOLGENDE →</button>
+          <button className="btn btn-blue btn-compact" onClick={() => showNow({ kind: 'slide', roundId: activeRound.id, slideId: currentSlide.id })}>TOON OP SCHERM</button>
+        </span>
+        {!hasSecret && <span className="muted live-meta">This slide has nothing hidden — nothing to reveal.</span>}
+      </>;
+    }
+
+    if (activeRound.type === 'ROULETTE') {
+      if (!activeRoulette) return <span className="muted live-meta">No table yet — starting the round creates one.</span>;
       return <>
         {activeRoulette.status === 'DRAFT' && <button className="btn btn-success" onClick={() => rouletteAction('OPEN')}>OPEN BETTING</button>}
         {activeRoulette.status === 'OPEN' && <button className="btn btn-secondary" onClick={() => rouletteAction('CLOSE')}>CLOSE BETTING</button>}
@@ -153,7 +230,8 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
         <span className="muted live-meta">{activeRoulette.bet_count} bets · {activeRoulette.total_stake} staked{activeRoulette.result_number != null ? ` · result ${activeRoulette.result_number}` : ''}</span>
       </>;
     }
-    if (liveBlock?.type === 'SLOTMACHINE') {
+
+    if (activeRound.type === 'SLOTMACHINE') {
       const slot = s.activeSlot;
       const config = s.slotConfig?.status;
       // There is no spin button here on purpose: players start their own spins from
@@ -162,19 +240,18 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
       if (!config?.valid) return <span className="neg live-meta"><b>Slotmachine unusable — {config?.reason || 'not configured'}</b></span>;
       if (!slot) return <span className="muted live-meta">Slotmachine ready — players lock a series on their phones.</span>;
       const turn = slot.turn;
-      return <>
-        <span className="muted live-meta">
-          {turn?.current
-            ? `${turn.current.playerName} is aan de beurt · ${turn.current.spinsRemaining}/${turn.current.totalSpins} spins over${turn.spinning ? ' · draait…' : ''}`
-            : turn?.allDone && slot.series.length > 0
-              ? 'Alle spelers zijn klaar'
-              : 'Nobody has locked a series yet'}
-          {' · '}max {slot.maxSpins} spins
-          {slot.lockedCoins > 0 ? ` · ${slot.lockedCoins} coins locked in unspun spins` : ''}
-        </span>
-      </>;
+      return <span className="muted live-meta">
+        {turn?.current
+          ? `${turn.current.playerName} is aan de beurt · ${turn.current.spinsRemaining}/${turn.current.totalSpins} spins over${turn.spinning ? ' · draait…' : ''}`
+          : turn?.allDone && slot.series.length > 0
+            ? 'Alle spelers zijn klaar'
+            : 'Nobody has locked a series yet'}
+        {' · '}max {slot.maxSpins} spins
+        {slot.lockedCoins > 0 ? ` · ${slot.lockedCoins} coins locked in unspun spins` : ''}
+      </span>;
     }
-    if (liveBlock?.type === 'FOTORONDE') {
+
+    if (activeRound.type === 'FOTORONDE') {
       const photo = s.photoRound;
       const status = photo?.status || 'DRAFT';
       return <>
@@ -182,11 +259,12 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
         {status === 'OPEN' && <button className="btn btn-secondary" onClick={() => photoAction('CLOSE')}>SLUIT INZENDEN</button>}
         {status === 'CLOSED' && <button className="btn btn-success" onClick={() => photoAction('COMPLETE')}>MARKEER AFGEROND</button>}
         <span className="muted live-meta">
-          {photo?.submissionCount ?? 0} foto's · {photo?.judgedCount ?? 0} beoordeeld · {photo?.totalCredits ?? 0} credits toegekend
+          {photo?.submissionCount ?? 0} foto&apos;s · {photo?.judgedCount ?? 0} beoordeeld · {photo?.totalCredits ?? 0} credits toegekend
         </span>
       </>;
     }
-    if (liveBlock?.type === 'PAK_EEN_ZES') {
+
+    if (activeRound.type === 'PAK_EEN_ZES') {
       const pez = s.pakEenZes;
       const status = pez?.status || 'READY';
       const awaiting = pez?.awaitingPrediction || [];
@@ -204,19 +282,28 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
         </span>}
       </>;
     }
-    if (livePrediction) {
-      return <>
-        {livePrediction.status === 'OPEN' && <button className="btn btn-secondary" onClick={() => run('/api/lock-prediction', { predictionId: livePrediction.id })}>LOCK NOW</button>}
-        {livePrediction.status === 'LOCKED' && <><button className="btn btn-success" onClick={() => run('/api/set-prediction-result', { predictionId: livePrediction.id, result: 'YES' })}>RESULT YES</button><button className="btn btn-danger" onClick={() => run('/api/set-prediction-result', { predictionId: livePrediction.id, result: 'NO' })}>RESULT NO</button></>}
-        {livePrediction.status === 'RESULT' && <button className="btn btn-lime" onClick={() => run('/api/settle-prediction', { predictionId: livePrediction.id }, true)}>SETTLE PAYOUTS</button>}
-        {['OPEN', 'LOCKED'].includes(livePrediction.status) && <button className="btn btn-danger-ghost" onClick={() => run('/api/cancel-prediction', { predictionId: livePrediction.id }, true)}>CANCEL + REFUND</button>}
-        {livePrediction.status === 'OPEN' && <span className="muted live-meta mono"><Countdown closesAt={livePrediction.closes_at} /> left</span>}
-      </>;
-    }
+
     return null;
   };
 
+  function predictionActions() {
+    if (!livePrediction) return null;
+    return <>
+      {livePrediction.status === 'OPEN' && <button className="btn btn-secondary" onClick={() => run('/api/lock-prediction', { predictionId: livePrediction.id })}>LOCK NOW</button>}
+      {livePrediction.status === 'LOCKED' && <><button className="btn btn-success" onClick={() => run('/api/set-prediction-result', { predictionId: livePrediction.id, result: 'YES' })}>RESULT YES</button><button className="btn btn-danger" onClick={() => run('/api/set-prediction-result', { predictionId: livePrediction.id, result: 'NO' })}>RESULT NO</button></>}
+      {livePrediction.status === 'RESULT' && <button className="btn btn-lime" onClick={() => run('/api/settle-prediction', { predictionId: livePrediction.id }, true)}>SETTLE PAYOUTS</button>}
+      {['OPEN', 'LOCKED'].includes(livePrediction.status) && <button className="btn btn-danger-ghost" onClick={() => run('/api/cancel-prediction', { predictionId: livePrediction.id }, true)}>CANCEL + REFUND</button>}
+      {livePrediction.status === 'OPEN' && <span className="muted live-meta mono"><Countdown closesAt={livePrediction.closes_at} /> left</span>}
+    </>;
+  }
+
   const openMarkets = s.predictions.filter((p: any) => !['SETTLED', 'CANCELLED'].includes(p.status));
+  // The active round's own content, then its unresolved markets. Type-specific by
+  // construction: a game round contributes one step because it is one thing.
+  const roundSteps = activeRound ? roundItems(activeRound) : [];
+  const roundPredictions = activeRound
+    ? s.predictions.filter((p: any) => p.round_id === activeRound.id && !['SETTLED', 'CANCELLED'].includes(p.status))
+    : [];
 
   return <div className="page-stack">
     {isFresh && <Card><div className="label muted">FIRST SETUP</div><h2 className="display card-heading">Build your game before going live</h2><div className="setup-flow"><b>Settings</b><span>→</span><b>Players</b><span>→</span><b>Rounds</b><span>→</span><b>Round Content</b><span>→</span><b>Predictions</b><span>→</span><b>Control</b></div></Card>}
@@ -269,37 +356,67 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
         <button className="btn btn-lime go-live-btn" disabled={sameAsLive || !staged.mode} onClick={goLive}>
           {sameAsLive ? 'ALREADY LIVE' : 'GO LIVE →'}
         </button>
+        <button className="btn btn-secondary btn-full" onClick={() => showNow({ kind: 'dashboard', remember: true })}>SHOW MARKET DASHBOARD</button>
       </div>
     </div>
 
-    {liveBlock?.type === 'SLOTMACHINE' && <SlotLivePanel slot={s.activeSlot} config={s.slotConfig?.status} activePlayers={activePlayers} />}
+    {activeRound?.type === 'SLOTMACHINE' && <SlotLivePanel slot={s.activeSlot} config={s.slotConfig?.status} activePlayers={activePlayers} />}
 
-    {liveBlock?.type === 'PAK_EEN_ZES' && <PakEenZesLivePanel game={s.pakEenZes} />}
+    {activeRound?.type === 'PAK_EEN_ZES' && <PakEenZesLivePanel game={s.pakEenZes} />}
 
-    {liveBlock?.type === 'FOTORONDE' && <PhotoRoundPanel round={s.photoRound} run={run} gameId={gameId} activeRound={activeRound} players={s.players} nav={nav} />}
+    {activeRound?.type === 'FOTORONDE' && <PhotoRoundPanel round={s.photoRound} run={run} gameId={gameId} activeRound={activeRound} players={s.players} nav={nav} />}
 
-    {/* One ordered timeline for the round: content blocks, then its unresolved markets.
-        Ordered by the server so this and GO LIVE can never disagree. */}
-    {activeRound && runOfShow.length > 0 && <Card>
-      <div className="label muted">RUN OF SHOW — R{String(activeRound.round_number).padStart(2, '0')} · {activeRound.title}</div>
+    {/* What this round holds, in order, plus the markets attached to it. A quiz shows its
+        questions and a presentation its slides; a game round has nothing to step through,
+        so it offers itself as the single thing to show. */}
+    {activeRound && <Card>
+      <div className="label muted">
+        ROUND {String(activeRound.sortOrder).padStart(2, '0')} · {activeMeta?.label.toUpperCase()} · {activeRound.title}
+      </div>
       <div className="run-of-show">
         <div className="run-of-show-track">
-          {runOfShow.map(step => {
-            const meta = step.kind === 'block' ? blockMeta(step.type) : { label: 'Prediction', accent: 'blue' };
-            const isLive = stepMatches(step, live);
-            const isStaged = !isLive && stepMatches(step, staged);
+          {roundSteps.map((step: any, index: number) => {
+            const isQuiz = activeRound.type === 'LIVE_QUIZ';
+            const isCurrent = isQuiz ? step.id === runtime?.currentQuizQuestionId : step.id === runtime?.currentSlideId;
+            const isLive = isQuiz ? live.questionId === step.id : live.slideId === step.id;
+            const isStaged = !isLive && (isQuiz ? staged.questionId === step.id : staged.slideId === step.id);
             return <button
-              key={`${step.kind}-${step.id}`}
-              className={`run-step accent-${meta.accent} ${isLive ? 'is-live' : ''} ${isStaged ? 'is-staged' : ''}`}
-              onClick={() => stage(step)}
+              key={step.id}
+              className={`run-step accent-${activeMeta?.accent} ${isLive ? 'is-live' : ''} ${isStaged ? 'is-staged' : ''} ${isCurrent ? 'is-current' : ''}`}
+              onClick={() => stageTarget(isQuiz
+                ? { kind: 'quizQuestion', roundId: activeRound.id, questionId: step.id }
+                : { kind: 'slide', roundId: activeRound.id, slideId: step.id })}
             >
               <span className="accent-dot" />
               <span className="run-step-copy">
-                <span className="run-step-kicker">{step.kind === 'block' ? meta.label : 'Prediction'}</span>
-                <span className="run-step-label">{step.label}</span>
+                <span className="run-step-kicker">{isQuiz ? `Q${index + 1} · ${step.points}p` : `Slide ${index + 1}`}</span>
+                <span className="run-step-label">{isQuiz ? step.prompt : (step.title || step.body || '(no title)')}</span>
               </span>
             </button>;
           })}
+
+          {!activeMeta?.stepped && <button
+            className={`run-step accent-${activeMeta?.accent} ${live.roundId === activeRound.id && !live.questionId && !live.slideId ? 'is-live' : ''}`}
+            onClick={() => stageTarget({ kind: 'round', roundId: activeRound.id })}
+          >
+            <span className="accent-dot" />
+            <span className="run-step-copy">
+              <span className="run-step-kicker">{activeMeta?.label}</span>
+              <span className="run-step-label">{activeRound.title}</span>
+            </span>
+          </button>}
+
+          {roundPredictions.map((prediction: any) => <button
+            key={`prediction-${prediction.id}`}
+            className={`run-step accent-blue ${live.predictionId === prediction.id ? 'is-live' : ''} ${staged.predictionId === prediction.id ? 'is-staged' : ''}`}
+            onClick={() => stageTarget({ kind: 'prediction', predictionId: prediction.id })}
+          >
+            <span className="accent-dot" />
+            <span className="run-step-copy">
+              <span className="run-step-kicker">Prediction #{prediction.display_number}</span>
+              <span className="run-step-label">{prediction.question}</span>
+            </span>
+          </button>)}
         </div>
       </div>
     </Card>}
@@ -317,7 +434,7 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
               {p.status === 'OPEN' && <div className="mono countdown-inline"><Countdown closesAt={p.closes_at} /></div>}
               {['DRAFT', 'SCHEDULED'].includes(p.status)
                 ? <button className="btn btn-primary btn-compact" onClick={() => run('/api/open-prediction', { predictionId: p.id })}>OPEN NOW</button>
-                : <button className="btn btn-secondary btn-compact" onClick={() => run('/api/stage-item', { kind: 'prediction', predictionId: p.id })}>STAGE</button>}
+                : <button className="btn btn-secondary btn-compact" onClick={() => stageTarget({ kind: 'prediction', predictionId: p.id })}>STAGE</button>}
               {p.status === 'OPEN' && <button className="btn btn-secondary btn-compact" onClick={() => run('/api/lock-prediction', { predictionId: p.id })}>LOCK NOW</button>}
               {p.status === 'LOCKED' && <><button className="btn btn-success btn-compact" onClick={() => run('/api/set-prediction-result', { predictionId: p.id, result: 'YES' })}>RESULT YES</button><button className="btn btn-danger btn-compact" onClick={() => run('/api/set-prediction-result', { predictionId: p.id, result: 'NO' })}>RESULT NO</button></>}
               {p.status === 'RESULT' && <button className="btn btn-primary btn-compact" onClick={() => run('/api/settle-prediction', { predictionId: p.id }, true)}>SETTLE PAYOUTS</button>}
@@ -348,7 +465,7 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
           <div className="quick-adjust-grid">
             <select className="field" value={playerId} onChange={e => setPlayerId(e.target.value)}><option value="">Player</option>{activePlayers.map((p: any) => <option key={p.id} value={p.id}>{p.display_name} · {p.current_balance}</option>)}</select>
             <input className="field" type="number" placeholder="25 or -10" value={amount} onChange={e => setAmount(e.target.value)} />
-            <select className="field" value={roundId} onChange={e => setRoundId(e.target.value)}><option value="">General / no round</option>{s.rounds.map((r: any) => <option key={r.id} value={r.id}>R{String(r.round_number).padStart(2, '0')} · {r.title}</option>)}</select>
+            <select className="field" value={roundId} onChange={e => setRoundId(e.target.value)}><option value="">General / no round</option>{s.rounds.map((r: any) => <option key={r.id} value={r.id}>R{String(r.sortOrder).padStart(2, '0')} · {r.title}</option>)}</select>
             <input className="field quick-reason" placeholder="Mandatory reason" value={reason} onChange={e => setReason(e.target.value)} />
           </div>
           <button className="btn btn-primary btn-full quick-save" disabled={adjusting || !playerId || !reason.trim() || !amount || Number(amount) === 0} onClick={adjust}>{adjusting ? 'SAVING…' : <><CoinIcon size={16} /> SAVE ADJUSTMENT</>}</button>
@@ -474,7 +591,7 @@ function PhotoRoundPanel({ round, run, gameId, activeRound, players, nav }: {
     } finally { setAwarding(null); }
   };
 
-  const show = (submissionId: number | null) => run('/api/show-photo-submission', { blockId: round.blockId, submissionId });
+  const show = (submissionId: number | null) => run('/api/show-photo-submission', { roundId: round.roundId, submissionId });
 
   return <Card className="photo-live-panel">
     <div className="row-between">
@@ -799,22 +916,23 @@ function RoundsInGame({ state: s, gameId, run, nav }: { state: any; gameId: numb
       : <div className="round-line-list">
         {s.rounds.map((round: any) => {
           const isActive = round.id === activeRoundId;
-          const parts = round.blocks?.length ?? 0;
+          const meta = roundMeta(round.type);
+          const parts = roundContentCount(round);
           const groups = round.groups?.length ?? 0;
           // The server refuses a second active round with a 409, so the button says
           // so up front rather than offering an action that is going to fail.
           const blockedBy = round.status === 'UPCOMING' && activeRoundId ? s.rounds.find((r: any) => r.id === activeRoundId) : null;
           return <div key={round.id} className={`round-line ${isActive ? 'is-active' : ''}`}>
             <div className="round-line-copy">
-              <div className="round-line-title">R{String(round.round_number).padStart(2, '0')} · {round.title}</div>
-              <div className="muted round-line-meta">{parts} part{parts === 1 ? '' : 's'}{groups > 0 ? ` · ${groups} group${groups === 1 ? '' : 's'}` : ''}</div>
+              <div className="round-line-title">R{String(round.sortOrder).padStart(2, '0')} · {round.title}</div>
+              <div className="muted round-line-meta">{meta.label}{meta.itemNoun ? ` · ${parts} ${meta.itemNoun}${parts === 1 ? '' : 's'}` : ''}{groups > 0 ? ` · ${groups} group${groups === 1 ? '' : 's'}` : ''}</div>
             </div>
             <Status tone={tone(round.status) as any}>{label(round.status)}</Status>
             <div className="round-line-actions">
               {round.status === 'UPCOMING' && <button
                 className="btn btn-primary btn-compact"
                 disabled={Boolean(blockedBy)}
-                title={blockedBy ? `Complete R${String(blockedBy.round_number).padStart(2, '0')} first` : undefined}
+                title={blockedBy ? `Complete R${String(blockedBy.sortOrder).padStart(2, '0')} first` : undefined}
                 onClick={() => run('/api/start-round', { roundId: round.id })}
               >START</button>}
               {isActive && <button className="btn btn-primary btn-compact" onClick={() => run('/api/complete-round', { roundId: round.id })}>COMPLETE ROUND</button>}
@@ -824,11 +942,6 @@ function RoundsInGame({ state: s, gameId, run, nav }: { state: any; gameId: numb
         })}
       </div>}
   </Card>;
-}
-
-function stepMatches(step: any, slot: any) {
-  if (!step || !slot?.mode) return false;
-  return step.kind === 'block' ? slot.blockId === step.id : slot.predictionId === step.id;
 }
 
 const SCREEN_WIDTH = 1920;

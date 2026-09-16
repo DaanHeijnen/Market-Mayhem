@@ -1,48 +1,91 @@
-// Block-type vocabulary shared by the content picker, the run-of-show strip and the
-// block cards. Colours are class names rather than hex so the accent palette stays in
+// Round-type vocabulary shared by the create-round picker, the round list and the
+// Control Center. Colours are class names rather than hex so the accent palette stays in
 // tokens.css (design handbook 02 — COLOR).
 //
-// `available` marks the types the database accepts (round_blocks type CHECK). All
-// eleven are permitted as of migration 0015; the flag stays so a future type can be
-// designed and described here before its migration lands.
-//
-// `interactive` marks the types with a phone-side flow and a live state machine.
-// BUZZER and WAGER are authorable and presentable but not interactive: the redesign
-// specifies no phone UI or live controls for them.
+// This mirrors ROUND_TYPES in netlify/lib/round-types.ts. The server is authoritative —
+// it holds the CHECK constraint — and this file is what the host reads, so the two are
+// kept deliberately in step.
 
-export type BlockType = 'TEXT' | 'QUESTION' | 'DUOLINGO_QUESTION' | 'ROULETTE' | 'PICTURE' | 'MUSIC' | 'BUZZER' | 'WAGER' | 'SLOTMACHINE' | 'PAK_EEN_ZES' | 'FOTORONDE';
+export type RoundType = 'LIVE_QUIZ' | 'PRESENTATIE' | 'ROULETTE' | 'SLOTMACHINE' | 'PAK_EEN_ZES' | 'FOTORONDE';
 
-export type BlockMeta = { label: string; description: string; accent: string; available: boolean; interactive: boolean };
-
-export const BLOCK_META: Record<BlockType, BlockMeta> = {
-  TEXT: { label: 'Info card', description: 'A static message everyone sees. No interaction.', accent: 'muted', available: true, interactive: false },
-  QUESTION: { label: 'Open question', description: 'Shown on screen for group discussion. No phones, no scoring.', accent: 'orange', available: true, interactive: false },
-  DUOLINGO_QUESTION: { label: 'Live quiz', description: 'Phones switch to 4 big answer buttons. Correct answers earn coins.', accent: 'violet', available: true, interactive: true },
-  ROULETTE: { label: 'Roulette', description: 'Players place chips from their phones on a shared wheel.', accent: 'red', available: true, interactive: true },
-  PICTURE: { label: 'Picture round', description: 'Show an image or clue on screen — players guess out loud.', accent: 'cyan', available: true, interactive: false },
-  MUSIC: { label: 'Music round', description: 'Play a song snippet — first to shout the right answer scores.', accent: 'magenta', available: true, interactive: false },
-  BUZZER: { label: 'Buzzer round', description: 'Fastest phone tap wins the point — quickfire trivia.', accent: 'blue', available: true, interactive: false },
-  WAGER: { label: 'Wager round', description: 'Players stake their own coins on how confident they are, then answer.', accent: 'green', available: true, interactive: false },
-  SLOTMACHINE: { label: 'Slotmachine', description: 'Players lock a run of spins from their phones; the reels spin on the big screen.', accent: 'lime', available: true, interactive: true },
-  PAK_EEN_ZES: { label: 'Pak een Zes', description: 'Everyone predicts who draws a six, then players take turns pulling cards until all four sixes are out.', accent: 'ink', available: true, interactive: true },
-  FOTORONDE: { label: 'Fotoronde', description: 'Each team uploads one photo per subject from their phones; you award credits per photo.', accent: 'cyan-deep', available: true, interactive: true },
+export type RoundMeta = {
+  label: string;
+  description: string;
+  accent: string;
+  /** Round types whose content is an ordered list the host steps through. */
+  stepped: boolean;
+  /** What one item of this round's content is called, where it has items. */
+  itemNoun: string | null;
+  /** Whether the phones do anything during this round. */
+  interactive: boolean;
 };
 
-const FALLBACK: BlockMeta = { label: 'Content block', description: '', accent: 'muted', available: false, interactive: false };
-
-export function blockMeta(type: string): BlockMeta {
-  return BLOCK_META[type as BlockType] || FALLBACK;
-}
-
-export function blockLabel(block: { type: string; title?: string | null }) {
-  return block.title?.trim() || blockMeta(block.type).label;
-}
-
-/** Types offered in the content picker — only what the backend can actually store. */
-export const AUTHORABLE_BLOCK_TYPES = (Object.keys(BLOCK_META) as BlockType[]).filter(type => BLOCK_META[type].available);
-
-/** Types with a payload field for an uploaded file, and the payload key holding its blob key. */
-export const MEDIA_BLOCK_KEYS: Partial<Record<BlockType, 'imageKey' | 'audioKey'>> = {
-  PICTURE: 'imageKey',
-  MUSIC: 'audioKey',
+export const ROUND_META: Record<RoundType, RoundMeta> = {
+  LIVE_QUIZ: {
+    label: 'Live quiz',
+    description: 'Ordered questions. Phones show the answer buttons; correct answers earn the points you set per question.',
+    accent: 'violet', stepped: true, itemNoun: 'question', interactive: true,
+  },
+  PRESENTATIE: {
+    label: 'Presentatie',
+    description: 'Ordered slides for the big screen — info, an image, a song, a question asked out loud. No phones, no scoring.',
+    accent: 'cyan', stepped: true, itemNoun: 'slide', interactive: false,
+  },
+  ROULETTE: {
+    label: 'Roulette',
+    description: 'Players place chips from their phones on a shared wheel.',
+    accent: 'red', stepped: false, itemNoun: null, interactive: true,
+  },
+  SLOTMACHINE: {
+    label: 'Slotmachine',
+    description: 'Players lock a run of spins from their phones; the reels spin on the big screen.',
+    accent: 'lime', stepped: false, itemNoun: null, interactive: true,
+  },
+  PAK_EEN_ZES: {
+    label: 'Pak een Zes',
+    description: 'Everyone predicts who draws a six, then players take turns pulling cards until all four sixes are out.',
+    accent: 'ink', stepped: false, itemNoun: null, interactive: true,
+  },
+  FOTORONDE: {
+    label: 'Fotoronde',
+    description: 'Each team uploads one photo per subject from their phones; you award credits per photo.',
+    accent: 'cyan-deep', stepped: false, itemNoun: 'subject', interactive: true,
+  },
 };
+
+const FALLBACK: RoundMeta = { label: 'Round', description: '', accent: 'muted', stepped: false, itemNoun: null, interactive: false };
+
+export function roundMeta(type: string): RoundMeta {
+  return ROUND_META[type as RoundType] || FALLBACK;
+}
+
+/** Every type the Admin can create. */
+export const ROUND_TYPES = Object.keys(ROUND_META) as RoundType[];
+
+/** How many pieces of content a round holds, whatever kind of content that is. */
+export function roundContentCount(round: any): number {
+  if (!round) return 0;
+  if (round.type === 'LIVE_QUIZ') return (round.questions || []).length;
+  if (round.type === 'PRESENTATIE') return (round.slides || []).length;
+  if (round.type === 'FOTORONDE') return (round.subjects || []).length;
+  return 0;
+}
+
+/** The ordered items of a stepped round, or an empty list for the game types. */
+export function roundItems(round: any): any[] {
+  if (!round) return [];
+  if (round.type === 'LIVE_QUIZ') return round.questions || [];
+  if (round.type === 'PRESENTATIE') return round.slides || [];
+  return [];
+}
+
+/** What one item is called in the round list, without needing the round's type twice. */
+export function describeContent(round: any): string {
+  const meta = roundMeta(round?.type);
+  if (!meta.itemNoun) return meta.label;
+  const n = roundContentCount(round);
+  return `${n} ${meta.itemNoun}${n === 1 ? '' : 's'}`;
+}
+
+/** The four emoji the quiz uses for its answer buttons, in option order. */
+export const QUIZ_OPTION_EMOJIS = ['🍆', '🌽', '🍑', '😳', '🔥', '⭐'] as const;

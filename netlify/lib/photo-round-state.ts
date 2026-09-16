@@ -37,7 +37,6 @@ export type PhotoSubmissionRow = {
 
 export type PhotoRound = {
   id: number;
-  blockId: number | null;
   roundId: number | null;
   status: PhotoRoundStatus;
   subjects: PhotoSubject[];
@@ -77,14 +76,7 @@ function describeActualSplit(amounts: number[] | undefined, credits: number | nu
   return `${highs} × ${high} + ${amounts.length - highs} × ${low}`;
 }
 
-/** The subject list, from the block payload. */
-export function photoRoundSubjects(payload: any): PhotoSubject[] {
-  return normalizeSubjects(payload?.subjects);
-}
 
-export function photoRoundInstructions(payload: any): string {
-  return typeof payload?.body === 'string' ? payload.body : '';
-}
 
 /**
  * Which team a player is on for this round.
@@ -104,21 +96,20 @@ export async function playerTeamForRound(db: Queryable, roundId: number, playerI
   return { groupId: Number(rows[0].id), name: rows[0].name as string };
 }
 
-/** Load one Fotoronde with everything any surface needs. Null when the block has none. */
+/** Load one Fotoronde with everything any surface needs. Null when the round has none. */
 export async function loadPhotoRound(
   db: Queryable,
   gameId: number,
-  blockId: number,
-  payload: any,
+  roundId: number,
+  subjects: PhotoSubject[],
 ): Promise<PhotoRound | null> {
   const rounds = await db.query(
-    'SELECT id,round_id,round_block_id,status FROM photo_rounds WHERE game_night_id=$1 AND round_block_id=$2',
-    [gameId, blockId],
+    'SELECT id,round_id,status FROM photo_rounds WHERE game_night_id=$1 AND round_id=$2',
+    [gameId, roundId],
   );
   const row = rounds.rows[0];
   if (!row) return null;
   const id = Number(row.id);
-  const roundId = row.round_id ? Number(row.round_id) : null;
 
   const [teams, submissions, paid] = await Promise.all([
     // Active members only: an inactive player is not paid, so they must not count
@@ -193,7 +184,6 @@ export async function loadPhotoRound(
     ),
   }));
 
-  const subjects = photoRoundSubjects(payload);
   const status = row.status as PhotoRoundStatus;
 
   const bySubject = subjects.map(subject => {
@@ -221,7 +211,6 @@ export async function loadPhotoRound(
 
   return {
     id,
-    blockId: row.round_block_id ? Number(row.round_block_id) : null,
     roundId,
     status,
     subjects,
@@ -257,7 +246,7 @@ export async function payPhotoSubmission(
   actor: string,
 ) {
   const submission = await client.query(
-    `SELECT s.id,s.group_id,s.round_id,s.round_block_id,s.subject_key,g.name AS team_name
+    `SELECT s.id,s.group_id,s.round_id,s.subject_key,g.name AS team_name
      FROM photo_submissions s JOIN round_groups g ON g.id=s.group_id
      WHERE s.id=$1 AND s.game_night_id=$2 FOR UPDATE OF s`,
     [submissionId, gameId],
@@ -291,13 +280,13 @@ export async function payPhotoSubmission(
 
     const ledger = await client.query(
       `INSERT INTO ledger_entries(game_night_id,player_id,amount,transaction_type,description,
-        attributed_round_id,round_block_id,round_group_id,photo_submission_id,created_by,idempotency_key,metadata)
-       VALUES($1,$2,$3,'PHOTO_ROUND_REWARD',$4,$5,$6,$7,$8,$9,$10,$11::jsonb)
+        attributed_round_id,round_group_id,photo_submission_id,created_by,idempotency_key,metadata)
+       VALUES($1,$2,$3,'PHOTO_ROUND_REWARD',$4,$5,$6,$7,$8,$9,$10::jsonb)
        ON CONFLICT DO NOTHING RETURNING id`,
       [
         gameId, share.playerId, share.amount,
         `Fotoronde: ${row.team_name}`,
-        row.round_id, row.round_block_id, row.group_id, submissionId, actor,
+        row.round_id, row.group_id, submissionId, actor,
         `photo:${submissionId}:reward:${share.playerId}`,
         JSON.stringify({ subjectKey: row.subject_key, teamCredits: credits, teamName: row.team_name }),
       ],
@@ -332,12 +321,12 @@ export async function payPhotoSubmission(
  * the point of the block, so ending the upload window must not throw away work that has
  * not been judged yet. A round that is already judged and completed is left alone.
  */
-export async function closePhotoRoundForBlock(client: PoolClient, gameId: number, blockId: number) {
+export async function closePhotoRoundForRound(client: PoolClient, gameId: number, roundId: number) {
   const { rowCount } = await client.query(
     `UPDATE photo_rounds
      SET status='CLOSED',closed_at=COALESCE(closed_at,NOW()),updated_at=NOW()
-     WHERE game_night_id=$1 AND round_block_id=$2 AND status IN ('DRAFT','OPEN')`,
-    [gameId, blockId],
+     WHERE game_night_id=$1 AND round_id=$2 AND status IN ('DRAFT','OPEN')`,
+    [gameId, roundId],
   );
   return { closed: rowCount ?? 0 };
 }

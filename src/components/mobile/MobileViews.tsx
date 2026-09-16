@@ -3,7 +3,7 @@ import { mutation } from '../../lib/api';
 import { CoinIcon } from '../shared/CoinIcon';
 import { RouletteTable, type RouletteMarker, type RoulettePosition } from '../shared/RouletteTable';
 
-const QUESTION_EMOJIS = ['🍆', '🌽', '🍑', '😳'] as const;
+const QUESTION_EMOJIS = ['🍆', '🌽', '🍑', '😳', '🔥', '⭐'] as const;
 
 export type MobileView = 'home' | 'predictions' | 'prediction' | 'roulette';
 
@@ -26,7 +26,7 @@ export function MobileViews({ state: s, gameId, view, predictionId, busy, act, g
   go: (path?: string) => void;
 }) {
   const currentPrediction = s.predictions.find((p: any) => p.id === predictionId);
-  if (s.interactiveBlock) return <LiveQuestionView state={s} block={s.interactiveBlock} busy={busy} act={act} gameId={gameId} />;
+  if (s.quizQuestion) return <LiveQuestionView state={s} question={s.quizQuestion} busy={busy} act={act} gameId={gameId} />;
   // Backend-driven, like the live question above it: while a slotmachine block is the
   // live content the phone becomes its controller, and it goes away again on its own
   // when the Admin moves to the next block. There is no route to reach it by hand.
@@ -254,27 +254,71 @@ function rouletteLabel(b: { betType: string; selection: string }) {
   return b.selection;
 }
 
-function LiveQuestionView({ state: s, block, busy, act, gameId }: { state: any; block: any; busy: boolean; act: (x: () => Promise<unknown>) => void; gameId: number }) {
-  const submitted = block.selectedAnswer != null;
-  const revealed = block.status === 'REVEALED' || block.status === 'SETTLED';
+/**
+ * The live quiz question, on a phone.
+ *
+ * The buttons come from the options the server sent, so a question with three options
+ * draws three buttons rather than four with one blank. Which option is correct is absent
+ * from the payload until the host reveals, so there is nothing here to hide — the phone
+ * physically cannot know the answer early.
+ */
+function LiveQuestionView({ state: s, question, busy, act, gameId }: { state: any; question: any; busy: boolean; act: (x: () => Promise<unknown>) => void; gameId: number }) {
+  const submitted = question.myOptionId != null;
+  const revealed = question.status === 'REVEALED' || question.status === 'SETTLED';
+  const correct = question.options.filter((o: any) => o.isCorrect);
+
   return <div className="live-question-mobile">
-    <div className="live-question-header"><div className="label muted">LIVE ROUND QUESTION</div><div className="pill status-pill open">{block.status}</div></div>
-    <p className="live-question-instruction muted">{block.status === 'READY' ? 'Get ready.' : block.status === 'OPEN' && !submitted ? 'Choose one emoji.' : block.status === 'OPEN' ? 'Answer saved. Watch the big screen.' : block.status === 'CLOSED' ? submitted ? 'Answers are closed — yours is saved.' : 'Answers are closed.' : revealed ? 'Result revealed.' : ''}</p>
+    <div className="live-question-header">
+      <div className="label muted">LIVE QUIZ · {question.points} POINT{question.points === 1 ? '' : 'S'}</div>
+      <div className="pill status-pill open">{question.status}</div>
+    </div>
+    <h2 className="live-question-prompt">{question.prompt}</h2>
+    {question.body && <p className="live-question-support muted">{question.body}</p>}
+    <p className="live-question-instruction muted">{
+      question.status === 'READY' ? 'Get ready.'
+        : question.status === 'OPEN' && !submitted ? 'Choose one answer.'
+          : question.status === 'OPEN' ? 'Answer saved. Watch the big screen.'
+            : question.status === 'CLOSED' ? submitted ? 'Answers are closed — yours is saved.' : 'Answers are closed.'
+              : revealed ? 'Result revealed.' : ''
+    }</p>
+
     <div className="emoji-answer-grid">
-      {QUESTION_EMOJIS.map((emoji, index) => {
-        const selected = block.selectedAnswer === index;
-        const resultClass = revealed && selected ? block.isCorrect ? 'correct' : 'incorrect' : '';
-        return <button key={emoji} className={`emoji-answer ${selected ? 'selected' : ''} ${resultClass}`} disabled={busy || block.status !== 'OPEN' || submitted} onClick={() => act(() => mutation('/api/submit-round-answer', { gameId, blockId: block.id, selectedAnswer: index }))}><span>{emoji}</span>{selected && <small>{revealed ? block.isCorrect ? 'CORRECT' : 'YOUR ANSWER' : 'LOCKED'}</small>}</button>;
+      {question.options.map((option: any, index: number) => {
+        const selected = question.myOptionId === option.id;
+        const resultClass = revealed
+          ? option.isCorrect ? 'correct' : selected ? 'incorrect' : ''
+          : '';
+        return <button
+          key={option.id}
+          className={`emoji-answer ${selected ? 'selected' : ''} ${resultClass}`}
+          disabled={busy || question.status !== 'OPEN' || submitted}
+          onClick={() => act(() => mutation('/api/submit-quiz-answer', { gameId, questionId: question.id, optionId: option.id }))}
+        >
+          <span>{QUESTION_EMOJIS[index]}</span>
+          <b className="emoji-answer-text">{option.text}</b>
+          {selected && <small>{revealed ? (question.myAnswerCorrect ? 'CORRECT' : 'YOUR ANSWER') : 'LOCKED'}</small>}
+        </button>;
       })}
     </div>
+
     {submitted && !revealed && <Card className="answer-locked"><b>ANSWER LOCKED</b><span>Your answer is saved — you do not need to send it again.</span></Card>}
-    {/* Which answer was right, not merely whether this player's emoji matched. The server
-        withholds both until the reveal, so there is nothing to hide here. */}
-    {revealed && block.correctAnswer != null && <Card className="answer-reveal">
+
+    {/* Which answer was right, not merely whether this player's guess matched. Both only
+        exist in the payload from the reveal onwards. */}
+    {revealed && correct.length > 0 && <Card className="answer-reveal">
       <b>JUISTE ANTWOORD</b>
-      <span className="answer-reveal-value">{QUESTION_EMOJIS[block.correctAnswer]} {block.correctAnswerText || `Answer ${block.correctAnswer + 1}`}</span>
+      <span className="answer-reveal-value">{correct.map((o: any) => o.text).join(' / ')}</span>
     </Card>}
-    {revealed && <Card className={block.isCorrect ? 'answer-correct' : 'answer-wrong'}><b>{block.isCorrect ? 'CORRECT' : submitted ? 'NOT THIS TIME' : 'NO ANSWER SENT'}</b><span>{block.isCorrect && block.rewardCoins > 0 ? `+${block.rewardCoins} coins credited automatically.` : block.isCorrect ? 'Correct answer.' : submitted ? 'No reward on this question.' : 'You did not answer this question.'}</span></Card>}
+
+    {revealed && <Card className={question.myAnswerCorrect ? 'answer-correct' : 'answer-wrong'}>
+      <b>{question.myAnswerCorrect ? 'CORRECT' : submitted ? 'NOT THIS TIME' : 'NO ANSWER SENT'}</b>
+      <span>{
+        question.myAnswerCorrect && question.points > 0 ? `+${question.points} coins credited automatically.`
+          : question.myAnswerCorrect ? 'Correct answer.'
+            : submitted ? 'No reward on this question.' : 'You did not answer this question.'
+      }</span>
+    </Card>}
+
     <div className="live-question-wallet"><CoinIcon size={18} /> {s.player.balance} available</div>
   </div>;
 }
@@ -299,7 +343,7 @@ function SlotControllerView({ state: s, slot, busy, act, gameId }: { state: any;
 
   // A fresh key per series, so retrying a lock is idempotent but a genuinely new series
   // is never mistaken for a replay of the previous one.
-  useEffect(() => { setLockKey(crypto.randomUUID()); }, [slot.blockId, series?.id]);
+  useEffect(() => { setLockKey(crypto.randomUUID()); }, [slot.roundId, series?.id]);
   // A fresh key per remaining-spin count: the same key would be treated as a replay and
   // return the previous spin instead of taking a new one.
   useEffect(() => { setSpinKey(crypto.randomUUID()); }, [series?.id, series?.spinsRemaining]);
@@ -411,7 +455,7 @@ function SlotControllerView({ state: s, slot, busy, act, gameId }: { state: any;
                 <em className="muted">{s.player.balance} available</em>
               </div>
 
-              <button className="btn btn-primary btn-full" disabled={!canLock} onClick={() => act(() => mutation('/api/slot-lock-series', { gameId, blockId: slot.blockId, stakePerSpin, spins }, true, lockKey))}>
+              <button className="btn btn-primary btn-full" disabled={!canLock} onClick={() => act(() => mutation('/api/slot-lock-series', { gameId, roundId: slot.roundId, stakePerSpin, spins }, true, lockKey))}>
                 INZET VASTZETTEN
               </button>
               {maxSpins === 0 && <p className="muted microcopy">Your wallet does not cover a spin at this stake — lower the stake per spin.</p>}
@@ -486,7 +530,7 @@ function PhotoRoundView({ state: s, round, busy, gameId }: { state: any; round: 
 
         {round.open && <PhotoUploadField
           gameId={gameId}
-          blockId={round.blockId}
+          roundId={round.roundId}
           subjectKey={subject.key}
           replacing={subject.submitted}
           disabled={busy}
@@ -504,9 +548,9 @@ function PhotoRoundView({ state: s, round, busy, gameId }: { state: any; round: 
  * uploading never disables the others, and the button is dead while a file is in flight
  * so a double tap cannot send the same photo twice.
  */
-function PhotoUploadField({ gameId, blockId, subjectKey, replacing, disabled }: {
+function PhotoUploadField({ gameId, roundId, subjectKey, replacing, disabled }: {
   gameId: number;
-  blockId: number;
+  roundId: number;
   subjectKey: string;
   replacing: boolean;
   disabled: boolean;
@@ -522,7 +566,7 @@ function PhotoUploadField({ gameId, blockId, subjectKey, replacing, disabled }: 
     try {
       const form = new FormData();
       form.append('gameId', String(gameId));
-      form.append('blockId', String(blockId));
+      form.append('roundId', String(roundId));
       form.append('subjectKey', subjectKey);
       form.append('file', file);
       const response = await fetch('/api/upload-photo-submission', { method: 'POST', credentials: 'include', body: form });
@@ -576,7 +620,7 @@ function PakEenZesView({ state: s, game, busy, act, gameId }: { state: any; game
   const [drawKey, setDrawKey] = useState(() => crypto.randomUUID());
   // A fresh key per draw count: reusing one would be treated as a replay and hand back
   // the previous card instead of taking a new one.
-  useEffect(() => { setDrawKey(crypto.randomUUID()); }, [game.blockId, game.drawnCount, game.status]);
+  useEffect(() => { setDrawKey(crypto.randomUUID()); }, [game.roundId, game.drawnCount, game.status]);
 
   const complete = picks.every(p => p !== '');
   const setPick = (index: number, value: string) =>
@@ -614,7 +658,7 @@ function PakEenZesView({ state: s, game, busy, act, gameId }: { state: any; game
         <button
           className="btn btn-primary btn-full"
           disabled={busy || !complete}
-          onClick={() => act(() => mutation('/api/pak-een-zes-predict', { gameId, blockId: game.blockId, picks }))}
+          onClick={() => act(() => mutation('/api/pak-een-zes-predict', { gameId, roundId: game.roundId, picks }))}
         >VOORSPELLING OPSLAAN</button>
       </Card>
       {game.hasPredicted && <Card className="pez-saved"><b>✓ VOORSPELLING OPGESLAGEN</b><span className="muted">Je kunt hem nog aanpassen tot de host de voorspellingen sluit.</span></Card>}
@@ -633,7 +677,7 @@ function PakEenZesView({ state: s, game, busy, act, gameId }: { state: any; game
             className="btn btn-primary pez-draw-btn"
             disabled={busy}
             onClick={() => act(async () => {
-              await mutation('/api/pak-een-zes-draw', { gameId, blockId: game.blockId }, true, drawKey);
+              await mutation('/api/pak-een-zes-draw', { gameId, roundId: game.roundId }, true, drawKey);
               setDrawKey(crypto.randomUUID());
             })}
           >{busy ? 'PAKKEN…' : 'KAART PAKKEN'}</button>

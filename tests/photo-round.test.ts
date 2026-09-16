@@ -12,7 +12,6 @@ import {
   PHOTO_ROUND_STATUSES,
   type PhotoRoundStatus,
 } from '../netlify/lib/photo-round';
-import { photoRoundInstructions, photoRoundSubjects } from '../netlify/lib/photo-round-state';
 
 describe('photo subjects', () => {
   it('starts with the six standard subjects, in order', () => {
@@ -79,10 +78,8 @@ describe('photo subjects', () => {
   });
 
   it('reads the subject list and instructions off a block payload', () => {
-    expect(photoRoundSubjects({}).length).toBe(6);
-    expect(photoRoundSubjects({ subjects: [{ label: 'Iets rooks' }] })).toHaveLength(1);
-    expect(photoRoundInstructions({ body: 'Ga op jacht' })).toBe('Ga op jacht');
-    expect(photoRoundInstructions(null)).toBe('');
+    expect(normalizeSubjects(null)).toEqual(DEFAULT_PHOTO_SUBJECTS);
+    expect(normalizeSubjects([{ label: 'Iets rooks' }])).toHaveLength(1);
   });
 });
 

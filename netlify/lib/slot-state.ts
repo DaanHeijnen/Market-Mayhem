@@ -102,26 +102,33 @@ export async function loadSlotConfig(db: Queryable, gameId: number): Promise<Slo
   };
 }
 
-/** The block's own settings, read from the payload every other block type also uses. */
-export type SlotBlockSettings = { maxSpins: number; instructions: string; allowedPlayerIds: number[] };
+/**
+ * The round's own slotmachine settings.
+ *
+ * Read from `slotmachine_rounds` and `slotmachine_round_participants` rather than from a
+ * payload, so an allowlist naming a player who has since been removed simply has no row
+ * instead of a dangling id. `maxSpins` is still clamped on read as well as on write, so a
+ * round authored before the ten-spin rule cannot sell a longer run.
+ */
+export type SlotRoundSettings = { maxSpins: number; allowedPlayerIds: number[] };
 
-export function slotBlockSettings(payload: any): SlotBlockSettings {
-  const maxSpins = Number(payload?.maxSpins);
-  const allowed = Array.isArray(payload?.allowedPlayerIds) ? payload.allowedPlayerIds.map(Number).filter(Number.isInteger) : [];
+export async function loadSlotRoundSettings(db: Queryable, roundId: number): Promise<SlotRoundSettings> {
+  const [config, participants] = await Promise.all([
+    db.query('SELECT max_spins FROM slotmachine_rounds WHERE round_id=$1', [roundId]),
+    db.query('SELECT player_id FROM slotmachine_round_participants WHERE round_id=$1 ORDER BY player_id', [roundId]),
+  ]);
+  const maxSpins = Number(config.rows[0]?.max_spins);
   return {
-    // Clamped on read as well as on write, so a block authored before the ten-spin rule
-    // cannot still sell a longer run.
     maxSpins: Math.min(
       SLOT_MAX_SPINS_LIMIT,
       Number.isInteger(maxSpins) && maxSpins > 0 ? maxSpins : SLOT_MAX_SPINS_LIMIT,
     ),
-    instructions: typeof payload?.body === 'string' ? payload.body : '',
-    // Empty means everyone; the endpoints treat it that way rather than as "nobody".
-    allowedPlayerIds: allowed,
+    // No rows means everyone; the endpoints treat it that way rather than as "nobody".
+    allowedPlayerIds: participants.rows.map((r: any) => Number(r.player_id)),
   };
 }
 
-export function playerMayPlaySlot(settings: SlotBlockSettings, playerId: number) {
+export function playerMayPlaySlot(settings: SlotRoundSettings, playerId: number) {
   return settings.allowedPlayerIds.length === 0 || settings.allowedPlayerIds.includes(playerId);
 }
 
@@ -129,29 +136,29 @@ export function playerMayPlaySlot(settings: SlotBlockSettings, playerId: number)
  * Close every live series on a slot block, refunding spins the player paid for but never
  * used.
  *
- * This is what stops a hidden slotmachine session running on after the Admin moves to
- * the next content block, and it is why moving on is allowed at all: blocking navigation
+ * This is what stops a hidden slotmachine session running on after the Admin moves on
+ * to the next round, and it is why moving on is allowed at all: blocking navigation
  * until every player finishes their reeks would let one player who walked away hold the
  * whole evening hostage. No coins are lost — only the unspun remainder is returned, and
  * spins already taken keep their outcome and payout.
  *
- * Callers must already hold the game row. Safe to call for any block type and to call
+ * Callers must already hold the game row. Safe to call for any round type and to call
  * twice: the ledger's partial unique index on (slot_series_id,'SLOT_REFUND') means a
  * second attempt cannot pay a second refund.
  */
-export async function closeSlotSeriesForBlock(
+export async function closeSlotSeriesForRound(
   client: PoolClient,
   gameId: number,
-  blockId: number,
+  roundId: number,
   actor: string,
   reason: string,
 ) {
   const series = await client.query(
     `SELECT id,player_id,round_id,stake_per_spin,spins_remaining
      FROM slot_series
-     WHERE game_night_id=$1 AND round_block_id=$2 AND status='ACTIVE'
+     WHERE game_night_id=$1 AND round_id=$2 AND status='ACTIVE'
      ORDER BY player_id,id FOR UPDATE`,
-    [gameId, blockId],
+    [gameId, roundId],
   );
   if (!series.rows.length) return { closed: 0, refunded: 0 };
 
@@ -164,12 +171,12 @@ export async function closeSlotSeriesForBlock(
       const wallet = await client.query('SELECT current_balance FROM wallets WHERE player_id=$1 AND game_night_id=$2 FOR UPDATE', [row.player_id, gameId]);
       if (!wallet.rows[0]) throw new HttpError(409, 'Slotmachine player wallet is missing');
       const ledger = await client.query(
-        `INSERT INTO ledger_entries(game_night_id,player_id,amount,transaction_type,description,attributed_round_id,round_block_id,slot_series_id,created_by,idempotency_key,metadata)
-         VALUES($1,$2,$3,'SLOT_REFUND',$4,$5,$6,$7,$8,$9,$10::jsonb)
+        `INSERT INTO ledger_entries(game_night_id,player_id,amount,transaction_type,description,attributed_round_id,slot_series_id,created_by,idempotency_key,metadata)
+         VALUES($1,$2,$3,'SLOT_REFUND',$4,$5,$6,$7,$8,$9::jsonb)
          ON CONFLICT DO NOTHING RETURNING id`,
         [
           gameId, row.player_id, refund, `Slotmachine refund: ${remaining} unused spin${remaining === 1 ? '' : 's'}`,
-          row.round_id, blockId, row.id, actor, `slot:series:${row.id}:refund`,
+          row.round_id, row.id, actor, `slot:series:${row.id}:refund`,
           JSON.stringify({ reason, unusedSpins: remaining, stakePerSpin: Number(row.stake_per_spin) }),
         ],
       );
@@ -199,28 +206,28 @@ export async function closeSlotSeriesForBlock(
 }
 
 /**
- * Read the turn for one slotmachine block.
+ * Read the turn for one slotmachine round.
  *
  * Turn order is lock order, so the series are read by id. A spin still sitting at
  * SPINNING holds the turn with its player until it resolves, which is what stops the
  * projector cutting away from someone's final result.
  */
-export async function loadSlotTurn(db: Queryable, gameId: number, blockId: number): Promise<SlotTurn & { spinningSpinId: number | null }> {
+export async function loadSlotTurn(db: Queryable, gameId: number, roundId: number): Promise<SlotTurn & { spinningSpinId: number | null }> {
   const [series, spinning] = await Promise.all([
     db.query(
       `SELECT sr.id,sr.player_id,sr.stake_per_spin,sr.total_spins,sr.spins_remaining,sr.status,p.display_name
        FROM slot_series sr JOIN players p ON p.id=sr.player_id
-       WHERE sr.game_night_id=$1 AND sr.round_block_id=$2
+       WHERE sr.game_night_id=$1 AND sr.round_id=$2
        ORDER BY sr.id`,
-      [gameId, blockId],
+      [gameId, roundId],
     ),
     // A spin is "in progress" exactly while it is SPINNING; the timed sync that reveals
     // it is the same one the roulette result uses.
     db.query(
       `SELECT id,player_id FROM slot_spins
-       WHERE round_block_id=$1 AND game_night_id=$2 AND status='SPINNING'
+       WHERE round_id=$1 AND game_night_id=$2 AND status='SPINNING'
        ORDER BY id DESC LIMIT 1`,
-      [blockId, gameId],
+      [roundId, gameId],
     ),
   ]);
 

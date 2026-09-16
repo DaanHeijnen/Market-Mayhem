@@ -22,10 +22,10 @@ import { incrementGameVersion } from './game-state';
  * *into* it first keeps the intent obvious rather than relying on that.
  */
 export const RUNTIME_TABLES = [
-  // Interactive round blocks
-  'round_question_answers',
-  // Fotoronde: the photos and their judgements. The subject list is configuration and
-  // lives in the block payload, which is untouched.
+  // Live quiz answers. The questions and their options are authored content and stay.
+  'quiz_answers',
+  // Fotoronde: the photos and their judgements. The subject list is authored content in
+  // fotoronde_subjects, which is untouched.
   'photo_submissions',
   'photo_rounds',
   // Pak een Zes: predictions, turn order, draws
@@ -60,8 +60,16 @@ export const RUNTIME_TABLES = [
  */
 export const PRESERVED_TABLES = [
   'game_nights',           // the night itself; runtime columns are reset in place
-  'rounds',                // prepared structure; status is reset in place
-  'round_blocks',          // prepared content and payloads; interactive state reset in place
+  'rounds',                    // prepared structure; status is reset in place
+  'live_quiz_questions',       // authored questions, points and media
+  'live_quiz_question_options',// the answer options and which are correct
+  'live_quiz_question_state',  // 1:1 with a question; reset in place, never deleted
+  'presentation_slides',       // authored slides
+  'presentation_slide_state',  // 1:1 with a slide; reset in place
+  'fotoronde_subjects',        // the subject list and its points
+  'slotmachine_rounds',        // per-round spin limit
+  'slotmachine_round_participants', // the allowlist
+  'round_runtime',             // the per-round cursor; reset in place
   'round_groups',          // teams
   'round_group_members',   // team assignment
   'predictions',           // prepared markets; their live state is reset in place
@@ -75,14 +83,19 @@ export const PRESERVED_TABLES = [
   'screen_state',          // kept, but reset to the dashboard in place
   'admin_sessions',        // the Admin stays signed in
   'admin_audit_log',       // operational history, never game state
-  'teams',                 // legacy, unread by any current feature
+  'teams',                     // legacy, unread by any current feature
+  // The record of the move to typed rounds. Never deleted by any reset: an archive that
+  // a reset can wipe is not an archive.
+  'round_blocks_archive',      // every pre-0016 block and payload, verbatim
+  'migration_notes',           // what each migration decided, and why
 ] as const;
 
 export type FullResetSummary = {
   deleted: Record<string, number>;
   playersReset: number;
   roundsReset: number;
-  blocksReset: number;
+  questionsReset: number;
+  slidesReset: number;
   predictionsReset: number;
   startingBalanceEntries: number;
   version: number;
@@ -174,14 +187,32 @@ export async function performFullReset(client: PoolClient, gameId: number, actor
     [gameId],
   );
 
-  // Blocks keep their type, order, title and payload. Only the live interaction state is
-  // cleared, and back to the same value authoring uses — so a reset block behaves exactly
+  // Authored content is untouched; only the runtime rows beside it are set back, and
+  // back to exactly the value authoring gives a new one — so a reset question behaves
   // like a freshly created one.
-  const blocks = await client.query(
-    `UPDATE round_blocks
-     SET interactive_status=CASE WHEN type IN ('DUOLINGO_QUESTION','PICTURE','MUSIC','BUZZER','WAGER') THEN 'READY' ELSE NULL END,
-         opened_at=NULL,closed_at=NULL,revealed_at=NULL,settled_at=NULL,updated_at=NOW()
-     WHERE game_night_id=$1 RETURNING id`,
+  const questions = await client.query(
+    `UPDATE live_quiz_question_state
+     SET status='READY',opened_at=NULL,closed_at=NULL,revealed_at=NULL,settled_at=NULL,
+         context_photo_shown=FALSE,revision=0,updated_at=NOW()
+     WHERE game_night_id=$1 RETURNING question_id`,
+    [gameId],
+  );
+
+  const slides = await client.query(
+    `UPDATE presentation_slide_state
+     SET revealed_at=NULL,revision=0,updated_at=NOW()
+     WHERE game_night_id=$1 RETURNING slide_id`,
+    [gameId],
+  );
+
+  // The round cursor goes back to each round's first item, which is where enterRound
+  // would put it.
+  await client.query(
+    `UPDATE round_runtime rt SET
+       current_quiz_question_id=(SELECT id FROM live_quiz_questions WHERE round_id=rt.round_id ORDER BY sort_order,id LIMIT 1),
+       current_slide_id=(SELECT id FROM presentation_slides WHERE round_id=rt.round_id ORDER BY sort_order,id LIMIT 1),
+       revision=0,updated_at=NOW()
+     WHERE game_night_id=$1`,
     [gameId],
   );
 
@@ -196,10 +227,10 @@ export async function performFullReset(client: PoolClient, gameId: number, actor
     [gameId],
   );
 
-  // No active round, no current block, projector back to the dashboard.
+  // No active round, projector back to the dashboard.
   await client.query(
     `UPDATE game_nights
-     SET current_round_id=NULL,current_round_block_id=NULL,current_screen_mode='DASHBOARD',updated_at=NOW()
+     SET current_round_id=NULL,current_screen_mode='DASHBOARD',updated_at=NOW()
      WHERE id=$1`,
     [gameId],
   );
@@ -210,9 +241,11 @@ export async function performFullReset(client: PoolClient, gameId: number, actor
     `INSERT INTO screen_state(game_night_id,mode,round_id,prediction_id,payload,updated_by)
      VALUES($1,'DASHBOARD',NULL,NULL,'{}'::jsonb,$2)
      ON CONFLICT(game_night_id) DO UPDATE
-       SET mode='DASHBOARD',round_id=NULL,prediction_id=NULL,payload='{}'::jsonb,
-           staged_mode=NULL,staged_round_id=NULL,staged_prediction_id=NULL,staged_payload='{}'::jsonb,
-           previous_mode=NULL,previous_round_id=NULL,previous_prediction_id=NULL,previous_payload='{}'::jsonb,
+       SET mode='DASHBOARD',round_id=NULL,prediction_id=NULL,quiz_question_id=NULL,slide_id=NULL,payload='{}'::jsonb,
+           staged_mode=NULL,staged_round_id=NULL,staged_prediction_id=NULL,
+           staged_quiz_question_id=NULL,staged_slide_id=NULL,staged_payload='{}'::jsonb,
+           previous_mode=NULL,previous_round_id=NULL,previous_prediction_id=NULL,
+           previous_quiz_question_id=NULL,previous_slide_id=NULL,previous_payload='{}'::jsonb,
            updated_at=NOW(),updated_by=$2`,
     [gameId, actor],
   );
@@ -226,7 +259,8 @@ export async function performFullReset(client: PoolClient, gameId: number, actor
     deleted,
     playersReset: wallets.rowCount ?? 0,
     roundsReset: rounds.rowCount ?? 0,
-    blocksReset: blocks.rowCount ?? 0,
+    questionsReset: questions.rowCount ?? 0,
+    slidesReset: slides.rowCount ?? 0,
     predictionsReset: predictions.rowCount ?? 0,
     startingBalanceEntries,
     version,

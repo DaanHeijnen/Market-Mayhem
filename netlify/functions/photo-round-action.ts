@@ -27,26 +27,23 @@ export default wrap(async request => {
   const admin = await requireAdmin(request);
   const p = await body<any>(request);
   const gameId = intValue(p.gameId, 'gameId', { min: 1 });
-  const blockId = intValue(p.blockId, 'blockId', { min: 1 });
+  const roundId = intValue(p.roundId, 'roundId', { min: 1 });
   const action = String(p.action || '').toUpperCase() as Action;
   if (!(action in ACTIONS)) throw new HttpError(400, 'Invalid Fotoronde action');
   const target = ACTIONS[action] as PhotoRoundStatus;
 
   return ok(await withTransaction(async client => {
-    const game = await client.query('SELECT current_round_id,current_round_block_id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
+    const game = await client.query('SELECT current_round_id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
     if (!game.rows[0]) throw new HttpError(404, 'Game not found');
-    if (Number(game.rows[0].current_round_block_id || 0) !== blockId) throw new HttpError(409, 'Show this Fotoronde block before running it');
 
-    const blockResult = await client.query(
-      `SELECT b.id,b.round_id,b.type,r.status AS round_status
-       FROM round_blocks b JOIN rounds r ON r.id=b.round_id
-       WHERE b.id=$1 AND b.game_night_id=$2 FOR UPDATE OF b`,
-      [blockId, gameId],
+    const roundResult = await client.query(
+      `SELECT id,type,status AS round_status FROM rounds WHERE id=$1 AND game_night_id=$2 FOR UPDATE`,
+      [roundId, gameId],
     );
-    const block = blockResult.rows[0];
-    if (!block) throw new HttpError(404, 'Fotoronde block not found');
-    if (block.type !== 'FOTORONDE') throw new HttpError(409, 'Block is not a Fotoronde');
-    if (block.round_status !== 'ACTIVE' || Number(game.rows[0].current_round_id || 0) !== Number(block.round_id)) {
+    const block = roundResult.rows[0];
+    if (!block) throw new HttpError(404, 'Round not found');
+    if (block.type !== 'FOTORONDE') throw new HttpError(409, 'That round is not a Fotoronde');
+    if (block.round_status !== 'ACTIVE' || Number(game.rows[0].current_round_id || 0) !== roundId) {
       throw new HttpError(409, 'The Fotoronde round is not active');
     }
 
@@ -54,15 +51,15 @@ export default wrap(async request => {
     // the life of the block: the photos and their credits are history, so re-showing it
     // returns to the same round rather than starting a second one.
     await client.query(
-      `INSERT INTO photo_rounds(game_night_id,round_id,round_block_id,status)
-       VALUES($1,$2,$3,'DRAFT')
-       ON CONFLICT (round_block_id) DO NOTHING`,
-      [gameId, Number(block.round_id), blockId],
+      `INSERT INTO photo_rounds(game_night_id,round_id,status)
+       VALUES($1,$2,'DRAFT')
+       ON CONFLICT (round_id) DO NOTHING`,
+      [gameId, roundId],
     );
 
     const existing = await client.query(
-      'SELECT id,status FROM photo_rounds WHERE game_night_id=$1 AND round_block_id=$2 FOR UPDATE',
-      [gameId, blockId],
+      'SELECT id,status FROM photo_rounds WHERE game_night_id=$1 AND round_id=$2 FOR UPDATE',
+      [gameId, roundId],
     );
     const current = existing.rows[0];
     if (!current) throw new HttpError(409, 'Fotoronde could not be created');
@@ -76,7 +73,7 @@ export default wrap(async request => {
 
     // Teams are the unit of submission, so opening without any is a dead end.
     if (target === 'OPEN') {
-      const groups = await client.query('SELECT COUNT(*)::int AS n FROM round_groups WHERE round_id=$1', [Number(block.round_id)]);
+      const groups = await client.query('SELECT COUNT(*)::int AS n FROM round_groups WHERE round_id=$1', [roundId]);
       if (Number(groups.rows[0].n) === 0) throw new HttpError(409, 'Create at least one team for this round before opening the Fotoronde');
     }
 
@@ -86,7 +83,7 @@ export default wrap(async request => {
       [photoRoundId, target],
     );
 
-    await audit(client, gameId, admin.username, `fotoronde ${action.toLowerCase()}`, 'round_block', blockId, {
+    await audit(client, gameId, admin.username, `fotoronde ${action.toLowerCase()}`, 'round', roundId, {
       photoRoundId, from: status, to: target,
     });
     return { status: target, version: await incrementGameVersion(client, gameId) };
