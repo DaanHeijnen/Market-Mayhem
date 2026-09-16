@@ -15,21 +15,22 @@ const SLOT_SPIN_MS = 3200;
 export function BigScreen({ gameId }: { gameId: number }) {
   const { data: s, error } = useGamePolling<any>(gameId, 'screen', `/api/screen-state?gameId=${gameId}`);
   if (!s) return <div className="screen-loading">{error ? 'LIVE CONNECTION INTERRUPTED' : 'MARKET MAYHEM'}</div>;
-  if (s.mode === 'ROUND_BLOCK' && s.block) return <BlockScene block={s.block} round={s.round} />;
+  if (s.mode === 'QUIZ_QUESTION' && s.quizQuestion) return <QuizScene question={s.quizQuestion} round={s.round} />;
+  if (s.mode === 'SLIDE' && s.slide) return <SlideScene slide={s.slide} round={s.round} />;
   if (s.mode === 'PREDICTIONS_OPEN' && s.prediction) return <PredictionScene p={s.prediction} phase="OPEN" />;
   if (s.mode === 'PREDICTION_LOCKED' && s.prediction) return <PredictionScene p={s.prediction} phase="LOCKED" />;
   if (s.mode === 'PREDICTION_RESULT' && s.prediction) return <PredictionScene p={s.prediction} phase="RESULT" />;
-  if (s.mode === 'ROULETTE') return <RouletteScene roulette={s.roulette} round={s.round} block={s.block} />;
-  if (s.mode === 'SLOTMACHINE') return <SlotScene slot={s.slotmachine} round={s.round} block={s.block} />;
-  if (s.mode === 'PAK_EEN_ZES') return <PakEenZesScene game={s.pakEenZes} round={s.round} block={s.block} />;
-  if (s.mode === 'FOTORONDE') return <PhotoRoundScene photo={s.photoRound} round={s.round} block={s.block} />;
+  if (s.mode === 'ROULETTE') return <RouletteScene roulette={s.roulette} round={s.round} />;
+  if (s.mode === 'SLOTMACHINE') return <SlotScene slot={s.slotmachine} round={s.round} />;
+  if (s.mode === 'PAK_EEN_ZES') return <PakEenZesScene game={s.pakEenZes} round={s.round} />;
+  if (s.mode === 'FOTORONDE') return <PhotoRoundScene photo={s.photoRound} round={s.round} />;
   return <Dashboard s={s} error={error} />;
 }
 
 function Dashboard({ s, error }: { s: any; error: string }) {
   return <div className="exchange-screen">
     <header className="exchange-header">
-      <div><div className="label muted">MARKET MAYHEM · LIVE EXCHANGE</div><div className="display exchange-title">{s.round ? `R${String(s.round.number).padStart(2, '0')} · ${s.round.title}` : s.game.name}</div></div>
+      <div><div className="label muted">MARKET MAYHEM · LIVE EXCHANGE</div><div className="display exchange-title">{s.round ? `R${String(s.round.sortOrder).padStart(2, '0')} · ${s.round.title}` : s.game.name}</div></div>
       <div className="screen-stats"><Stat label="MARKETS OPEN" value={s.marketsOpen} /><Stat label="TOTAL COINS IN PLAY" value={money(s.totalCoinsInPlay)} coin /></div>
     </header>
     <div className="exchange-dashboard-grid">
@@ -71,72 +72,97 @@ function Ticker({ items }: { items: any[] }) {
 
 const mediaUrl = (key: string) => `/api/block-media?key=${encodeURIComponent(key)}`;
 
-function BlockScene({ block, round }: { block: any; round: any }) {
-  if (block.type === 'DUOLINGO_QUESTION') return <DuolingoScene block={block} round={round} />;
-  if (block.type === 'PICTURE') return <PictureScene block={block} round={round} />;
-  if (block.type === 'MUSIC') return <MusicScene block={block} round={round} />;
-  const kicker = ({ QUESTION: 'QUESTION', BUZZER: 'BUZZER ROUND', WAGER: 'WAGER ROUND' } as any)[block.type] || 'ROUND NOTE';
-  const question = block.type !== 'TEXT';
-  return <Scene className={question ? 'question-scene' : 'text-scene'}><div className="scene-eyebrow">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'ROUND CONTENT'}</div><div className="scene-kicker">{kicker}</div>{block.title && <h1>{block.title}</h1>}{block.payload?.body && <p className="scene-body">{block.payload.body}</p>}{block.payload?.correctAnswer && <div className="scene-reveal">{block.payload.correctAnswer}</div>}</Scene>;
-}
+/**
+ * One presentation slide.
+ *
+ * The server sends a title only when it is public, so a picture or music slide whose
+ * title is the answer arrives with `title: null` and `titleHidden: true` until the host
+ * reveals. There is nothing here to "hide" — the secret was never sent.
+ */
+function SlideScene({ slide, round }: { slide: any; round: any }) {
+  const eyebrow = round ? `ROUND ${String(round.sortOrder).padStart(2, '0')} · ${round.title}` : 'ROUND CONTENT';
 
-// The title is the answer, so the server withholds it until reveal — which is why this
-// renders whatever it was given rather than deciding for itself.
-function PictureScene({ block, round }: { block: any; round: any }) {
-  return <Scene className="picture-scene">
-    <div className="scene-eyebrow">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'PICTURE ROUND'}</div>
-    <div className="scene-kicker">WHAT IS THIS?</div>
-    {block.payload?.imageKey
-      ? <img className="picture-scene-image" src={mediaUrl(block.payload.imageKey)} alt="" />
-      : <div className="scene-body">No image on this round yet.</div>}
-    {block.title && <div className="scene-reveal">{block.title}</div>}
+  if (slide.mediaKind === 'IMAGE' && slide.mediaKey) {
+    return <Scene className="picture-scene">
+      <div className="scene-eyebrow">{eyebrow}</div>
+      <img className="picture-scene-image" src={mediaUrl(slide.mediaKey)} alt="" />
+      {slide.title && <div className="scene-reveal">{slide.title}</div>}
+      {slide.revealText && <div className="scene-reveal">{slide.revealText}</div>}
+    </Scene>;
+  }
+
+  if (slide.mediaKind === 'AUDIO' && slide.mediaKey) {
+    return <Scene className="music-scene">
+      <div className="scene-eyebrow">{eyebrow}</div>
+      <div className="scene-kicker">MUSIC</div>
+      {/* Controls are shown rather than autoplaying: browsers block unprompted audio, so
+          an autoplay attempt would silently do nothing on the projector. */}
+      <audio className="music-scene-player" controls preload="auto" src={mediaUrl(slide.mediaKey)} />
+      {slide.title && <div className="scene-reveal">{slide.title}</div>}
+      {slide.revealText && <div className="scene-reveal">{slide.revealText}</div>}
+    </Scene>;
+  }
+
+  return <Scene className={slide.title ? 'question-scene' : 'text-scene'}>
+    <div className="scene-eyebrow">{eyebrow}</div>
+    {slide.titleHidden && <div className="scene-kicker">HIDDEN UNTIL REVEALED</div>}
+    {slide.title && <h1>{slide.title}</h1>}
+    {slide.body && <p className="scene-body">{slide.body}</p>}
+    {slide.revealText && <div className="scene-reveal">{slide.revealText}</div>}
   </Scene>;
 }
 
-function MusicScene({ block, round }: { block: any; round: any }) {
-  return <Scene className="music-scene">
-    <div className="scene-eyebrow">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'MUSIC ROUND'}</div>
-    <div className="scene-kicker">NAME THAT SONG</div>
-    <div className="music-scene-art" aria-hidden="true">♫</div>
-    {block.payload?.audioKey
-      // Controls are shown rather than autoplaying: browsers block unprompted audio, so
-      // the host presses play once on the projector.
-      ? <audio className="music-scene-player" controls preload="auto" src={mediaUrl(block.payload.audioKey)} />
-      : <div className="scene-body">No audio on this round yet.</div>}
-    {block.title && <div className="scene-reveal">{block.title}</div>}
-  </Scene>;
-}
-
-function DuolingoScene({ block, round }: { block: any; round: any }) {
-  const correct = block.payload?.correctAnswerIndex;
-  const revealed = ['REVEALED', 'SETTLED'].includes(block.interactive_status) && Number.isInteger(Number(correct));
-  const part = block.participation;
+/**
+ * One live quiz question.
+ *
+ * Which options are correct arrives only from the reveal onwards — before that the option
+ * objects simply have no `isCorrect` field — so this cannot leak the answer even if the
+ * flag below were wrong. Same for the context photo: its key is absent until the host
+ * asks for it, so an early render has no file to name.
+ */
+function QuizScene({ question, round }: { question: any; round: any }) {
+  const revealed = ['REVEALED', 'SETTLED'].includes(question.status);
+  const correct = question.options.filter((o: any) => o.isCorrect);
+  const part = question.participation;
+  const topline = round ? `ROUND ${String(round.sortOrder).padStart(2, '0')} · ${round.title}` : 'LIVE QUESTION';
 
   // The context photo is its own step, and once the host calls for it the photo *is* the
   // slide — the question shrinks to a line above it and the answer to a line below, so
   // the room still knows what it is looking at and why.
-  //
-  // The server only sends contextImageKey from the reveal onwards, so this cannot render
-  // early even if the flag were wrong.
-  if (block.showingContextPhoto && block.payload?.contextImageKey) {
+  if (question.showingContextPhoto && question.contextMediaKey) {
     return <div className="duo-screen duo-photo-screen">
-      <div className="duo-topline"><span>{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'LIVE QUESTION'}</span><span className="pill">CONTEXT</span></div>
-      <h2 className="duo-photo-question">{block.title}</h2>
-      <img className="duo-photo-image" src={mediaUrl(block.payload.contextImageKey)} alt="" />
-      {revealed && <div className="duo-photo-answer">🟢 {(block.payload?.answers || [])[Number(correct)] || ''}</div>}
+      <div className="duo-topline"><span>{topline}</span><span className="pill">CONTEXT</span></div>
+      <h2 className="duo-photo-question">{question.prompt}</h2>
+      <img className="duo-photo-image" src={mediaUrl(question.contextMediaKey)} alt="" />
+      {revealed && correct.length > 0 && <div className="duo-photo-answer">🟢 {correct.map((o: any) => o.text).join(' / ')}</div>}
     </div>;
   }
 
   return <div className="duo-screen">
     <div className="duo-topline">
-      <span>{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'LIVE QUESTION'}</span>
-      <span className="pill">{block.interactive_status || 'READY'} · {part ? `${part.answered}/${part.eligible}` : block.answer_count || 0} ANSWERS</span>
+      <span>{topline}</span>
+      <span className="pill">{question.status || 'READY'} · {part ? `${part.answered}/${part.eligible}` : 0} ANSWERS</span>
     </div>
-    <h1>{block.title}</h1>
-    {block.payload?.body && <p className="duo-support">{block.payload.body}</p>}
-    <div className="duo-answer-grid">{(block.payload?.answers || []).map((answer: string, index: number) => <div className={`duo-answer-card ${revealed && Number(correct) === index ? 'correct' : revealed ? 'dimmed' : ''}`} key={index}><span className="duo-emoji">{QUESTION_EMOJIS[index]}</span><b>{answer}</b>{revealed && Number(correct) === index && <small>CORRECT</small>}</div>)}</div>
-    {revealed && <div className="duo-reveal-banner"><span>JUISTE ANTWOORD</span><b>🟢 {(block.payload?.answers || [])[Number(correct)] || ''}</b></div>}
-    <div className="duo-footer">{block.interactive_status === 'OPEN' ? 'ANSWER NOW ON YOUR PHONE' : block.interactive_status === 'CLOSED' ? 'ANSWERS LOCKED' : revealed ? `CORRECT ANSWER REVEALED${Number(block.payload?.rewardCoins || 0) > 0 ? ` · +${block.payload.rewardCoins} COINS` : ''}` : 'GET READY'}</div>
+    <h1>{question.prompt}</h1>
+    {question.body && <p className="duo-support">{question.body}</p>}
+    <div className="duo-answer-grid">{question.options.map((option: any, index: number) => <div
+      className={`duo-answer-card ${revealed && option.isCorrect ? 'correct' : revealed ? 'dimmed' : ''}`}
+      key={option.id}
+    >
+      <span className="duo-emoji">{QUESTION_EMOJIS[index]}</span>
+      <b>{option.text}</b>
+      {revealed && option.isCorrect && <small>CORRECT</small>}
+    </div>)}</div>
+    {revealed && correct.length > 0 && <div className="duo-reveal-banner">
+      <span>JUISTE ANTWOORD</span>
+      <b>🟢 {correct.map((o: any) => o.text).join(' / ')}</b>
+    </div>}
+    <div className="duo-footer">{
+      question.status === 'OPEN' ? 'ANSWER NOW ON YOUR PHONE'
+        : question.status === 'CLOSED' ? 'ANSWERS LOCKED'
+          : revealed ? `CORRECT ANSWER REVEALED${question.points > 0 ? ` · +${question.points} POINTS` : ''}`
+            : 'GET READY'
+    }</div>
   </div>;
 }
 
@@ -145,11 +171,11 @@ function PredictionScene({ p, phase }: { p: any; phase: 'OPEN' | 'LOCKED' | 'RES
   return <div className={`prediction-screen prediction-${phase.toLowerCase()}`}><div className="scene-eyebrow">PREDICTION #{p.number}</div><h1>{phase === 'OPEN' ? 'PREDICTION OPEN' : 'MARKET LOCKED'}</h1><p>{p.question}</p><div className="big-odds"><div className="yes"><span>YES</span><b>@ {p.yesOdds.toFixed(2)}x</b></div><div className="no"><span>NO</span><b>@ {p.noOdds.toFixed(2)}x</b></div></div><div className="scene-footer">{phase === 'OPEN' ? 'PLACE YOUR BET ON YOUR PHONE' : 'NO MORE BETS · WAITING FOR RESULT'}</div></div>;
 }
 
-function RouletteScene({ roulette: r, round, block }: { roulette: any; round: any; block: any }) {
-  const markers: RouletteMarker[] = (r?.public_bets || []).map((b: any) => ({ id: b.id, betType: b.betType, selection: String(b.selection), stake: Number(b.stake), displayName: b.displayName, color: b.color }));
+function RouletteScene({ roulette: r, round }: { roulette: any; round: any }) {
+  const markers: RouletteMarker[] = (r?.publicBets || []).map((b: any) => ({ id: b.id, betType: b.betType, selection: String(b.selection), stake: Number(b.stake), displayName: b.displayName, color: b.color }));
   return <div className="roulette-screen">
-    <div className="roulette-screen-header"><div><div className="label muted">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'MARKET MAYHEM'}</div><h1 className="display">{block?.title || 'ROULETTE'}</h1></div><div className="roulette-status"><span>{r?.status || 'READY'}</span><b>{markers.length} chips</b></div></div>
-    {!r ? <div className="screen-center-message">ROULETTE READY</div> : r.status === 'CANCELLED' ? <div className="screen-center-message">ROULETTE CANCELLED<small>Active stakes refunded</small></div> : <div className="roulette-screen-grid"><RouletteWheel status={r.status} resultNumber={r.result_number} /><div className="roulette-board-wrap"><RouletteTable markers={markers} disabled compact={false} /><div className="roulette-board-caption">{r.status === 'OPEN' ? 'BETTING OPEN · CHIPS UPDATE LIVE' : r.status === 'LOCKED' ? 'BETS LOCKED' : r.status === 'SPINNING' ? 'SPINNING…' : r.result_number != null ? `RESULT · ${r.result_number}` : 'ROULETTE'}</div></div></div>}
+    <div className="roulette-screen-header"><div><div className="label muted">{round ? `ROUND ${String(round.sortOrder).padStart(2, '0')} · ${round.title}` : 'MARKET MAYHEM'}</div><h1 className="display">{round?.title || 'ROULETTE'}</h1></div><div className="roulette-status"><span>{r?.status || 'READY'}</span><b>{markers.length} chips</b></div></div>
+    {!r ? <div className="screen-center-message">ROULETTE READY</div> : r.status === 'CANCELLED' ? <div className="screen-center-message">ROULETTE CANCELLED<small>Active stakes refunded</small></div> : <div className="roulette-screen-grid"><RouletteWheel status={r.status} resultNumber={r.resultNumber} /><div className="roulette-board-wrap"><RouletteTable markers={markers} disabled compact={false} /><div className="roulette-board-caption">{r.status === 'OPEN' ? 'BETTING OPEN · CHIPS UPDATE LIVE' : r.status === 'LOCKED' ? 'BETS LOCKED' : r.status === 'SPINNING' ? 'SPINNING…' : r.resultNumber != null ? `RESULT · ${r.resultNumber}` : 'ROULETTE'}</div></div></div>}
   </div>;
 }
 
@@ -161,7 +187,7 @@ function RouletteScene({ roulette: r, round, block }: { roulette: any; round: an
  * `currentSpin.grid` is the committed 3x3 field, `winCells` are the cells that form its
  * winning pattern, and `spinning` only says whether the animation window has elapsed.
  */
-function SlotScene({ slot, round, block }: { slot: any; round: any; block: any }) {
+function SlotScene({ slot, round }: { slot: any; round: any }) {
   const spin = slot?.currentSpin || null;
   // While the reels are still turning the numbers below them would give the result
   // away — so the scene withholds them until the animation has landed, exactly as the
@@ -179,8 +205,8 @@ function SlotScene({ slot, round, block }: { slot: any; round: any; block: any }
   return <div className="slot-screen">
     <div className="slot-screen-header">
       <div className="slot-screen-title">
-        <div className="label muted">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'MARKET MAYHEM'}</div>
-        <h1 className="display">{block?.title || 'SLOTMACHINE'}</h1>
+        <div className="label muted">{round ? `ROUND ${String(round.sortOrder).padStart(2, '0')} · ${round.title}` : 'MARKET MAYHEM'}</div>
+        <h1 className="display">{round?.title || 'SLOTMACHINE'}</h1>
       </div>
       {/* The turn, not the last spin: this stays put for the player's whole run so the
           room always knows who is up. Only the remaining count moves between spins. */}
@@ -279,7 +305,7 @@ function formatMultiplier(value: number) {
  * afterwards. A six gets its own celebration because that is the moment the room is
  * waiting for.
  */
-function PakEenZesScene({ game, round, block }: { game: any; round: any; block: any }) {
+function PakEenZesScene({ game, round }: { game: any; round: any }) {
   const status = game?.status || 'READY';
   const last = game?.lastDraw || null;
   const finished = status === 'FINISHED';
@@ -290,8 +316,8 @@ function PakEenZesScene({ game, round, block }: { game: any; round: any; block: 
   return <div className={`pez-screen ${celebrating ? 'is-celebrating' : ''}`}>
     <div className="pez-header">
       <div className="pez-title">
-        <div className="label muted">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'MARKET MAYHEM'}</div>
-        <h1 className="display">{block?.title || 'PAK EEN ZES'}</h1>
+        <div className="label muted">{round ? `ROUND ${String(round.sortOrder).padStart(2, '0')} · ${round.title}` : 'MARKET MAYHEM'}</div>
+        <h1 className="display">{round?.title || 'PAK EEN ZES'}</h1>
       </div>
       <div className="pez-status">
         <span>{PEZ_STATUS_LABELS[status] || status}</span>
@@ -379,15 +405,15 @@ function PakEenZesScene({ game, round, block }: { game: any; round: any; block: 
  * single photo up and it fills the screen with its team's name, because that is what
  * everyone is looking at and arguing about.
  */
-function PhotoRoundScene({ photo, round, block }: { photo: any; round: any; block: any }) {
+function PhotoRoundScene({ photo, round }: { photo: any; round: any }) {
   const shown = photo?.shown || null;
   const status = photo?.status || 'DRAFT';
 
   return <div className="photo-screen">
     <div className="photo-screen-header">
       <div className="photo-screen-title">
-        <div className="label muted">{round ? `ROUND ${String(round.number).padStart(2, '0')} · ${round.title}` : 'MARKET MAYHEM'}</div>
-        <h1 className="display">{block?.title || 'FOTORONDE'}</h1>
+        <div className="label muted">{round ? `ROUND ${String(round.sortOrder).padStart(2, '0')} · ${round.title}` : 'MARKET MAYHEM'}</div>
+        <h1 className="display">{round?.title || 'FOTORONDE'}</h1>
       </div>
       <div className="photo-screen-status">
         <span>{PHOTO_STATUS_LABELS[status] || status}</span>

@@ -38,25 +38,22 @@ import { wrap } from './_wrap';
 export default wrap(async request => {
   const p = await body<any>(request);
   const gameId = intValue(p.gameId, 'gameId', { min: 1 });
-  const blockId = intValue(p.blockId, 'blockId', { min: 1 });
+  const roundId = intValue(p.roundId, 'roundId', { min: 1 });
   const session = await requirePlayer(request, gameId);
   const key = requestIdempotencyKey(request);
 
   return ok(await withTransaction(async client => {
-    const game = await client.query('SELECT current_round_id,current_round_block_id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
+    const game = await client.query('SELECT current_round_id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
     if (!game.rows[0]) throw new HttpError(404, 'Game not found');
-    if (Number(game.rows[0].current_round_block_id || 0) !== blockId) throw new HttpError(409, 'Pak een Zes is not the live content block');
 
-    const blockResult = await client.query(
-      `SELECT b.id,b.round_id,b.type,r.status AS round_status
-       FROM round_blocks b JOIN rounds r ON r.id=b.round_id
-       WHERE b.id=$1 AND b.game_night_id=$2`,
-      [blockId, gameId],
+    const roundResult = await client.query(
+      'SELECT id,type,status AS round_status FROM rounds WHERE id=$1 AND game_night_id=$2',
+      [roundId, gameId],
     );
-    const block = blockResult.rows[0];
-    if (!block) throw new HttpError(404, 'Pak een Zes block not found');
-    if (block.type !== 'PAK_EEN_ZES') throw new HttpError(409, 'Block is not a Pak een Zes');
-    if (block.round_status !== 'ACTIVE' || Number(game.rows[0].current_round_id || 0) !== Number(block.round_id)) {
+    const block = roundResult.rows[0];
+    if (!block) throw new HttpError(404, 'Round not found');
+    if (block.type !== 'PAK_EEN_ZES') throw new HttpError(409, 'That round is not a Pak een Zes');
+    if (block.round_status !== 'ACTIVE' || Number(game.rows[0].current_round_id || 0) !== roundId) {
       throw new HttpError(409, 'The Pak een Zes round is not active');
     }
 
@@ -64,9 +61,9 @@ export default wrap(async request => {
     // then sees the turn already advanced.
     const existing = await client.query(
       `SELECT id,round_id,status,turn_index FROM pak_een_zes_games
-       WHERE game_night_id=$1 AND round_block_id=$2
+       WHERE game_night_id=$1 AND round_id=$2
        ORDER BY id DESC LIMIT 1 FOR UPDATE`,
-      [gameId, blockId],
+      [gameId, roundId],
     );
     const current = existing.rows[0];
     if (!current) throw new HttpError(409, 'The game has not started');
@@ -116,10 +113,10 @@ export default wrap(async request => {
     const six = isSix(card);
 
     const inserted = await client.query(
-      `INSERT INTO pak_een_zes_draws(pak_een_zes_game_id,game_night_id,round_id,round_block_id,player_id,
+      `INSERT INTO pak_een_zes_draws(pak_een_zes_game_id,game_night_id,round_id,player_id,
         draw_number,rank,suit,is_six,idempotency_key)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
-      [pakEenZesGameId, gameId, Number(current.round_id), blockId, session.playerId, drawNumber, card.rank, card.suit, six, key],
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      [pakEenZesGameId, gameId, roundId, session.playerId, drawNumber, card.rank, card.suit, six, key],
     );
 
     // The game ends the moment the fourth six is out, whatever is left in the deck.

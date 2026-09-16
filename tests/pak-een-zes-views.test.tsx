@@ -18,10 +18,9 @@ const ROSTER = [
   { id: 3, name: 'Bas', color: '#2FAF5B' },
 ];
 
-/** The `pakEenZes` block of a player-state payload. */
+/** The `pakEenZes` section of a player-state payload. */
 function pez(overrides: Record<string, unknown> = {}) {
   return {
-    blockId: 41,
     roundId: 3,
     title: 'Pak een Zes',
     instructions: 'Kies vier namen.',
@@ -192,17 +191,19 @@ describe('playing cards', () => {
 });
 
 describe('Pak een Zes in the Control Center', () => {
-  const blocks = [
-    { id: 41, round_id: 3, type: 'PAK_EEN_ZES', title: 'Pak een Zes', sort_order: 1, payload: {}, answer_count: 0 },
-  ];
+  /** A round is the game now: one type, no blocks inside it. */
+  const PAK_ROUND = {
+    id: 3, sortOrder: 3, title: 'Pak een Zes', type: 'PAK_EEN_ZES', status: 'ACTIVE',
+    description: '', instructions: '', defaultPoints: 25, groups: [],
+  };
   const state = (overrides: Record<string, unknown> = {}) => ({
     version: 1,
-    game: { id: 1, name: 'Game Night', starting_balance: 100, maximum_wallet_percentage: null, current_round_id: 3, current_round_block_id: 41, current_screen_mode: 'PAK_EEN_ZES', game_state_version: 1 },
-    screen: { mode: 'PAK_EEN_ZES', roundId: 3, blockId: 41, predictionId: null, staged: { mode: 'PAK_EEN_ZES', roundId: 3, blockId: 41, predictionId: null }, previous: { mode: null, roundId: null, blockId: null, predictionId: null } },
-    runOfShow: [{ kind: 'block', id: 41, roundId: 3, type: 'PAK_EEN_ZES', label: 'Pak een Zes' }],
+    game: { id: 1, name: 'Game Night', starting_balance: 100, maximum_wallet_percentage: null, current_round_id: 3, current_screen_mode: 'PAK_EEN_ZES', game_state_version: 1 },
+    screen: { mode: 'PAK_EEN_ZES', roundId: 3, questionId: null, slideId: null, predictionId: null, staged: { mode: 'PAK_EEN_ZES', roundId: 3, questionId: null, slideId: null, predictionId: null }, previous: { mode: null, roundId: null, questionId: null, slideId: null, predictionId: null } },
+    roundRuntime: { currentQuizQuestionId: null, currentSlideId: null, revision: 0 },
     predictionRequests: [],
-    rounds: [{ id: 3, round_number: 3, title: 'Kennisquiz', status: 'ACTIVE', description: '', blocks, groups: [] }],
-    currentBlock: blocks[0],
+    rounds: [PAK_ROUND],
+    activeRound: PAK_ROUND,
     players: [
       { id: 1, display_name: 'Daan', public_color: '#9B2FF2', active: true, current_balance: 290, locked_prediction: 0, rank: 1, joined: true },
       { id: 2, display_name: 'Twan', public_color: '#E8352F', active: true, current_balance: 260, locked_prediction: 0, rank: 2, joined: true },
@@ -215,7 +216,7 @@ describe('Pak een Zes in the Control Center', () => {
     slotConfig: null,
     activeSlot: null,
     pakEenZes: {
-      blockId: 41,
+      roundId: 3,
       status: 'PREDICTING',
       turnIndex: 0,
       currentPlayer: null,

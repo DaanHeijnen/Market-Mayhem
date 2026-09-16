@@ -41,13 +41,22 @@ test('prediction deposits, live question, groups and roulette stay ledger-backed
   await post(pa, '/api/join-player', { token: la.path.split('/').pop() });
   await post(pb, '/api/join-player', { token: lb.path.split('/').pop() });
 
-  const round = await post(admin, '/api/create-round', { gameId: 1, roundNumber: 7, title: 'E2E Round', description: 'Backlog flow' });
-  const intro = await post(admin, '/api/upsert-round-block', { gameId: 1, roundId: round.roundId, type: 'TEXT', title: 'Welcome', body: 'Start here' });
-  const duo = await post(admin, '/api/upsert-round-block', {
-    gameId: 1, roundId: round.roundId, type: 'DUOLINGO_QUESTION', title: 'Which emoji maps to Amsterdam?',
-    answers: ['Amsterdam', 'Brussels', 'Paris', 'Berlin'], correctAnswerIndex: 0, rewardCoins: 10,
+  // A round has exactly one type, so the quiz and the roulette are two rounds. Mixing
+  // them was the thing the block model allowed and this model deliberately does not.
+  const round = await post(admin, '/api/create-round', {
+    gameId: 1, type: 'LIVE_QUIZ', title: 'E2E Quiz', description: 'Backlog flow', defaultPoints: 10,
   });
-  const rouletteBlock = await post(admin, '/api/upsert-round-block', { gameId: 1, roundId: round.roundId, type: 'ROULETTE', title: 'Roulette' });
+  const question = await post(admin, '/api/upsert-quiz-question', {
+    gameId: 1, roundId: round.roundId, prompt: 'Which city is the capital of the Netherlands?',
+    points: 10,
+    options: [
+      { text: 'Amsterdam', isCorrect: true },
+      { text: 'Brussels', isCorrect: false },
+      { text: 'Paris', isCorrect: false },
+      { text: 'Berlin', isCorrect: false },
+    ],
+  });
+  const rouletteRound = await post(admin, '/api/create-round', { gameId: 1, type: 'ROULETTE', title: 'E2E Roulette' });
 
   const group = await post(admin, '/api/upsert-round-group', { gameId: 1, roundId: round.roundId, name: 'Team Alpha' });
   await post(admin, '/api/set-round-group-members', { gameId: 1, groupId: group.groupId, playerIds: [a.playerId, b.playerId] });
@@ -63,7 +72,11 @@ test('prediction deposits, live question, groups and roulette stay ledger-backed
   expect(opened.status).toBe('OPEN');
   expect(Number(opened.yes_odds)).toBe(2.5);
   expect(new Date(opened.closes_at).getTime() - new Date(opened.opened_at).getTime()).toBe(5000);
-  expect(started.game.current_round_block_id).toBeNull(); // round start + scheduled market opening never take over the projector
+  // Starting a round changes progression only: the projector stays where it was.
+  expect(started.screen.mode).toBe('DASHBOARD');
+  expect(started.screen.questionId).toBeNull();
+  // The round's own cursor did move — that is game state, not presentation.
+  expect(started.roundRuntime.currentQuizQuestionId).toBe(question.questionId);
 
   const initialA = await getJson(pa, '/api/player-state?gameId=1');
   expect(initialA.player.balance).toBe(105);
@@ -84,25 +97,36 @@ test('prediction deposits, live question, groups and roulette stay ledger-backed
   await post(admin, '/api/settle-prediction', { gameId: 1, predictionId: prediction.predictionId }, true);
   expect((await getJson(pa, '/api/player-state?gameId=1')).player.balance).toBe(135); // 105 - 20 + full 50 return
 
-  // The interactive block becomes the phone controller; answer text/correct index never comes from player-state.
-  await post(admin, '/api/set-active-round-block', { gameId: 1, roundId: round.roundId, blockId: duo.blockId });
-  await post(admin, '/api/question-action', { gameId: 1, blockId: duo.blockId, action: 'OPEN' });
+  // The live question becomes the phone controller. Which option is correct never
+  // reaches a phone before the reveal — the field is simply absent.
+  await post(admin, '/api/show-on-screen', { gameId: 1, kind: 'quizQuestion', roundId: round.roundId, questionId: question.questionId });
+  await post(admin, '/api/quiz-question-action', { gameId: 1, questionId: question.questionId, action: 'OPEN' });
   const playerQuestion = await getJson(pa, '/api/player-state?gameId=1');
-  expect(playerQuestion.interactiveBlock.status).toBe('OPEN');
-  expect(playerQuestion.interactiveBlock.correctAnswerIndex).toBeUndefined();
-  expect(playerQuestion.interactiveBlock.answers).toBeUndefined();
-  await post(pa, '/api/submit-round-answer', { gameId: 1, blockId: duo.blockId, selectedAnswer: 0 });
-  await post(pb, '/api/submit-round-answer', { gameId: 1, blockId: duo.blockId, selectedAnswer: 1 });
-  const duplicateAnswer = await pa.request.post('/api/submit-round-answer', { data: { gameId: 1, blockId: duo.blockId, selectedAnswer: 2 } });
+  expect(playerQuestion.quizQuestion.status).toBe('OPEN');
+  expect(playerQuestion.quizQuestion.myAnswerCorrect).toBeNull();
+  for (const option of playerQuestion.quizQuestion.options) {
+    expect(option.isCorrect).toBeUndefined();
+  }
+  const optionIds = playerQuestion.quizQuestion.options.map((o: any) => o.id);
+  await post(pa, '/api/submit-quiz-answer', { gameId: 1, questionId: question.questionId, optionId: optionIds[0] });
+  await post(pb, '/api/submit-quiz-answer', { gameId: 1, questionId: question.questionId, optionId: optionIds[1] });
+  const duplicateAnswer = await pa.request.post('/api/submit-quiz-answer', { data: { gameId: 1, questionId: question.questionId, optionId: optionIds[2] } });
   expect(duplicateAnswer.status()).toBe(409);
-  await post(admin, '/api/question-action', { gameId: 1, blockId: duo.blockId, action: 'CLOSE' });
-  await post(admin, '/api/question-action', { gameId: 1, blockId: duo.blockId, action: 'REVEAL' });
+  await post(admin, '/api/quiz-question-action', { gameId: 1, questionId: question.questionId, action: 'CLOSE' });
+  await post(admin, '/api/quiz-question-action', { gameId: 1, questionId: question.questionId, action: 'REVEAL' });
   expect((await getJson(pa, '/api/player-state?gameId=1')).player.balance).toBe(145);
   expect((await getJson(pb, '/api/player-state?gameId=1')).player.balance).toBe(105);
-  await post(admin, '/api/question-action', { gameId: 1, blockId: duo.blockId, action: 'SETTLE' });
+  // A replayed reveal pays nobody twice — the ledger's unique index is what guarantees it.
+  await post(admin, '/api/quiz-question-action', { gameId: 1, questionId: question.questionId, action: 'REVEAL' });
+  expect((await getJson(pa, '/api/player-state?gameId=1')).player.balance).toBe(145);
+  await post(admin, '/api/quiz-question-action', { gameId: 1, questionId: question.questionId, action: 'SETTLE' });
+
+  // Leaving the quiz round for the roulette round runs the quiz round's exit policy.
+  await post(admin, '/api/complete-round', { gameId: 1, roundId: round.roundId });
+  await post(admin, '/api/start-round', { gameId: 1, roundId: rouletteRound.roundId });
 
   // Roulette chips are batch-placed on canonical regions. The server selects the spin number.
-  await post(admin, '/api/set-active-round-block', { gameId: 1, roundId: round.roundId, blockId: rouletteBlock.blockId });
+  await post(admin, '/api/show-on-screen', { gameId: 1, kind: 'round', roundId: rouletteRound.roundId });
   let adminState = await getJson(admin, '/api/admin-state?gameId=1');
   const rg = adminState.activeRoulette;
   await post(admin, '/api/roulette-action', { gameId: 1, rouletteGameId: rg.id, action: 'OPEN' });
@@ -132,13 +156,15 @@ test('prediction deposits, live question, groups and roulette stay ledger-backed
   expect(afterRouletteA.player.balance).toBe(135 + (RED.has(result) ? 20 : 0));
   expect(afterRouletteB.player.balance).toBe(95 + (result !== 0 && !RED.has(result) ? 20 : 0));
 
-  await post(admin, '/api/complete-round', { gameId: 1, roundId: round.roundId });
+  await post(admin, '/api/complete-round', { gameId: 1, roundId: rouletteRound.roundId });
+  // Group adjustments stay available after a round is completed, so a correction is
+  // still possible once the evening has moved on.
   await post(admin, '/api/adjust-group-coins', { gameId: 1, groupId: group.groupId, amount: 3, reason: 'Retroactive correction' }, true);
   const ledger = await getJson(admin, `/api/ledger-state?gameId=1&round=${round.roundId}`);
   expect(ledger.entries.filter((x: any) => x.description === 'Retroactive correction')).toHaveLength(2);
   expect(ledger.entries.every((x: any) => x.description !== 'Retroactive correction' || x.group_name === 'Team Alpha')).toBe(true);
 
-  await post(admin, '/api/screen-mode', { gameId: 1, mode: 'DASHBOARD' });
+  await post(admin, '/api/show-on-screen', { gameId: 1, kind: 'dashboard' });
   await screen.reload();
   await expect(screen.getByText('LIVE VALUE GRAPH')).toBeVisible();
   await expect(screen.getByText('Prediction results')).toBeVisible();

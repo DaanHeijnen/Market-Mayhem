@@ -993,8 +993,10 @@ button.chip-blue:hover { background: var(--violet); }
 .run-step-kicker { font-size: 9px; font-weight: 800; letter-spacing: .08em; opacity: .65; text-transform: uppercase; }
 .run-step-label { max-width: 150px; overflow: hidden; font-size: 13px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Content-type picker tiles */
+/* Round-type picker tiles — shown once, when a round is created */
+.round-type-grid,
 .block-type-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 14px; }
+.round-type-tile,
 .block-type-tile {
   display: grid;
   gap: 6px;
@@ -1008,9 +1010,13 @@ button.chip-blue:hover { background: var(--violet); }
   text-align: left;
   transition: border-color .15s ease-in-out, background .15s ease-in-out;
 }
+.round-type-tile:hover,
 .block-type-tile:hover { border-color: #D7D1BC; }
+.round-type-tile.selected,
 .block-type-tile.selected { border-color: var(--ink); background: var(--surface-soft); }
+.round-type-tile b,
 .block-type-tile b { margin-top: 4px; font-size: 12px; font-weight: 800; letter-spacing: .05em; }
+.round-type-tile span,
 .block-type-tile span { color: var(--secondary); font-size: 11px; line-height: 1.4; }
 
 /* This round's content — side summary */
@@ -2115,3 +2121,80 @@ button.chip-blue:hover { background: var(--violet); }
   font-size: .9vw;
 }
 .photo-standing b { font: 800 1.2vw var(--display); }
+
+/* === Round editors ====================================================== */
+/*
+ * Each round type has its own editor, so these are the pieces those editors need that
+ * the shared card/field primitives above do not already cover.
+ */
+
+/* --- Live quiz: options and their correctness --------------------------- */
+.quiz-options { display: grid; gap: 10px; margin-top: 14px; }
+.quiz-option-row { display: flex; align-items: center; gap: 10px; }
+.quiz-option-row .field { flex: 1; min-width: 0; }
+.quiz-option-emoji {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--surface-soft);
+  font-size: 16px;
+}
+/* The correctness tick reads as a toggle rather than a form checkbox, because it is the
+   one field on the row that changes what the question means. */
+.quiz-option-correct {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 7px 12px;
+  border: 2px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.quiz-option-correct.selected { border-color: var(--success, #2FAF5B); background: rgba(47, 175, 91, .1); }
+.quiz-option-correct input { accent-color: var(--success, #2FAF5B); }
+
+.quiz-option-summary { display: grid; gap: 4px; margin: 12px 0 0; padding: 0; list-style: none; }
+.quiz-option-summary li { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.quiz-option-summary li.is-correct { font-weight: 700; }
+.quiz-option-summary li b {
+  margin-left: auto;
+  color: var(--success, #2FAF5B);
+  font-size: 9px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+/* --- Presentation: the media choice and the slide's secret -------------- */
+.slide-media-choice { margin-top: 14px; }
+.slide-secret {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 14px;
+  border: 2px dashed var(--border);
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+
+/* --- Control Center: type-specific navigation --------------------------- */
+/* Previous / position / next / show, kept on one line so the host's eye does not have
+   to travel to find where they are in the round. */
+.live-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.live-nav .mono { min-width: 48px; text-align: center; }
+
+/* The step the round's cursor is on, which is not necessarily what is on screen. */
+.run-step.is-current { box-shadow: inset 0 0 0 2px var(--ink); }
+
+/* --- Player mobile: an answer button carries its own text ---------------- */
+.live-question-prompt { margin: 0; font-size: 22px; line-height: 1.15; }
+.live-question-support { margin: 0; font-size: 13px; line-height: 1.5; }
+.emoji-answer-text { font-size: 13px; font-weight: 700; line-height: 1.25; text-align: center; }

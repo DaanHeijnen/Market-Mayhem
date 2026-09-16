@@ -38,24 +38,94 @@ Legacy game-level prediction duration/min/max columns remain only for migration 
 
 New-player creation reads `starting_balance` inside the same transaction that creates the player, wallet and initial ledger entry. It also stores that value as the player's immutable `starting_balance_snapshot`, which is the baseline for first-join animation and exchange-value comparisons even when the configured starting balance is zero. Existing wallets and snapshots are never rewritten when Settings changes.
 
-## Round execution and content
+## Rounds
 
-Round numbers are labels, not execution pointers. A partial unique database index allows at most one `ACTIVE` round per game. Normal lifecycle is `UPCOMING → ACTIVE → COMPLETED`.
+A round is the primary content object. It has exactly one `type`, chosen when it is
+created and never changed afterwards — content authored under one type has nowhere to go
+under another, so `edit-round` has no type parameter and changing type means creating the
+other round.
 
-`round_blocks` are ordered by `sort_order` and support:
+The six types:
 
-- `TEXT`
-- `QUESTION`
-- `DUOLINGO_QUESTION`
-- `ROULETTE`
-- `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`
-- `SLOTMACHINE`
-- `PAK_EEN_ZES`
-- `FOTORONDE`
+| Type | Content | Phones | Reward |
+|---|---|---|---|
+| `LIVE_QUIZ` | ordered `live_quiz_questions`, each with its own options | answer buttons | points per question |
+| `PRESENTATIE` | ordered `presentation_slides` | — | none |
+| `ROULETTE` | none beyond title and instructions | place chips | the bet type's own multiplier |
+| `SLOTMACHINE` | `slotmachine_rounds` + participants allowlist | lock a run, spin | the outcome's own multiplier |
+| `PAK_EEN_ZES` | none; the deck and rules are fixed | predict, draw | `rounds.default_points` per correct prediction |
+| `FOTORONDE` | ordered `fotoronde_subjects`, each with its own credits | upload one photo per subject | credits per photo, split across the team |
 
-`game_nights.current_round_block_id` is the operational content cursor. Previous/next controls are conveniences over block order; they never imply `round_number + 1`.
+`rounds.sort_order` is a label and an ordering, never an execution pointer. Lifecycle is
+`UPCOMING → ACTIVE → COMPLETED`, and a partial unique index allows at most one `ACTIVE`
+round per game.
 
-Starting a round opens all linked `SCHEDULED` predictions with each prediction's own duration. The start action does not select a round block or change `screen_state`: the projector remains on its current presentation until Admin explicitly shows a block, prediction, roulette scene, or the dashboard.
+`rounds.default_points` is what new content inherits — a new quiz question or Fotoronde
+subject starts at it and then overrides it freely. For Pak een Zes it is the rate itself,
+snapshotted onto the game when it finishes so a later change never rewrites history.
+
+### Authored content and runtime state are separate tables
+
+`live_quiz_questions` holds what the Admin wrote; `live_quiz_question_state` holds what
+phase it is in. Same for `presentation_slides` / `presentation_slide_state`. Editing a
+question and running one are therefore two writes to two different tables, and a full
+reset can set the runtime back without touching a word of the content.
+
+### The execution cursor
+
+`round_runtime` is one row per round: `current_quiz_question_id`, `current_slide_id`, and
+a `revision`. It replaced `game_nights.current_round_block_id`, and the difference is the
+point — progression belongs to the round being played rather than to the game, so a
+completed round keeps the cursor it ended on.
+
+`revision` is the optimistic-locking token. Every navigation command sends the revision it
+read, and the write is `WHERE revision = $expected`. A stale NEXT QUESTION from a second
+admin tab therefore matches no row and is answered with a 409, rather than quietly pulling
+the room back a question.
+
+### Starting a round
+
+`start-round` sets the round `ACTIVE`, prepares its runtime through `enterRound`, and opens
+any `SCHEDULED` predictions attached to it. It does **not** touch `screen_state`: the
+projector stays exactly where it was until the Admin explicitly shows something.
+`enterRound` writes no presentation state at all, which is what makes that structural
+rather than a convention.
+
+### Navigation is per type
+
+There is no generic previous/next. A quiz moves between questions (`quiz-navigate`), a
+presentation between slides (`slide-navigate`), and the three game rounds do not move at
+all — they open, run and settle through their own endpoints. The previous model shared one
+stepper across all of them, which meant pretending a roulette and a quiz question had the
+same shape.
+
+Advancing a cursor follows the projector **only if the projector was already showing that
+round's content**. A host who stepped away to the market dashboard keeps their dashboard;
+progression never seizes the screen.
+
+### Leaving a round
+
+Every path that ends a round goes through `assertRoundMayBeLeft` then `leaveRound` in
+`netlify/lib/round-lifecycle.ts`. The policy is per type and deliberately not uniform:
+
+- **`LIVE_QUIZ`** refuses while a question is `OPEN`, `CLOSED` or `REVEALED` but unsettled.
+  Answers were given and a reward was not paid; walking away loses somebody's points.
+- **`ROULETTE`** refuses while a game holds money. A `DRAFT` game, which holds none, is
+  cancelled instead.
+- **`SLOTMACHINE`** refunds and closes rather than blocking. A series is per player, and
+  one player who locked twenty spins and wandered off must not be able to hold the evening
+  hostage. No coins are lost: the unspun remainder returns and spins already taken keep
+  their payout.
+- **`PAK_EEN_ZES`** cancels. Nothing financial is at stake, but leaving it in `DRAWING`
+  keeps a turn indicator live on somebody's phone for a game nobody is watching. Draws and
+  predictions are kept — cancelling must never erase the record.
+- **`FOTORONDE`** closes and keeps everything. Its photos and the chance to award credits
+  for them are the point of the round.
+- **`PRESENTATIE`** has nothing to settle.
+
+The previous version of this rule was copied into `setActiveRoundBlock` and
+`complete-round` with subtly different guards and a different order. Centralising it is not
+tidiness: a policy in two places is a policy one route can skip.
 
 ## Predictions
 
@@ -100,35 +170,97 @@ Settlement locks game → prediction → bets → relevant wallets. Winner credi
 
 A group adjustment locks game → group → member players/wallets and creates one immutable `GROUP_ADJUSTMENT` ledger entry per member with the same amount/reason plus round/group attribution. There is no group wallet.
 
-## Live Duolingo question
+## Live quiz questions
 
-A `DUOLINGO_QUESTION` stores Admin-only configuration in the block payload: supporting text, four answer texts, `correctAnswerIndex`, reward coins and an optional `contextImageKey`.
+A `LIVE_QUIZ` round holds ordered `live_quiz_questions`. Each carries its own prompt,
+supporting text, **points**, optional timer, optional context photo, and its own
+`live_quiz_question_options` — rows rather than a JSON array, because options have their
+own ordering and their own correctness flag, and because more than one may be correct.
+A single `correctAnswerIndex` could not say that.
 
 ```mermaid
 stateDiagram-v2
   READY --> OPEN
   OPEN --> CLOSED
   CLOSED --> REVEALED
+  CLOSED --> OPEN : reopen
   REVEALED --> SETTLED
 ```
 
-When the block is current, Player snapshots include only block identity, status, reward, the player's selected emoji index and post-reveal correctness — plus, from the reveal onwards, the correct index and its text so the phone can say what the answer *was* rather than only whether this player matched it. Before the reveal they never contain answer texts or the correct index. Big Screen snapshots contain answer texts and the supporting text, but the correct index and the context photo key are stripped until `REVEALED`/`SETTLED`.
+Reopening is the one deliberate step back, and only from `CLOSED` — before anyone has been
+paid, which is what makes it safe. Every transition is checked against this machine, so a
+REVEAL arriving after somebody already settled is refused rather than rolling the question
+backwards. The write additionally carries the revision the caller read, so two admin tabs
+pressing the same button produce one change and one 409.
 
-`normalizeBlock` is where that stripping happens and is exported for tests, because what it withholds is a security rule rather than a formatting detail: the projector snapshot is served to anyone holding the screen URL, so a secret that reaches it is public.
+### Explicit payloads, not stripped rows
+
+What each audience receives is built field by field in `netlify/lib/dto.ts`:
+
+- **`playerQuizQuestion`** — the option texts (they are the buttons), the points, this
+  player's own answer. `isCorrect` is simply absent from every option until the reveal, and
+  so is `myAnswerCorrect`.
+- **`screenQuizQuestion`** — the same minus anything personal, plus participation. The
+  context photo's **key** is withheld until the host has both revealed the answer and asked
+  for the photo, so an early render has no file to name.
+- **`adminQuizQuestion`** — everything, at every phase. The Admin is the one audience
+  entitled to the answer before the room has it.
+
+The difference from the previous serialiser matters: that one took the whole row and
+deleted the parts it remembered were secret, which leaks every field somebody adds later
+and forgets to add to the strip list. A builder leaks nothing it was not told to include,
+and the tests assert the payloads as closed sets of keys.
 
 ### Participation
 
-`questionParticipation(answered, eligible)` returns `answered`, `eligible`, `remaining` and a whole `percentage`, and every surface renders that one result rather than doing its own arithmetic. Eligible is the active players; `answered` counts answers from active players only and is clamped to `eligible`, so deactivating a player who already answered cannot produce a reading over 100% at exactly the moment the host is trusting it. Reward eligibility at reveal is a separate question and deliberately unchanged.
+`questionParticipation(answered, eligible)` returns `answered`, `eligible`, `remaining` and
+a whole `percentage`, and every surface renders that one result rather than doing its own
+arithmetic. Eligible is the active players; `answered` counts answers from active players
+only and is clamped to `eligible`, so deactivating a player who already answered cannot
+produce a reading over 100% at exactly the moment the host is trusting it.
 
-Answers arriving bump `game_state_version` like any other change, so the Admin's existing 3-second poll moves the bar with no new transport. Nothing closes the question automatically — the count exists so the host can decide.
+Answers arriving bump `game_state_version` like any other change, so the Admin's existing
+poll moves the bar with no new transport. Nothing closes the question automatically — the
+count exists so the host can decide.
 
 ### Context photo
 
-The photo is a projector step rather than a question phase: by the time it appears the answers are closed and the reward is paid, so it changes no game state. It rides in `screen_state.payload` as `questionContextPhotoBlockId` exactly as the Fotoronde selection rides there, and is scoped to a block id rather than a boolean so a flag left over from one question can never raise the next one's photo. `setActiveRoundBlock` replaces the payload, so moving on takes the photo down.
+The photo is a projector step rather than a question phase: by the time it appears the
+answers are closed and the reward is paid, so it changes no game state. It lives on
+`live_quiz_question_state.context_photo_shown` — runtime state on the question itself — so
+it resets with the question and can never be left over from the previous one. The previous
+model kept it as an id in the screen payload precisely to avoid that, which is a
+workaround the new shape does not need.
 
-Three independent locks keep it from landing early: `show-question-photo` refuses unless the block is `REVEALED`/`SETTLED` and actually has a photo; `getScreenState` re-checks the phase against the block rather than trusting the payload; and `normalizeBlock` withholds the key entirely until reveal, so an early render has no file to name.
+Two independent locks keep it from landing early: `show-question-photo` refuses unless the
+question is `REVEALED`/`SETTLED` and actually has a photo, and `screenQuizQuestion`
+withholds the key entirely until then.
 
-`round_question_answers` is unique by block/player. Reveal locks the question and winner wallets, appends idempotent `QUESTION_REWARD` entries and credits winners once. The reward is attributed to both round and block.
+### Rewards
+
+`quiz_answers` is unique by `(question_id, player_id)`, and the insert is
+`ON CONFLICT DO NOTHING` — one answer per player is a database guarantee, not a check that
+two simultaneous taps could both pass.
+
+Reveal locks the winners' wallets in player order, appends a `QUESTION_REWARD` ledger row
+per winner and credits each once. A partial unique index on
+`(quiz_question_id, player_id, 'QUESTION_REWARD')` makes a double payout impossible rather
+than unlikely, so a replayed REVEAL pays nobody twice.
+
+## Presentation slides
+
+A `PRESENTATIE` round holds ordered `presentation_slides`: a title, a body, one optional
+image or audio file, and two fields for the secret —
+
+- `reveal_text`, the answer line;
+- `hide_title_until_reveal`, for the picture and music rounds where the title **is** the
+  answer.
+
+`screenSlide` omits both entirely until the host reveals. Not null-with-a-flag: a value
+that is not on the wire cannot be read off the wire.
+
+That is the whole state machine — revealed, or not — and it is reversible, because unlike a
+quiz reward nothing has been paid that un-revealing would have to undo.
 
 ## Roulette
 
@@ -152,10 +284,10 @@ Batch chip placement is canonical and transactional. Public Big Screen roulette 
 
 ## Slotmachine
 
-A `SLOTMACHINE` block is a round content type whose configuration is split by scope:
+A `SLOTMACHINE` round's configuration is split by scope:
 
-- **game-wide, in Settings** — the symbol artwork (12 PNGs, shared by all three reels) and the chance/payout for each of the five outcome types. There is one machine for the night, so these are configured once and reused by every slot block.
-- **per block, in `round_blocks.payload`** — title, instruction text, `maxSpins` per series and an optional `allowedPlayerIds` allowlist (empty means everyone).
+- **game-wide, in Settings** — the symbol artwork (12 PNGs, shared by all three reels) and the chance/payout for each of the five outcome types. There is one machine for the night, so these are configured once and reused by every slotmachine round.
+- **per round** — `rounds.title` and `rounds.instructions`, plus `slotmachine_rounds.max_spins` and the `slotmachine_round_participants` allowlist. No rows in the allowlist means everyone plays, which is the usual case; an allowlist as rows rather than ids in a payload means a removed player cannot leave a dangling id behind.
 
 Symbols are shared rather than per reel: migration `0010` gave each reel its own twelve uploads, which meant asking for 36 files for a machine whose reels look alike, so `0011` collapsed `slot_reel_symbols` to one row per position.
 
@@ -186,7 +318,7 @@ Configuration validity has one definition, in `netlify/lib/slotmachine.ts`, reac
 
 ### Turns
 
-One player at a time, and that player uses their entire bought run before the next starts. The turn is **derived, not stored**: `resolveSlotTurn` takes the block's series in lock order and the turn is simply the head of "who still has spins". A stored turn pointer can drift out of step with the spins that actually happened and there is no reconciliation step that would fix it; here the spins *are* the turn state.
+One player at a time, and that player uses their entire bought run before the next starts. The turn is **derived, not stored**: `resolveSlotTurn` takes the round's series in lock order and the turn is simply the head of "who still has spins". A stored turn pointer can drift out of step with the spins that actually happened and there is no reconciliation step that would fix it; here the spins *are* the turn state.
 
 Two gates are enforced in `slot-spin`, never trusted from the phone:
 
@@ -197,7 +329,7 @@ Two gates are enforced in `slot-spin`, never trusted from the phone:
 
 `maySpin` is the single verdict both sides use — the player snapshot sends it so the phone enables exactly what the server would allow, which is why the button and the enforcement cannot disagree.
 
-A run is bought once. `slot-lock-series` refuses a second series for the same player on the same block, whether the first is still running or already used, so there is no topping up; a `CANCELLED` series does not count, since that only happens when the host leaves the block and the machine starts over. `SLOT_MAX_SPINS_LIMIT` is 10, clamped on read as well as on write so a block authored before that rule cannot still sell a longer run.
+A run is bought once. `slot-lock-series` refuses a second series for the same player in the same round, whether the first is still running or already used, so there is no topping up; a `CANCELLED` series does not count, since that only happens when the host leaves the round. `SLOT_MAX_SPINS_LIMIT` is 10, clamped on read as well as on write so a round authored before that rule cannot still sell a longer run.
 
 ### Series and spins
 
@@ -206,7 +338,7 @@ stateDiagram-v2
   [*] --> ACTIVE : lock series
   ACTIVE --> ACTIVE : spin (spins_remaining - 1)
   ACTIVE --> COMPLETED : last spin used
-  ACTIVE --> CANCELLED : block changed / round completed
+  ACTIVE --> CANCELLED : round left
 ```
 
 Locking debits the **whole** total stake in one `SLOT_STAKE` entry, mirroring a prediction deposit rather than a roulette chip: the coins are committed to the machine and cannot be spent elsewhere between spins. The unspun remainder is logical locked value (`stake_per_spin x spins_remaining`) and counts toward total player value alongside prediction and roulette locks.
@@ -217,15 +349,15 @@ Idempotency and concurrency are handled on three levels, so a double SPIN tap ca
 
 `status='SPINNING'` is purely presentational. The outcome is final when the row is written; the same timed sync that reveals a roulette result flips the spin to `RESULT` after `SLOT_SPIN_MS`, which is what lets the phone and the Admin hold the outcome back until the projector's reels have landed.
 
-### Leaving a slotmachine block
+### Leaving a slotmachine round
 
-Changing content block or completing the round **closes every live series and refunds unused spins** (`closeSlotSeriesForBlock`), rather than blocking the move as an unfinished roulette does. That is a deliberate difference: a slot series is player-driven and there may be one per player, so blocking would let a player who locked twenty spins and wandered off hold the evening hostage. No coins are lost — only the unspun remainder is returned, and spins already taken keep their outcome and payout. The refund is idempotent through a partial unique index on `(slot_series_id, 'SLOT_REFUND')`.
+See **Leaving a round** above: `leaveRound` closes every live series and refunds unused spins through `closeSlotSeriesForRound`, rather than blocking as an unfinished roulette does. The refund is idempotent through a partial unique index on `(slot_series_id, 'SLOT_REFUND')`, so a retried or double-clicked COMPLETE pays it once.
 
 Because a deactivated player can no longer spin, `remove-player` refuses while they hold a live series and points the Admin at moving on to refund it.
 
 ## Pak een Zes
 
-A `PAK_EEN_ZES` block: predictions, then turn-based card draws, then a payout for the predictions that came true.
+A `PAK_EEN_ZES` round: predictions, then turn-based card draws, then a payout for the predictions that came true. There is nothing to author — the deck is a fixed 52 cards, the game ends on the fourth six and every active player takes part — beyond `rounds.instructions` and `rounds.default_points`, which is the rate per correct prediction.
 
 ```mermaid
 stateDiagram-v2
@@ -269,23 +401,23 @@ One Admin-set amount per correct prediction, on `game_nights.pak_een_zes_points_
 
 The rate is snapshotted onto `pak_een_zes_games.points_per_correct` when the game pays, and the award function reads that snapshot in preference to the live setting. Both matter: the snapshot stops a later Settings change from rewriting what a finished game awarded, and reading it on a retry is what keeps the retry a clean no-op instead of a spurious conflict.
 
-An incomplete prediction — fewer than four slots — never scores. Only `FINISHED` games pay; a game cancelled when the host leaves the block does not.
+An incomplete prediction — fewer than four slots — never scores. Only `FINISHED` games pay; a game cancelled when the host leaves the round does not.
 
 Per-player results are recomputed on read from the picks and the six events rather than stored, so the breakdown every surface shows always matches the rows behind it.
 
-### Leaving the block
+### Leaving the round
 
-Changing content block or completing the round **cancels** a live game (`closePakEenZesForBlock`) rather than blocking the move. Nothing financial is at stake, but leaving it in `DRAWING` would keep a turn indicator live on somebody's phone for a game nobody is watching. Draws and predictions are kept — cancelling must never erase the record. A finished game is left alone, and re-activating the block that is already live is a no-op so a dashboard detour and back cannot kill a game mid-play.
+See **Leaving a round** above: `leaveRound` cancels a live game through `closePakEenZesForRound` rather than blocking. Draws and predictions are kept — cancelling must never erase the record — and a finished game is left alone.
 
 ## Fotoronde
 
-A `FOTORONDE` block: each team submits one photo per subject, and the Admin awards credits per photo which are split across that team's members.
+A `FOTORONDE` round: each team submits one photo per subject, and the Admin awards credits per photo which are split across that team's members. Subjects are rows in `fotoronde_subjects` — ordered, each with its own `points` and an optional Admin-only reference image — rather than labels in a payload.
 
 **Teams are round groups**, created by the Admin. `round_group_members` is unique by `(round_id, player_id)`, so a player's team is derivable from their session — which is what makes "uploading on behalf of your own team" enforceable rather than a matter of trust. `playerTeamForRound` is the only source of that answer; the phone never sends a team. The legacy `teams` table is untouched and unread.
 
-The Fotoronde panel creates and populates teams in place, through the existing `upsert-round-group` / `set-round-group-members` / `delete-round-group` endpoints and the groups already in the Admin snapshot. No second team model, and no new endpoint — the host simply reaches them where they need them, since the block cannot open without at least one. Because photo rewards carry `round_group_id`, the existing delete guard already refuses to remove a team that earned credits.
+The Fotoronde panel creates and populates teams in place, through the existing `upsert-round-group` / `set-round-group-members` / `delete-round-group` endpoints and the groups already in the Admin snapshot. No second team model, and no new endpoint — the host simply reaches them where they need them, since the round cannot open without at least one. Because photo rewards carry `round_group_id`, the existing delete guard already refuses to remove a team that earned credits.
 
-**Subjects** live in the block payload as `{key, label}` pairs, defaulting to the standard six. The key is the identity and a submission is filed under it, so renaming a subject keeps its photos while the label is free to change. `normalizeSubjects` derives and de-duplicates keys, so two subjects that read alike can never inherit each other's photos.
+**Subjects** are rows in `fotoronde_subjects`, ordered, each with its own `points` and an optional Admin-only `reference_media_key`. The `subject_key` is the identity a submission is filed under and is derived once, at creation, so renaming a subject keeps its photos while the label is free to change. `subjectKeyFromLabel` de-duplicates, so two subjects that read alike can never inherit each other's photos.
 
 ```mermaid
 stateDiagram-v2
@@ -316,15 +448,16 @@ The split shown for a **judged** photo is read back from the ledger rows rather 
 
 - **Deactivating a player** removes them from future splits (active members only) but never claws back what they were paid.
 - **Changing team membership** never touches existing submissions; `uploaded_by` is `ON DELETE SET NULL` so removing a player keeps their team's photo and its credits.
-- **Leaving the block or completing the round** moves an open Fotoronde to `CLOSED`, not cancelled: the photos and the chance to award credits for them are the point of the block, so ending the upload window never discards unjudged work. Round completion therefore leaves scoring clearly unstarted rather than half-finished, and the Admin panel reports how many photos are still unjudged.
-- **Deleting the block or round** is refused once photos exist, since those photos may already have paid credits.
+- **Leaving the round** moves an open Fotoronde to `CLOSED`, not cancelled: the photos and the chance to award credits for them are the point of the round, so ending the upload window never discards unjudged work. Round completion therefore leaves scoring clearly unstarted rather than half-finished, and the Admin panel reports how many photos are still unjudged.
+- **Deleting the round** is refused once photos exist, since those photos may already have paid credits.
 
 ## Projector state
 
 `screen_state` explicitly selects:
 
 - `DASHBOARD`
-- `ROUND_BLOCK`
+- `QUIZ_QUESTION`
+- `SLIDE`
 - `PREDICTIONS_OPEN`
 - `PREDICTION_LOCKED`
 - `PREDICTION_RESULT`
@@ -333,7 +466,18 @@ The split shown for a **judged** photo is read back from the ledger rows rather 
 - `PAK_EEN_ZES`
 - `FOTORONDE`
 
-Each block type has exactly one composition that can present it: `setScreenMode` refuses `ROUND_BLOCK` for a roulette or slotmachine block and refuses `SLOTMACHINE` for anything else, so the projector cannot be pointed at a slot block with the plain content scene.
+Each round type has exactly one scene (`SCENE_FOR_ROUND_TYPE` in `netlify/lib/round-types.ts`), so the projector cannot be pointed at a slotmachine round with the quiz scene. `setScreen` takes a typed target rather than a mode and an id it then has to check agree:
+
+```ts
+type ScreenTarget =
+  | { kind: 'dashboard' }
+  | { kind: 'quizQuestion'; roundId: number; questionId: number }
+  | { kind: 'slide'; roundId: number; slideId: number }
+  | { kind: 'roundGame'; roundId: number }
+  | { kind: 'prediction'; predictionId: number };
+```
+
+The pointers themselves are typed columns — `round_id`, `quiz_question_id`, `slide_id` — rather than an id inside a JSON payload, so a pointer at deleted content becomes `NULL` through a foreign key instead of a number naming nothing. What remains in `payload` is genuinely presentational: which Fotoronde photo is currently enlarged.
 
 Opening a prediction does not touch `screen_state`; only explicit SHOW PREDICTION does. SHOW MAIN DASHBOARD is always available and changes presentation without changing underlying market state.
 
@@ -341,13 +485,13 @@ Opening a prediction does not touch `screen_state`; only explicit SHOW PREDICTIO
 
 `screen_state` carries three parallel pointers, all on the one row (migration `0008`):
 
-- the live set (`mode`, `round_id`, `prediction_id`, `payload`) — what the projector is showing;
+- the live set (`mode`, `round_id`, `quiz_question_id`, `slide_id`, `prediction_id`, `payload`) — what the projector is showing;
 - `staged_*` — what `GO LIVE` will promote next. Staging is deliberately near side-effect-free: it moves nothing on screen;
 - `previous_*` — filled only when the host jumps to the dashboard with `remember`, so BACK TO RUN OF SHOW returns to the exact step rather than guessing.
 
-`promoteStaged` routes blocks through `setActiveRoundBlock`, so every existing guard still applies — an unfinished live question or a roulette in progress refuses the promotion rather than being bypassed. After promoting it advances the staged pointer to the next run-of-show step.
+`stageScreen` and `setScreen` resolve the same `ScreenTarget` shapes through the same `resolveTarget`, so staging something the host could not then go live with is not possible — that would be a trap. Staging deliberately does not require the round to be active (lining up what comes next is the point); going live does.
 
-Run-of-show order has exactly one implementation, `netlify/lib/run-of-show.ts`, used by both the Admin strip and `promoteStaged`. That is the point: `GO LIVE` cannot skip or repeat a step relative to what the host is looking at.
+`promoteStaged` reads the staged pointers back into a target and hands it to `setScreen`, so every guard applies to the promotion exactly as it would to showing the thing directly.
 
 Both `staged_*` and `previous_*` live in the row `getAdminState` already reads, so the presenter model costs no extra query.
 
@@ -369,7 +513,7 @@ The whole reset runs in one `withTransaction`, so it cannot half-succeed and lea
 
 Wallets are reset to each player's own `starting_balance_snapshot`, not to the current Settings value, since the snapshot is what the player was created with and what the exchange graph is drawn from. The old ledger rows are deleted and one fresh `STARTING_BALANCE` entry is written per player, rather than a compensating entry per movement: a correction would leave the test run visible in the history as though the room had really played it, and deleting instead keeps wallet and ledger from drifting apart. A player whose snapshot is zero gets no entry, because `ledger_entries` forbids a zero amount.
 
-Runtime state that lives on configuration rows is reset in place: `rounds.status` back to `UPCOMING` with its timestamps cleared, `round_blocks.interactive_status` back to exactly what `upsert-round-block` gives a new block of that type, and `predictions` back to `SCHEDULED` when attached to a round or `DRAFT` when not, with `result` and the live timestamps cleared. The staged and previous screen slots are cleared too, or BACK TO RUN OF SHOW would try to restore a step from the test run. `game_state_version` is bumped rather than zeroed, because every client polls it for changes and raising it is what pulls them onto the fresh state.
+Runtime state is reset in place: `rounds.status` back to `UPCOMING` with its timestamps cleared, `live_quiz_question_state` and `presentation_slide_state` back to exactly what authoring gives a new one, `round_runtime` back to each round's first item, and `predictions` back to `SCHEDULED` when attached to a round or `DRAFT` when not. Authored content is never touched — the split into separate state tables is what makes that a different write rather than a careful one. The staged and previous screen slots are cleared too, or BACK TO RUN OF SHOW would try to restore a step from the test run. `game_state_version` is bumped rather than zeroed, because every client polls it for changes and raising it is what pulls them onto the fresh state.
 
 Photo bytes in Netlify Blobs are not deleted, since blob writes are not part of the database transaction; the submission rows that referenced them are gone, so the orphans are unreachable from the app.
 

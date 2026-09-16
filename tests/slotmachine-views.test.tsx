@@ -15,7 +15,6 @@ const renderRouted = (node: any) => renderToStaticMarkup(createElement(MemoryRou
 /** The `slotmachine` block of a player-state payload. */
 function slotmachine(overrides: Record<string, unknown> = {}) {
   return {
-    blockId: 35,
     roundId: 3,
     title: 'Gokkast',
     instructions: 'Kies je inzet en het aantal spins.',
@@ -363,17 +362,17 @@ describe('slotmachine field on the big screen', () => {
 });
 
 describe('slotmachine in the Control Center', () => {
-  const blocks = [
-    { id: 35, round_id: 3, type: 'SLOTMACHINE', title: 'Gokkast', sort_order: 1, payload: { maxSpins: 20, allowedPlayerIds: [] }, answer_count: 0 },
+  const ROUNDS = [
+    { id: 3, sortOrder: 3, title: 'Gokkast', type: 'SLOTMACHINE', status: 'ACTIVE', description: '', instructions: '', defaultPoints: 10, groups: [], slotmachine: { maxSpins: 10, allowedPlayerIds: [] } },
   ];
   const slotState = (overrides: Record<string, unknown> = {}) => ({
     version: 1,
-    game: { id: 1, name: 'Game Night', starting_balance: 100, maximum_wallet_percentage: null, current_round_id: 3, current_round_block_id: 35, current_screen_mode: 'SLOTMACHINE', game_state_version: 1 },
-    screen: { mode: 'SLOTMACHINE', roundId: 3, blockId: 35, predictionId: null, staged: { mode: 'SLOTMACHINE', roundId: 3, blockId: 35, predictionId: null }, previous: { mode: null, roundId: null, blockId: null, predictionId: null } },
-    runOfShow: [{ kind: 'block', id: 35, roundId: 3, type: 'SLOTMACHINE', label: 'Gokkast' }],
+    game: { id: 1, name: 'Game Night', starting_balance: 100, maximum_wallet_percentage: null, current_round_id: 3, current_screen_mode: 'SLOTMACHINE', game_state_version: 1 },
+    screen: { mode: 'SLOTMACHINE', roundId: 3, questionId: null, slideId: null, predictionId: null, staged: { mode: 'SLOTMACHINE', roundId: 3, questionId: null, slideId: null, predictionId: null }, previous: { mode: null, roundId: null, questionId: null, slideId: null, predictionId: null } },
+    roundRuntime: { currentQuizQuestionId: null, currentSlideId: null, revision: 0 },
     predictionRequests: [],
-    rounds: [{ id: 3, round_number: 3, title: 'Kennisquiz', status: 'ACTIVE', description: '', blocks, groups: [] }],
-    currentBlock: blocks[0],
+    rounds: ROUNDS,
+    activeRound: ROUNDS[0],
     players: [
       { id: 1, display_name: 'Daan', public_color: '#9B2FF2', active: true, current_balance: 290, locked_prediction: 0, rank: 1, joined: true },
       { id: 2, display_name: 'Jorrit', public_color: '#E8352F', active: true, current_balance: 260, locked_prediction: 0, rank: 2, joined: true },
@@ -384,7 +383,7 @@ describe('slotmachine in the Control Center', () => {
     activeRoulette: null,
     slotConfig: { status: { valid: true, reason: 'Configuration is valid.', symbolCount: 12 } },
     activeSlot: {
-      blockId: 35,
+      roundId: 3,
       maxSpins: 20,
       participantCount: 0,
       lockedCoins: 35,

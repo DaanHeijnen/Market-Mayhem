@@ -18,7 +18,7 @@ function playerState(overrides: Record<string, unknown> = {}) {
     predictionAvailable: true,
     actionable: true,
     roulette: null,
-    interactiveBlock: null,
+    quizQuestion: null,
     recentLedger: [{ id: 1, amount: -20, description: 'Prediction deposit #1' }],
     predictionRequests: { mine: [], remaining: 2, cooldownMinutesLeft: 0 },
     ...overrides,
@@ -54,9 +54,19 @@ describe('mobile views', () => {
   // A live question owns the phone regardless of which view the caller asked for.
   // That is backend-driven, and the preview must not be able to talk it out of it.
   it('lets a live question take over any view', () => {
-    const state = playerState({ interactiveBlock: { id: 33, status: 'OPEN', selectedAnswer: null, isCorrect: false, rewardCoins: 10 } });
+    const state = playerState({
+      quizQuestion: {
+        id: 33, roundId: 3, prompt: 'Hoofdstad van Peru?', body: '', points: 40, status: 'OPEN',
+        timeLimitSeconds: null, closesAt: null, myOptionId: null, myAnswerCorrect: null,
+        options: [
+          { id: 1, sortOrder: 0, text: 'Lima' },
+          { id: 2, sortOrder: 1, text: 'La Paz' },
+        ],
+      },
+    });
     const html = render(createElement(MobileViews, { state, gameId: 1, view: 'home', predictionId: null, busy: false, act: noop, go: noop }));
-    expect(html).toContain('LIVE ROUND QUESTION');
+    expect(html).toContain('LIVE QUIZ');
+    expect(html).toContain('Hoofdstad van Peru?');
     expect(html).not.toContain('AVAILABLE WALLET');
   });
 

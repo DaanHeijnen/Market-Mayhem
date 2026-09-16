@@ -2,7 +2,7 @@ import { randomInt } from 'node:crypto';
 import { requireAdmin, audit } from '../lib/auth';
 import { withTransaction } from '../lib/db';
 import { body, ok, intValue, requestIdempotencyKey, HttpError } from '../lib/http';
-import { incrementGameVersion, setScreenMode } from '../lib/game-state';
+import { incrementGameVersion, setScreen } from '../lib/game-state';
 import { payoutForStake, rouletteBetWins } from '../lib/economy';
 import { wrap } from './_wrap';
 
@@ -16,7 +16,7 @@ export default wrap(async request => {
   const key = ['SETTLE','CANCEL'].includes(action) ? requestIdempotencyKey(request) : null;
 
   return ok(await withTransaction(async client => {
-    const game = await client.query('SELECT current_round_block_id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
+    const game = await client.query('SELECT current_round_id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
     if (!game.rows[0]) throw new HttpError(404, 'Game not found');
     const rgResult = await client.query('SELECT * FROM roulette_games WHERE id=$1 AND game_night_id=$2 FOR UPDATE', [rouletteGameId, gameId]);
     if (!rgResult.rows[0]) throw new HttpError(404, 'Roulette game not found');
@@ -25,9 +25,11 @@ export default wrap(async request => {
 
     if (action === 'OPEN') {
       if (status !== 'DRAFT') throw new HttpError(409, 'Roulette must be DRAFT to open');
-      if (Number(game.rows[0].current_round_block_id) !== Number(rg.round_block_id)) throw new HttpError(409, 'Roulette block must be active');
+      if (Number(game.rows[0].current_round_id) !== Number(rg.round_id)) throw new HttpError(409, 'The roulette round must be the active round');
       await client.query("UPDATE roulette_games SET status='OPEN',opened_at=NOW(),updated_at=NOW() WHERE id=$1", [rouletteGameId]);
-      await setScreenMode(client, gameId, 'ROULETTE', admin.username, { roundId: Number(rg.round_id), blockId: Number(rg.round_block_id), payload: { rouletteGameId } });
+      // Opening the table is the one roulette action that claims the projector: the
+      // players' phones are about to fill with chips and the wheel has to be visible.
+      await setScreen(client, gameId, { kind: 'roundGame', roundId: Number(rg.round_id) }, admin.username);
     }
     if (action === 'CLOSE') {
       if (status !== 'OPEN') throw new HttpError(409, 'Roulette betting is not open');
@@ -83,7 +85,7 @@ export default wrap(async request => {
         if (!wallet.rows[0]) throw new HttpError(409, 'Roulette player wallet is missing');
         const ledger = await client.query(
           `INSERT INTO ledger_entries(game_night_id,player_id,amount,transaction_type,description,attributed_round_id,roulette_game_id,roulette_bet_id,created_by,idempotency_key)
-           VALUES($1,$2,$3,'ROULETTE_REFUND','Cancelled roulette refund',$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING RETURNING id`,
+           VALUES($1,$2,$3,'ROULETTE_REFUND','Cancelled roulette refund',$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING RETURNING id`,
           [gameId, bet.player_id, bet.stake, rg.round_id, rouletteGameId, bet.id, admin.username, `${key}:bet:${bet.id}`],
         );
         if (ledger.rows[0]) {

@@ -26,7 +26,7 @@ import {
   type SlotOutcomeWeight,
   type SlotSeriesTurn,
 } from '../netlify/lib/slotmachine';
-import { slotBlockSettings, playerMayPlaySlot } from '../netlify/lib/slot-state';
+import { playerMayPlaySlot } from '../netlify/lib/slot-state';
 
 /** All twelve symbol positions have artwork. */
 const allSymbols = () => new Set(Array.from({ length: 12 }, (_, i) => i + 1));
@@ -430,32 +430,25 @@ describe('slotmachine series limits', () => {
   });
 });
 
-describe('slotmachine block settings', () => {
-  it('falls back to a usable maximum when the payload has none', () => {
-    expect(slotBlockSettings({}).maxSpins).toBe(10);
-    expect(slotBlockSettings({ maxSpins: 6 }).maxSpins).toBe(6);
-  });
-
-  // A player buys their whole run up front and then everyone waits through it, so ten
-  // is a product rule. Clamped on read too, in case a block was authored before it.
-  it('never sells more than ten spins, even if a block says otherwise', () => {
-    expect(SLOT_MAX_SPINS_LIMIT).toBe(10);
-    expect(slotBlockSettings({ maxSpins: 20 }).maxSpins).toBe(10);
-    expect(slotBlockSettings({ maxSpins: 100 }).maxSpins).toBe(10);
-  });
-
+describe('who may play a slotmachine round', () => {
+  // No rows in the allowlist means everyone plays, which is the usual case — the
+  // endpoints must never read an empty list as "nobody".
   it('treats an empty allowlist as everyone rather than nobody', () => {
-    const open = slotBlockSettings({});
-    expect(open.allowedPlayerIds).toEqual([]);
-    expect(playerMayPlaySlot(open, 7)).toBe(true);
+    expect(playerMayPlaySlot({ maxSpins: 10, allowedPlayerIds: [] }, 7)).toBe(true);
   });
 
   it('restricts play to the listed players when the Admin selected some', () => {
-    const restricted = slotBlockSettings({ allowedPlayerIds: [1, 2] });
+    const restricted = { maxSpins: 10, allowedPlayerIds: [1, 2] };
     expect(playerMayPlaySlot(restricted, 1)).toBe(true);
     expect(playerMayPlaySlot(restricted, 3)).toBe(false);
   });
-});
+
+  // A player buys their whole run up front and then everyone waits through it, so ten
+  // is a product rule rather than a database limit.
+  it('caps a run at ten spins', () => {
+    expect(SLOT_MAX_SPINS_LIMIT).toBe(10);
+  });
+});;
 
 describe('taking turns', () => {
   /** Series arrive in lock order, which is the turn order. */

@@ -1,6 +1,6 @@
 # Market Mayhem
 
-Market Mayhem is a private game-night economy with player wallets, prediction deposits, visual roulette, interactive round questions and a projector dashboard. React is the presentation layer; Netlify Functions and PostgreSQL own game state and every financial rule.
+Market Mayhem is a private game-night economy with player wallets, prediction deposits, visual roulette, typed rounds — quizzes, presentations, roulette, slotmachine, Pak een Zes and photo rounds — and a projector dashboard. React is the presentation layer; Netlify Functions and PostgreSQL own game state and every financial rule.
 
 ## Stack
 
@@ -18,7 +18,7 @@ Market Mayhem is a private game-night economy with player wallets, prediction de
 - `/admin/:gameId/settings` — game settings, Full Reset and Delete Game Save
 - `/admin/:gameId/players` — players, join links and per-player adjustments
 - `/admin/:gameId/rounds` — round list
-- `/admin/:gameId/rounds/:roundId` — content, round groups and group scoring
+- `/admin/:gameId/rounds/:roundId` — that round type's own editor, round groups and group scoring
 - `/admin/:gameId/predictions` — prediction market configuration and control
 - `/admin/:gameId/ledger` — filtered immutable ledger
 - `/play/:gameId` — authenticated player wallet and live actions
@@ -31,10 +31,10 @@ A reset/fresh game has no players, rounds, predictions or transactions.
 
 1. **Settings** — set game name, starting coins, optional maximum wallet percentage per prediction, and the slotmachine's reel symbols and outcome odds.
 2. **Players** — create players and generate their single-use join links.
-3. **Rounds** — create rounds in any numbering scheme; execution does not assume `current + 1`.
-4. **Round Content** — add ordered blocks: `TEXT`, `QUESTION`, `DUOLINGO_QUESTION`, `ROULETTE`, `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`, `SLOTMACHINE`, `PAK_EEN_ZES`, `FOTORONDE`.
+3. **Rounds** — create a round and choose **what kind of round it is**: `LIVE_QUIZ`, `PRESENTATIE`, `ROULETTE`, `SLOTMACHINE`, `PAK_EEN_ZES` or `FOTORONDE`. A round has exactly one type, and the type is fixed once created.
+4. **Round content** — the editor that opens is the one that belongs to that type: quiz questions with their own points and options, presentation slides, Fotoronde subjects with their own credits, or the slotmachine's per-round settings. Roulette and Pak een Zes have nothing to author.
 5. **Predictions** — set probability, market-specific duration and min/max deposit, then optionally schedule to a round.
-6. **Control Center** — run the round, move through content, operate live questions/roulette, watch slotmachine series, adjust coins and control the projector.
+6. **Control Center** — run the round with the controls that belong to its type: step through quiz questions and reveal answers, step through slides, open and spin the roulette, watch slotmachine series, judge photos, adjust coins and control the projector.
 
 ## Predictions
 
@@ -43,7 +43,7 @@ Admin configures a YES probability from 1–99%. The server calculates fixed mul
 - YES = `1 / probability_yes`
 - NO = `1 / (1 - probability_yes)`
 
-Each prediction stores its own `prediction_time_seconds`, `minimum_stake` and `maximum_stake`. When a scheduled prediction's round starts it opens on player phones and receives server timestamps, but round start does **not** change the current Big Screen presentation or select a content block. Admin explicitly chooses what to show, including **SHOW PREDICTION**.
+Each prediction stores its own `prediction_time_seconds`, `minimum_stake` and `maximum_stake`. When a scheduled prediction's round starts it opens on player phones and receives server timestamps, but round start does **not** change the current Big Screen presentation. Admin explicitly chooses what to show, including **SHOW PREDICTION**.
 
 Internal state is:
 
@@ -65,7 +65,7 @@ The accepted bet stores its multiplier snapshot. Settlement never recalculates f
 
 ## Roulette
 
-A `ROULETTE` round block uses a visual, canonical table. Players choose a chip amount and may place one or more positions in a single server-validated batch.
+A `ROULETTE` round uses a visual, canonical table. Players choose a chip amount and may place one or more positions in a single server-validated batch.
 
 Supported bets:
 
@@ -82,13 +82,13 @@ The server selects and stores the winning number before the animation starts. Th
 
 ## Slotmachine
 
-A `SLOTMACHINE` round block. Not a page and not a permanent dashboard feature: it is content inside a round, added in the Round Content Builder, reorderable among other blocks, and live only while the Admin has that block active.
+A `SLOTMACHINE` round. Not a page and not a permanent dashboard feature: it is a kind of round, created on the Rounds page, and live only while that round is the active one.
 
 Where each part lives:
 
 | Surface | Role |
 | --- | --- |
-| Round block | decides *when* the slotmachine is active |
+| The round | decides *when* the slotmachine is active |
 | Player Mobile | input and control only — **no reels** |
 | Backend | rules, randomiser, money and outcome |
 | Big Screen | the visual machine |
@@ -114,15 +114,15 @@ Two alike side by side is a separate category from two alike split, so `C C D` c
 
 The visible field is **3 rows × 3 reels**. The paylines are the three rows and the two diagonals — columns are not paylines, since a column is a single reel. The middle row is the *hoofdrij*: it is the row that decides the two-alike categories.
 
-The configuration is **valid** only when the chances sum to exactly the total and all twelve symbols have artwork. An incomplete distribution still saves — you can nudge the numbers into place — but the block refuses to run until it is valid, and Settings, the block editor and the Control Center all say why. A fresh game is seeded with `60 / 20 / 10 / 7 / 3` at `0 / 1.4 / 1.8 / 3 / 5x`, so it starts valid and playable.
+The configuration is **valid** only when the chances sum to exactly the total and all twelve symbols have artwork. An incomplete distribution still saves — you can nudge the numbers into place — but the round refuses to run until it is valid, and Settings, the round editor and the Control Center all say why. A fresh game is seeded with `60 / 20 / 10 / 7 / 3` at `0 / 1.4 / 1.8 / 3 / 5x`, so it starts valid and playable.
 
-### Per-block settings
+### Per-round settings
 
-On the block itself: title, instruction text for phones, **maximum spins per series**, and optionally which players take part (leave all unchecked for everyone).
+On the round itself: title, instruction text for phones, **maximum spins per series**, and optionally which players take part (leave all unchecked for everyone).
 
 ### Playing — one player at a time
 
-Player Mobile becomes the controller automatically while the block is live:
+Player Mobile becomes the controller automatically while the round is live:
 
 1. choose **inzet per spin**
 2. choose **aantal spins** — at most **10**, and also capped by their wallet
@@ -132,7 +132,7 @@ Player Mobile becomes the controller automatically while the block is live:
 
 **A player plays their whole bought run before the next player starts.** With Daan on 6, Bas on 4 and Twan on 8, the order is Daan's six spins, then Bas's four, then Twan's eight. Turn order is the order the runs were locked in. Everyone not up sees who is, and how far through their run they are.
 
-There is **no topping up**: once a run is locked the stake and count cannot change, and once it is used that player is finished for this block. The pickers disappear rather than offering a purchase the server would refuse.
+There is **no topping up**: once a run is locked the stake and count cannot change, and once it is used that player is finished for this round. The pickers disappear rather than offering a purchase the server would refuse.
 
 **A new spin cannot start until the previous one has a final outcome.** Tapping SPIN disables the button immediately, and the backend refuses a second spin while one is still resolving — so three quick taps cannot buy three spins. When the last spin of a run lands, the projector shows `DAAN IS KLAAR / VOLGENDE SPELER: BAS` and the next player's phone gets the button.
 
@@ -149,11 +149,11 @@ The Big Screen shows whose turn it is for their whole run — bought, remaining 
 
 ### Ending safely
 
-Moving to the next content block, or completing the round, closes every live series and refunds spins nobody used — so no slotmachine session keeps running behind the Admin's back. Nothing is lost: spins already taken keep their outcome and payout.
+Completing the round closes every live series and refunds spins nobody used — so no slotmachine session keeps running behind the Admin's back. Nothing is lost: spins already taken keep their outcome and payout.
 
 ## Fotoronde
 
-A `FOTORONDE` round block. Every team gets the same list of photo subjects; players upload one photo per subject **on behalf of their team**, and the Admin then awards credits per photo.
+A `FOTORONDE` round. Every team gets the same list of photo subjects; players upload one photo per subject **on behalf of their team**, and the Admin then awards credits per photo.
 
 "Team" means a **round group** — the round-scoped teams the Admin creates. You can build them straight from the Fotoronde panel in the Control Center (or on the round page, which also has group scoring); either way they are the same objects and the same endpoints. A player belongs to at most one group per round, so the app derives their team from their session: there is no team picker, and uploading for another team is not something a phone can ask for.
 
@@ -161,13 +161,13 @@ A team that has earned photo credits cannot be deleted — the existing group gu
 
 ### Subjects
 
-The block starts with the standard six — *Iets kunstigs, Iets lelijks, Iets moois, Iets opwindends, Iets wat met het geloof heeft te maken, Iets kinderlijks* — and the list is editable in the Round Content Builder. Each subject keeps a stable key, so renaming one never detaches the photos already filed under it.
+The round editor offers the standard six — *Iets kunstigs, Iets lelijks, Iets moois, Iets opwindends, Iets wat met het geloof heeft te maken, Iets kinderlijks* — in one click, and each subject carries its own credit value. Each subject keeps a stable key, so renaming one never detaches the photos already filed under it.
 
 ### Phases
 
 `DRAFT → OPEN → CLOSED → COMPLETED`, forwards only.
 
-- **DRAFT** — the block exists, nobody can upload yet.
+- **DRAFT** — the round exists, nobody can upload yet.
 - **OPEN** — teams upload and may replace their photo.
 - **CLOSED** — uploads stop; the Admin judges. There is no way back to OPEN, so a team cannot swap a photo the Admin has already looked at.
 - **COMPLETED** — a marker. Awarding stays possible, so marking it done is not a trap.
@@ -188,7 +188,7 @@ While submissions are open the projector shows progress per subject (`4 / 6 team
 
 ## Pak een Zes
 
-A `PAK_EEN_ZES` round block. Everyone predicts who will draw a six, then players take turns pulling cards from a real 52-card deck until all four sixes are out.
+A `PAK_EEN_ZES` round. Everyone predicts who will draw a six, then players take turns pulling cards from a real 52-card deck until all four sixes are out.
 
 ### Scoring
 
@@ -210,7 +210,7 @@ Afterwards the phone shows the player their own result (`3 voorspellingen goed /
 
 ### The host's flow
 
-From the Control Center, while the block is live:
+From the Control Center, while the round is live:
 
 1. **OPEN VOORSPELLINGEN** — phones switch to the prediction form.
 2. Players fill in four names. The panel shows how many are in and **names who is still missing**.
@@ -240,7 +240,7 @@ Which player drew a six, which suit, on which draw, and how often the same playe
 
 ## Live Duolingo questions
 
-`DUOLINGO_QUESTION` is separate from a static `QUESTION` block. Admin configures question text, four answer texts, one correct answer and a reward. The four player controls always use:
+A `LIVE_QUIZ` round holds ordered questions. Each carries its own prompt, supporting text, **points**, 2–6 answer options with **one or more marked correct**, an optional timer and an optional context photo. New questions start at the round's default points and override it freely, so a warm-up and the closer need not be worth the same. The player controls use:
 
 `🍆  🌽  🍑  😳`
 
@@ -248,11 +248,11 @@ State is:
 
 `READY → OPEN → CLOSED → REVEALED → SETTLED`
 
-When the block is current, player phones automatically switch to four large emoji controls. Player APIs never expose answer text or the correct index before reveal. Each player may submit once. Reveal credits correct players transactionally with immutable `QUESTION_REWARD` ledger entries attributed to the round and block.
+While a quiz round is live, player phones automatically switch to the question's answer buttons — as many as the question has options, each labelled. Which options are correct is simply **absent** from the player and projector payloads until reveal, rather than sent and hidden. Each player may submit once, enforced by a unique index rather than a check. Reveal credits correct players transactionally with immutable `QUESTION_REWARD` ledger entries attributed to the round and the question; a partial unique index makes a second payout impossible, so a replayed reveal pays nobody twice.
 
 **Live participation.** While a question is open or closed, the Control Center shows how far along the room is — `8 / 11 GEANTWOORD`, `73%`, and a progress bar — refreshed by the ordinary 3-second Admin poll as answers arrive. The denominator is the active players who may answer, and the numerator counts only their answers, so deactivating someone mid-question can never push the bar past 100%. The figures are computed once on the server (`questionParticipation`) so the Admin, the projector and the round list cannot disagree. Which answer anyone picked is never shown — only how many have finished. **The host always decides when to close**; the question never closes itself, however many have answered.
 
-**Context photo.** A question may carry one optional photo, uploaded in the block editor through the same Netlify Blobs path as picture and music rounds — only the key is stored in the payload. It is the beat *after* the reveal: `TOON CONTEXTFOTO` appears in the Control Center only once the answer is revealed and only when a photo exists, and the projector then makes the photo the slide with the question and the answer reduced to one line each. The key itself is stripped from every non-Admin snapshot until `REVEALED`, so the photo cannot be shown early even by a client that asks for it. A question without a photo simply skips the step. Full Reset clears the answers but keeps the question and its photo.
+**Context photo.** A question may carry one optional photo, uploaded in the quiz editor through the same Netlify Blobs path as slide media — only the key is stored. It is the beat *after* the reveal: `TOON CONTEXTFOTO` appears in the Control Center only once the answer is revealed and only when a photo exists, and the projector then makes the photo the slide with the question and the answer reduced to one line each. The key itself is never built into a non-Admin snapshot until `REVEALED`, so the photo cannot be shown early even by a client that asks for it. A question without a photo simply skips the step. Full Reset clears the answers but keeps the question and its photo.
 
 ## Round groups
 
@@ -283,13 +283,13 @@ The default projector is an exchange-style dashboard based on real data only:
 
 `total coins in play = available wallets + unresolved prediction deposits + unresolved roulette stakes + unspun slotmachine spins`.
 
-The projector can also present round blocks, an explicitly featured prediction, roulette, the slotmachine, and Pak een Zes. Control Center contains the exact `/screen/:gameId` preview plus a persistent **SHOW MAIN DASHBOARD** action.
+The projector can also present a quiz question, a presentation slide, an explicitly featured prediction, roulette, the slotmachine, Pak een Zes and the Fotoronde. Control Center contains the exact `/screen/:gameId` preview plus a persistent **SHOW MAIN DASHBOARD** action.
 
 ## Design system
 
 The application follows the Game Night Exchange Design Handbook (`devnotes/designhandboek.txt`): Space Grotesk display, Manrope body and JetBrains Mono figures; a paper `#F4F1E4` canvas with ink `#14120F` and white cards; lime `#DFF24C` for the host's primary action; violet, blue, magenta, cyan and orange as content accents; green/red YES/NO semantics; pill buttons, the asymmetric `12px 44px 12px 44px` card radius, 44px minimum touch targets, responsive single-column mobile layouts and dense desktop Admin controls.
 
-Everything is tokenised in `src/styles/tokens.css`, with the shared primitives in `src/components/admin/ui.tsx` (`Card`, `Accordion`, `Chip`, `Status`, `Empty`, `CoinAmount`, `Countdown`). Pages carry no inline hex — a new colour belongs in the token file. Block-type accents come from `src/components/admin/blockMeta.ts` via one `.accent-*` class each, so every content type stays tellable apart in the run of show.
+Everything is tokenised in `src/styles/tokens.css`, with the shared primitives in `src/components/admin/ui.tsx` (`Card`, `Accordion`, `Chip`, `Status`, `Empty`, `CoinAmount`, `Countdown`). Pages carry no inline hex — a new colour belongs in the token file. Round-type accents come from `src/components/admin/roundMeta.ts` via one `.accent-*` class each, so every kind of round stays tellable apart at a glance.
 
 ## Preview on phone
 
@@ -339,7 +339,7 @@ Notes that save time:
 2. Import it into Netlify.
 3. Enable Netlify Database.
 4. Generate a hash with `npm run admin:hash`, then configure `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH` and `SESSION_SECRET`.
-5. Apply/deploy migrations through `0015_photo_round.sql`.
+5. Apply/deploy migrations through `0016_round_is_the_content.sql`.
 6. Deploy.
 
 Previously deployed migrations are historical and are not rewritten.
@@ -348,9 +348,9 @@ Previously deployed migrations are historical and are not rewritten.
 
 Settings → **RESET AVOND** requires exactly `RESET AVOND` in both UI and backend. It throws away the played evening and keeps the prepared one, so a night can be tested end to end and then run for real without rebuilding anything.
 
-Reset: the whole ledger, every wallet back to its player's `starting_balance_snapshot`, prediction deposits and results, roulette games/bets, slotmachine series and spins, Pak een Zes games/predictions/draws, Fotoronde uploads and judgements, live-question answers, player-proposed markets, every round back to `UPCOMING`, every block's interactive state back to what authoring gives a new block, no active round or step, and the Big Screen back to the dashboard with nothing staged or remembered.
+Reset: the whole ledger, every wallet back to its player's `starting_balance_snapshot`, prediction deposits and results, roulette games/bets, slotmachine series and spins, Pak een Zes games/predictions/draws, Fotoronde uploads and judgements, quiz answers, player-proposed markets, every round back to `UPCOMING`, every question and slide's runtime state back to what authoring gives a new one, every round cursor back to its first item, no active round, and the Big Screen back to the dashboard with nothing staged or remembered.
 
-Kept: rounds with their order and titles, every block with its type, order, title and payload, predictions with their probability, odds, timing and stake limits, slotmachine symbols/chances/payouts, teams and membership, all players with their join links and sessions, and the settings on the Settings page.
+Kept: rounds with their type, order, titles and points settings, every quiz question with its options and points, every slide with its media and reveal line, every Fotoronde subject, predictions with their probability, odds, timing and stake limits, slotmachine symbols/chances/payouts, teams and membership, all players with their join links and sessions, and the settings on the Settings page.
 
 Wallets are set back rather than corrected: the old ledger rows are deleted and one fresh `STARTING_BALANCE` entry is written per player, so the wallet equals the snapshot equals the sum of the ledger and the test run leaves no trace in the history. `game_state_version` is bumped so Admin, phones and the projector all refresh within one poll. `netlify/lib/full-reset.ts` holds the runtime/configuration classification as two explicit lists, and a test fails if a migration adds a table that appears in neither.
 
@@ -380,7 +380,7 @@ Netlify Database (Neon) bills **compute time, not query count**. The endpoint st
 - The Big Screen slows rather than stops, because nobody ever touches a projector. That is what lets it notice a round starting without someone refreshing it.
 - Mobile keeps its interval when the game is idle on purpose: a phone picks its cadence from its last known state, so slowing it down would directly delay how long a player waits to see a market open.
 - An Admin action refreshes its own snapshot directly, so neither the idle tier nor the away stop can ever delay the host seeing their own change.
-- Media (`/api/block-media`) is served from Netlify Blobs and touches no database, so the projector and every phone loading the same image generates zero database load. Only the blob key is stored in the block payload — bytes there would ride inside every snapshot.
+- Media (`/api/block-media`) is served from Netlify Blobs and touches no database, so the projector and every phone loading the same image generates zero database load. Only the blob key is stored on the question, slide or subject — bytes there would ride inside every snapshot.
 - `netlify/lib/db.ts` releases idle connections after 10s. An open idle connection keeps the Neon endpoint active, so this matters as much as the polling.
 
 If usage still looks high, the first thing to check is whether a `/screen/:gameId` or `/admin/:gameId` tab is open somewhere on a machine nobody is using.

@@ -47,7 +47,6 @@ export type PakEenZesResult = {
 
 export type PakEenZesGame = {
   id: number;
-  blockId: number | null;
   roundId: number | null;
   status: PakEenZesStatus;
   turnIndex: number;
@@ -73,13 +72,13 @@ export type PakEenZesGame = {
 const DECK_SIZE = 52;
 
 /** Load one game with everything any surface needs. Null when the block has no game. */
-export async function loadPakEenZesGame(db: Queryable, gameId: number, blockId: number): Promise<PakEenZesGame | null> {
+export async function loadPakEenZesGame(db: Queryable, gameId: number, roundId: number): Promise<PakEenZesGame | null> {
   const games = await db.query(
-    `SELECT id,round_id,round_block_id,status,turn_index
+    `SELECT id,round_id,status,turn_index
      FROM pak_een_zes_games
-     WHERE game_night_id=$1 AND round_block_id=$2
+     WHERE game_night_id=$1 AND round_id=$2
      ORDER BY id DESC LIMIT 1`,
-    [gameId, blockId],
+    [gameId, roundId],
   );
   const row = games.rows[0];
   if (!row) return null;
@@ -119,8 +118,8 @@ export async function loadPakEenZesGame(db: Queryable, gameId: number, blockId: 
     ),
     // The snapshotted rate if this game already paid, otherwise the live setting.
     db.query(
-      `SELECT COALESCE(g.points_per_correct, n.pak_een_zes_points_per_correct) AS rate
-       FROM pak_een_zes_games g JOIN game_nights n ON n.id=g.game_night_id
+      `SELECT COALESCE(g.points_per_correct, r.default_points) AS rate
+       FROM pak_een_zes_games g JOIN rounds r ON r.id=g.round_id
        WHERE g.id=$1`,
       [id],
     ),
@@ -178,7 +177,6 @@ export async function loadPakEenZesGame(db: Queryable, gameId: number, blockId: 
 
   return {
     id,
-    blockId: row.round_block_id ? Number(row.round_block_id) : null,
     roundId: row.round_id ? Number(row.round_id) : null,
     status,
     turnIndex,
@@ -224,12 +222,12 @@ export function pakEenZesBlockSettings(payload: any): PakEenZesBlockSettings {
  *
  * A game that already finished is left alone. Safe to call for any block type.
  */
-export async function closePakEenZesForBlock(client: PoolClient, gameId: number, blockId: number) {
+export async function closePakEenZesForRound(client: PoolClient, gameId: number, roundId: number) {
   const { rowCount } = await client.query(
     `UPDATE pak_een_zes_games
      SET status='CANCELLED',finished_at=COALESCE(finished_at,NOW()),updated_at=NOW()
-     WHERE game_night_id=$1 AND round_block_id=$2 AND status IN ('READY','PREDICTING','LOCKED','DRAWING')`,
-    [gameId, blockId],
+     WHERE game_night_id=$1 AND round_id=$2 AND status IN ('READY','PREDICTING','LOCKED','DRAWING')`,
+    [gameId, roundId],
   );
   return { cancelled: rowCount ?? 0 };
 }
@@ -261,8 +259,8 @@ export async function awardPakEenZesPredictions(
   // after any Settings change look like a conflicting transaction and throw, when in
   // fact nothing needs doing.
   const rateRow = await client.query(
-    `SELECT COALESCE(g.points_per_correct, n.pak_een_zes_points_per_correct) AS rate
-     FROM pak_een_zes_games g JOIN game_nights n ON n.id=g.game_night_id
+    `SELECT COALESCE(g.points_per_correct, r.default_points) AS rate
+     FROM pak_een_zes_games g JOIN rounds r ON r.id=g.round_id
      WHERE g.id=$1`,
     [pakEenZesGameId],
   );
@@ -276,11 +274,10 @@ export async function awardPakEenZesPredictions(
   );
 
   const game = await client.query(
-    'SELECT round_id,round_block_id FROM pak_een_zes_games WHERE id=$1',
+    'SELECT round_id FROM pak_een_zes_games WHERE id=$1',
     [pakEenZesGameId],
   );
   const roundId = game.rows[0]?.round_id ?? null;
-  const blockId = game.rows[0]?.round_block_id ?? null;
 
   const [picks, sixes] = await Promise.all([
     client.query(
@@ -319,13 +316,13 @@ export async function awardPakEenZesPredictions(
 
     const ledger = await client.query(
       `INSERT INTO ledger_entries(game_night_id,player_id,amount,transaction_type,description,
-        attributed_round_id,round_block_id,pak_een_zes_game_id,created_by,idempotency_key,metadata)
-       VALUES($1,$2,$3,'PAK_EEN_ZES_REWARD',$4,$5,$6,$7,$8,$9,$10::jsonb)
+        attributed_round_id,pak_een_zes_game_id,created_by,idempotency_key,metadata)
+       VALUES($1,$2,$3,'PAK_EEN_ZES_REWARD',$4,$5,$6,$7,$8,$9::jsonb)
        ON CONFLICT DO NOTHING RETURNING id`,
       [
         gameId, predictorId, points,
         `Pak een Zes: ${correct} correcte voorspelling${correct === 1 ? '' : 'en'}`,
-        roundId, blockId, pakEenZesGameId, actor,
+        roundId, pakEenZesGameId, actor,
         `pakeenzes:${pakEenZesGameId}:reward:${predictorId}`,
         JSON.stringify({ correct, pointsPerCorrect }),
       ],

@@ -5,7 +5,7 @@ import { ok, intValue, textValue, HttpError } from '../lib/http';
 import { incrementGameVersion } from '../lib/game-state';
 import { randomToken } from '../lib/security';
 import { BLOB_STORE, assertAcceptableMedia, buildMediaKey } from '../lib/media';
-import { photoRoundSubjects, playerTeamForRound } from '../lib/photo-round-state';
+import { playerTeamForRound } from '../lib/photo-round-state';
 import { acceptsUploads, type PhotoRoundStatus } from '../lib/photo-round';
 import { wrap } from './_wrap';
 
@@ -31,7 +31,7 @@ export default wrap(async request => {
   }
 
   const gameId = intValue(form.get('gameId'), 'gameId', { min: 1 });
-  const blockId = intValue(form.get('blockId'), 'blockId', { min: 1 });
+  const roundId = intValue(form.get('roundId'), 'roundId', { min: 1 });
   const subjectKey = textValue(form.get('subjectKey'), 'subjectKey', 40);
   const session = await requirePlayer(request, gameId);
 
@@ -42,20 +42,17 @@ export default wrap(async request => {
   // Everything that could reject the upload is checked before a byte is stored, so a
   // refused submission never leaves a file behind.
   const context = await withTransaction(async client => {
-    const game = await client.query('SELECT current_round_id,current_round_block_id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
+    const game = await client.query('SELECT current_round_id FROM game_nights WHERE id=$1 FOR UPDATE', [gameId]);
     if (!game.rows[0]) throw new HttpError(404, 'Game not found');
-    if (Number(game.rows[0].current_round_block_id || 0) !== blockId) throw new HttpError(409, 'The Fotoronde is not the live content block');
 
-    const blockResult = await client.query(
-      `SELECT b.id,b.round_id,b.type,b.payload,r.status AS round_status
-       FROM round_blocks b JOIN rounds r ON r.id=b.round_id
-       WHERE b.id=$1 AND b.game_night_id=$2`,
-      [blockId, gameId],
+    const roundResult = await client.query(
+      'SELECT id,type,status FROM rounds WHERE id=$1 AND game_night_id=$2',
+      [roundId, gameId],
     );
-    const block = blockResult.rows[0];
-    if (!block) throw new HttpError(404, 'Fotoronde block not found');
-    if (block.type !== 'FOTORONDE') throw new HttpError(409, 'Block is not a Fotoronde');
-    if (block.round_status !== 'ACTIVE' || Number(game.rows[0].current_round_id || 0) !== Number(block.round_id)) {
+    const round = roundResult.rows[0];
+    if (!round) throw new HttpError(404, 'Round not found');
+    if (round.type !== 'FOTORONDE') throw new HttpError(409, 'That round is not a Fotoronde');
+    if (round.status !== 'ACTIVE' || Number(game.rows[0].current_round_id || 0) !== roundId) {
       throw new HttpError(409, 'The Fotoronde round is not active');
     }
 
@@ -63,8 +60,8 @@ export default wrap(async request => {
     if (!player.rows[0]?.active) throw new HttpError(403, 'Player is no longer active');
 
     const photoRound = await client.query(
-      'SELECT id,status FROM photo_rounds WHERE game_night_id=$1 AND round_block_id=$2',
-      [gameId, blockId],
+      'SELECT id,status FROM photo_rounds WHERE game_night_id=$1 AND round_id=$2',
+      [gameId, roundId],
     );
     if (!photoRound.rows[0]) throw new HttpError(409, 'The Fotoronde has not opened yet');
     const status = photoRound.rows[0].status as PhotoRoundStatus;
@@ -74,16 +71,21 @@ export default wrap(async request => {
         : 'Submissions are closed');
     }
 
-    const subjects = photoRoundSubjects(block.payload);
-    if (!subjects.some(s => s.key === subjectKey)) throw new HttpError(400, 'That subject is not part of this Fotoronde');
+    // The subject has to be one this round actually asks for, read from the round's own
+    // authored list rather than from anything the phone sent.
+    const subject = await client.query(
+      'SELECT id FROM fotoronde_subjects WHERE round_id=$1 AND subject_key=$2',
+      [roundId, subjectKey],
+    );
+    if (!subject.rows[0]) throw new HttpError(400, 'That subject is not part of this Fotoronde');
 
     // The team comes from the round's groups, not the request.
-    const team = await playerTeamForRound(client, Number(block.round_id), session.playerId);
+    const team = await playerTeamForRound(client, roundId, session.playerId);
     if (!team) throw new HttpError(403, 'You are not in a team for this round');
 
     return {
       photoRoundId: Number(photoRound.rows[0].id),
-      roundId: Number(block.round_id),
+      roundId,
       team,
     };
   });
@@ -112,15 +114,15 @@ export default wrap(async request => {
     // upload from any team member overwrites the first while the round is open. The
     // unique index is what makes that a guarantee; this is how the guarantee is met.
     const saved = await client.query(
-      `INSERT INTO photo_submissions(photo_round_id,game_night_id,round_id,round_block_id,
+      `INSERT INTO photo_submissions(photo_round_id,game_night_id,round_id,
         subject_key,group_id,uploaded_by,media_key)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+       VALUES($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (photo_round_id,subject_key,group_id) DO UPDATE
          SET media_key=EXCLUDED.media_key,
              uploaded_by=EXCLUDED.uploaded_by,
              updated_at=NOW()
        RETURNING id,media_key`,
-      [context.photoRoundId, gameId, context.roundId, blockId, subjectKey, context.team.groupId, session.playerId, mediaKey],
+      [context.photoRoundId, gameId, context.roundId, subjectKey, context.team.groupId, session.playerId, mediaKey],
     );
 
     return {

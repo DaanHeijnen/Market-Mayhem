@@ -9,47 +9,80 @@ import { PlayersPage } from '../src/components/admin/players/PlayersPage';
 import { SettingsPage } from '../src/components/admin/settings/SettingsPage';
 import { MarketPage } from '../src/components/admin/market/MarketPage';
 import { LedgerPage } from '../src/components/admin/ledger/LedgerPage';
-import { AUTHORABLE_BLOCK_TYPES, blockLabel, blockMeta } from '../src/components/admin/blockMeta';
-import { orderRunOfShow } from '../netlify/lib/run-of-show';
+import { ROUND_TYPES, describeContent, roundMeta } from '../src/components/admin/roundMeta';
 
 const run = async () => true;
 
 /** Presentation slot in the shape getAdminState returns. */
-const slot = (mode: string | null, blockId: number | null = null, predictionId: number | null = null, roundId: number | null = null) =>
-  ({ mode, roundId, blockId, predictionId });
+const slot = (
+  mode: string | null,
+  extra: { roundId?: number | null; questionId?: number | null; slideId?: number | null; predictionId?: number | null } = {},
+) => ({
+  mode,
+  roundId: extra.roundId ?? null,
+  questionId: extra.questionId ?? null,
+  slideId: extra.slideId ?? null,
+  predictionId: extra.predictionId ?? null,
+});
+
+const option = (id: number, text: string, isCorrect = false) => ({ id, sortOrder: id - 1, text, isCorrect });
+
+/** A quiz round with three questions, each worth its own points. */
+const QUIZ_ROUND = {
+  id: 3, sortOrder: 3, title: 'Kennisquiz', type: 'LIVE_QUIZ', status: 'ACTIVE',
+  description: '', instructions: '', defaultPoints: 10,
+  questions: [
+    {
+      id: 31, roundId: 3, sortOrder: 0, prompt: 'Hoofdstad van Frankrijk?', body: '',
+      points: 10, timeLimitSeconds: null, contextMediaKey: null, status: 'OPEN',
+      contextPhotoShown: false, revision: 0, answerCount: 2,
+      participation: { answered: 2, eligible: 2, remaining: 0, percentage: 100 },
+      options: [option(1, 'Parijs', true), option(2, 'Lyon'), option(3, 'Marseille')],
+    },
+    {
+      id: 32, roundId: 3, sortOrder: 1, prompt: 'Grootste oceaan?', body: '',
+      points: 40, timeLimitSeconds: 30, contextMediaKey: 'ctx-1', status: 'READY',
+      contextPhotoShown: false, revision: 0, answerCount: 0,
+      participation: { answered: 0, eligible: 2, remaining: 2, percentage: 0 },
+      options: [option(4, 'Stille', true), option(5, 'Atlantische')],
+    },
+    {
+      id: 33, roundId: 3, sortOrder: 2, prompt: 'Hoeveel hoofdsteden ken jij?', body: '',
+      points: 5, timeLimitSeconds: null, contextMediaKey: null, status: 'READY',
+      contextPhotoShown: false, revision: 0, answerCount: 0,
+      participation: { answered: 0, eligible: 2, remaining: 2, percentage: 0 },
+      options: [option(6, 'Veel', true), option(7, 'Weinig')],
+    },
+  ],
+  groups: [{ id: 1, round_id: 3, name: 'Team Rood', members: [{ id: 1, display_name: 'Daan', public_color: '#9B2FF2', active: true }] }],
+};
+
+const FINALE_ROUND = {
+  id: 4, sortOrder: 4, title: 'Finale', type: 'ROULETTE', status: 'UPCOMING',
+  description: '', instructions: '', defaultPoints: 10, groups: [],
+};
 
 function adminState(overrides: Record<string, unknown> = {}) {
-  const blocks = [
-    { id: 31, round_id: 3, type: 'TEXT', title: 'Ronde uitleg', sort_order: 1, payload: {}, answer_count: 0 },
-    { id: 32, round_id: 3, type: 'QUESTION', title: 'Hoeveel hoofdsteden ken jij?', sort_order: 2, payload: {}, answer_count: 0 },
-    { id: 33, round_id: 3, type: 'DUOLINGO_QUESTION', title: 'Hoofdstad van Frankrijk?', sort_order: 3, interactive_status: 'OPEN', payload: { rewardCoins: 10, answers: ['a', 'b', 'c', 'd'], correctAnswerIndex: 0 }, answer_count: 2 },
-    { id: 34, round_id: 3, type: 'ROULETTE', title: 'Bonusronde Roulette', sort_order: 4, interactive_status: 'DRAFT', payload: {}, answer_count: 0 },
-    { id: 35, round_id: 3, type: 'SLOTMACHINE', title: 'Gokkast', sort_order: 5, payload: { maxSpins: 20, allowedPlayerIds: [] }, answer_count: 0 },
-  ];
   const predictions = [
     { id: 1, display_number: 1, question: 'Wint Team Blauw de bonusronde?', round_id: 3, round_number: 3, status: 'OPEN', probability_yes: 0.55, yes_odds: 1.8, no_odds: 2.2, participation_count: 2, minimum_stake: 5, maximum_stake: 100, prediction_time_seconds: 90, closes_at: new Date(Date.now() + 60_000).toISOString(), result: null },
     { id: 2, display_number: 2, question: 'Perfecte score in de Film Kwis?', round_id: null, round_number: null, status: 'LOCKED', probability_yes: 0.3, yes_odds: 3, no_odds: 1.4, participation_count: 4, minimum_stake: 5, maximum_stake: 100, prediction_time_seconds: 90, closes_at: null, result: null },
     { id: 3, display_number: 3, question: 'Awaiting payout', round_id: null, round_number: null, status: 'RESULT', probability_yes: 0.5, yes_odds: 2, no_odds: 2, participation_count: 2, minimum_stake: 5, maximum_stake: 100, prediction_time_seconds: 90, closes_at: null, result: 'YES' },
     { id: 4, display_number: 4, question: 'Settled market', round_id: null, round_number: null, status: 'SETTLED', probability_yes: 0.5, yes_odds: 2, no_odds: 2, participation_count: 2, minimum_stake: 5, maximum_stake: 100, prediction_time_seconds: 90, closes_at: null, result: 'NO' },
   ];
-  const activeRoundId = 3;
   return {
     version: 1,
-    game: { id: 1, name: 'Game Night #12', starting_balance: 100, maximum_wallet_percentage: null, current_round_id: activeRoundId, current_round_block_id: 33, current_screen_mode: 'ROUND_BLOCK', game_state_version: 1 },
+    game: { id: 1, name: 'Game Night #12', starting_balance: 100, maximum_wallet_percentage: null, current_round_id: 3, current_screen_mode: 'QUIZ_QUESTION', game_state_version: 1 },
     screen: {
-      ...slot('ROUND_BLOCK', 33, null, activeRoundId),
-      staged: slot('ROUND_BLOCK', 34, null, activeRoundId),
+      ...slot('QUIZ_QUESTION', { roundId: 3, questionId: 31 }),
+      staged: slot('QUIZ_QUESTION', { roundId: 3, questionId: 32 }),
       previous: slot(null),
     },
-    // Built with the same function the server uses, so the fixture cannot drift from
-    // the real payload's ordering.
-    runOfShow: orderRunOfShow(blocks, predictions, activeRoundId),
+    // The round's own cursor. Separate from the screen above, deliberately: one is where
+    // the game is, the other is what the audience is looking at.
+    roundRuntime: { currentQuizQuestionId: 31, currentSlideId: null, revision: 0 },
     predictionRequests: [] as unknown[],
-    rounds: [
-      { id: 3, round_number: 3, title: 'Kennisquiz', status: 'ACTIVE', description: '', blocks, groups: [{ id: 1, round_id: 3, name: 'Team Rood', members: [{ id: 1, display_name: 'Daan', public_color: '#9B2FF2', active: true }] }] },
-      { id: 4, round_number: 4, title: 'Finale', status: 'UPCOMING', description: '', blocks: [], groups: [] },
-    ],
-    currentBlock: blocks[2],
+    rounds: [QUIZ_ROUND, FINALE_ROUND],
+    activeRound: QUIZ_ROUND,
     players: [
       { id: 1, display_name: 'Daan', public_color: '#9B2FF2', active: true, current_balance: 340, locked_prediction: 40, rank: 1, joined: true },
       { id: 2, display_name: 'Jorrit', public_color: '#E8352F', active: true, current_balance: 260, locked_prediction: 0, rank: 2, joined: false },
@@ -58,8 +91,8 @@ function adminState(overrides: Record<string, unknown> = {}) {
     activePredictions: [] as unknown[],
     recentTransactions: [{ id: 1, amount: -20, description: 'Prediction deposit #1', transaction_type: 'BET', created_at: new Date().toISOString(), display_name: 'Daan', round_number: 3, prediction_number: 1, roulette_game_id: null, group_name: null }],
     activeRoulette: null,
-    // A fully configured machine: 100 chances allocated across two outcomes, both with
-    // artwork, which is what makes the block usable.
+    // A fully configured machine: 100 chances allocated across the five outcomes, all
+    // twelve symbols uploaded, which is what makes a slotmachine round usable.
     slotConfig: {
       totalWeight: 100,
       symbols: Array.from({ length: 12 }, (_, i) => ({ position: i + 1, letter: String.fromCharCode(65 + i), mediaKey: `1/image/pos${i + 1}.png` })),
@@ -74,46 +107,70 @@ function adminState(overrides: Record<string, unknown> = {}) {
       status: { valid: true, totalWeight: 100, allocatedWeight: 100, remainingWeight: 0, symbolCount: 12, reason: 'Configuration is valid.' },
     },
     activeSlot: null,
+    photoRound: null,
+    pakEenZes: null,
     ...overrides,
   };
 }
 
 const render = (node: any) => renderToStaticMarkup(createElement(MemoryRouter, null, node));
 
-describe('admin block vocabulary', () => {
-  // Mirrors round_blocks_type_check. Migration 0015 widened it to all eleven; if this
-  // list and that constraint ever diverge, the picker offers a type the insert rejects.
-  it('only offers block types the database accepts', () => {
-    expect(AUTHORABLE_BLOCK_TYPES).toEqual(['TEXT', 'QUESTION', 'DUOLINGO_QUESTION', 'ROULETTE', 'PICTURE', 'MUSIC', 'BUZZER', 'WAGER', 'SLOTMACHINE', 'PAK_EEN_ZES', 'FOTORONDE']);
+describe('admin round vocabulary', () => {
+  // Mirrors rounds_type_check. If this list and that constraint diverge, the picker
+  // offers a type the insert rejects.
+  it('only offers round types the database accepts', () => {
+    expect(ROUND_TYPES).toEqual(['LIVE_QUIZ', 'PRESENTATIE', 'ROULETTE', 'SLOTMACHINE', 'PAK_EEN_ZES', 'FOTORONDE']);
   });
 
   it('marks only the types with a phone-side flow as interactive', () => {
-    const interactive = AUTHORABLE_BLOCK_TYPES.filter(type => blockMeta(type).interactive);
-    expect(interactive).toEqual(['DUOLINGO_QUESTION', 'ROULETTE', 'SLOTMACHINE', 'PAK_EEN_ZES', 'FOTORONDE']);
+    expect(ROUND_TYPES.filter(type => roundMeta(type).interactive))
+      .toEqual(['LIVE_QUIZ', 'ROULETTE', 'SLOTMACHINE', 'PAK_EEN_ZES', 'FOTORONDE']);
   });
 
-  it('gives every type a distinct accent so run-of-show steps stay tellable apart', () => {
-    const accents = AUTHORABLE_BLOCK_TYPES.map(type => blockMeta(type).accent);
+  it('gives every type a distinct accent so rounds stay tellable apart', () => {
+    const accents = ROUND_TYPES.map(type => roundMeta(type).accent);
     expect(new Set(accents).size).toBe(accents.length);
   });
 
-  it('falls back to the type label when a block has no title', () => {
-    expect(blockLabel({ type: 'ROULETTE', title: '' })).toBe('Roulette');
-    expect(blockLabel({ type: 'ROULETTE', title: 'Bonusronde' })).toBe('Bonusronde');
+  it('counts a round\u2019s content in the noun that round actually uses', () => {
+    expect(describeContent(QUIZ_ROUND)).toBe('3 questions');
+    expect(describeContent({ type: 'PRESENTATIE', slides: [{ id: 1 }] })).toBe('1 slide');
+    expect(describeContent({ type: 'FOTORONDE', subjects: [] })).toBe('0 subjects');
+    // A game round is one thing, so it is named rather than counted.
+    expect(describeContent({ type: 'ROULETTE' })).toBe('Roulette');
   });
 
-  it('does not throw on a block type it has never seen', () => {
-    expect(blockMeta('SOMETHING_NEW').label).toBe('Content block');
+  it('does not throw on a round type it has never seen', () => {
+    expect(roundMeta('SOMETHING_NEW').label).toBe('Round');
   });
 });
 
 describe('admin pages render', () => {
-  it('renders the Control Center with a run of show covering blocks and unsettled markets', () => {
+  it('renders the Control Center with the active round\u2019s own content and its markets', () => {
     const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
-    expect(html).toContain('RUN OF SHOW');
-    // five content blocks plus the one unsettled market attached to the active round
-    expect(html.match(/class="run-step accent-/g)?.length).toBe(6);
+    expect(html).toContain('ROUND 03 · LIVE QUIZ · Kennisquiz');
+    // three questions plus the one unsettled market attached to the active round
+    expect(html.match(/class="run-step accent-/g)?.length).toBe(4);
     expect(html).toContain('QUICK COIN ADJUSTMENT');
+  });
+
+  // Each question carries its own points, so the strip shows them rather than one
+  // round-level number the host would have to remember is only a default.
+  it('shows each question\u2019s own points in the strip', () => {
+    const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
+    expect(html).toContain('Q1 · 10p');
+    expect(html).toContain('Q2 · 40p');
+    expect(html).toContain('Q3 · 5p');
+  });
+
+  // Navigation is the quiz's own, not a generic block stepper.
+  it('offers question navigation and the reveal flow for a live quiz', () => {
+    const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
+    expect(html).toContain('VORIGE');
+    expect(html).toContain('VOLGENDE');
+    expect(html).toContain('TOON OP SCHERM');
+    expect(html).toContain('SLUIT VRAAG'); // question 31 is OPEN
+    expect(html).toContain('1 / 3');
   });
 
   // The run of show is the only step navigator now. The current-round card and the
@@ -140,15 +197,14 @@ describe('admin pages render', () => {
 
   it('renders the staged step in its own accent and marks it pending', () => {
     const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
-    // staged is block 34, the roulette block, so the card takes the roulette accent
-    expect(html).toContain('staged-card accent-red is-pending');
-    expect(html).toContain('Bonusronde Roulette');
+    // staged is question 32, so the card takes the quiz accent and names the question
+    expect(html).toContain('staged-card accent-violet is-pending');
+    expect(html).toContain('Grootste oceaan?');
   });
 
   it('disables GO LIVE and drops the pending edge once staged matches live', () => {
     const state = adminState();
-    state.screen.staged = { ...state.screen, staged: undefined, previous: undefined } as any;
-    state.screen.staged = slot('ROUND_BLOCK', 33, null, 3);
+    state.screen.staged = slot('QUIZ_QUESTION', { roundId: 3, questionId: 31 });
     const html = render(createElement(ControlPage, { state, gameId: 1, run }));
     expect(html).toContain('ALREADY LIVE');
     expect(html).toContain('PREVIEW — ALREADY LIVE');
@@ -163,7 +219,7 @@ describe('admin pages render', () => {
 
   it('offers the dashboard as a step but marks nothing live once it is showing', () => {
     const html = render(createElement(ControlPage, {
-      state: adminState({ screen: { ...slot('DASHBOARD'), staged: slot('ROUND_BLOCK', 31, null, 3), previous: slot('ROUND_BLOCK', 33, null, 3) } }),
+      state: adminState({ screen: { ...slot('DASHBOARD'), staged: slot('QUIZ_QUESTION', { roundId: 3, questionId: 33 }), previous: slot('QUIZ_QUESTION', { roundId: 3, questionId: 31 }) } }),
       gameId: 1, run,
     }));
     expect(html).not.toContain('is-live');
@@ -229,19 +285,18 @@ describe('admin pages render', () => {
     expect(live).toMatch(/<button [^>]*disabled[^>]*title="Complete R03 first"[^>]*>START<\/button>/);
 
     const idle = render(createElement(ControlPage, {
-      state: adminState({ game: { ...adminState().game, current_round_id: null, current_round_block_id: null }, currentBlock: null, runOfShow: [] }),
+      state: adminState({ game: { ...adminState().game, current_round_id: null }, activeRound: null }),
       gameId: 1, run,
     }));
     expect(idle).toContain('>START<');
-    expect(idle).not.toContain('disabled');
-    expect(idle).not.toContain('RUN OF SHOW');
     expect(idle).not.toContain('COMPLETE ROUND');
+    expect(idle).toContain('No round is being played');
   });
 
   it('says so plainly when the game has no rounds at all', () => {
     const state = adminState({
-      game: { ...adminState().game, current_round_id: null, current_round_block_id: null },
-      rounds: [], currentBlock: null, runOfShow: [],
+      game: { ...adminState().game, current_round_id: null },
+      rounds: [], activeRound: null,
     });
     const html = render(createElement(ControlPage, { state, gameId: 1, run }));
     expect(html).toContain('No rounds yet');
@@ -250,24 +305,70 @@ describe('admin pages render', () => {
   it('renders the Rounds index with the create form collapsed', () => {
     const html = render(createElement(RoundsPage, { state: adminState(), gameId: 1, roundId: null, run }));
     expect(html).toContain('+ NEW ROUND');
-    expect(html).not.toContain('CREATE ROUND');
+    expect(html).not.toContain('WHAT KIND OF ROUND IS THIS?');
     expect(html).toContain('A round is one segment of the night');
+    // The list names each round's type, because that is what decides everything else
+    // about it.
+    expect(html).toContain('LIVE QUIZ');
+    expect(html).toContain('3 questions');
   });
 
-  it('renders the round detail with one picker tile per authorable type', () => {
+  // The type is chosen once, at creation, and never offered again — content authored
+  // under one type has nowhere to go under another.
+  it('offers the type picker when creating a round, and not inside one', () => {
+    const detail = render(createElement(RoundsPage, { state: adminState(), gameId: 1, roundId: 3, run }));
+    expect(detail).not.toContain('round-type-tile');
+    expect(detail).not.toContain('WHAT KIND OF ROUND IS THIS?');
+  });
+
+  // The editor is the one that belongs to the round's type, not a shared block form.
+  it('renders the quiz editor for a LIVE_QUIZ round', () => {
     const html = render(createElement(RoundsPage, { state: adminState(), gameId: 1, roundId: 3, run }));
-    expect(html).toContain('ADD CONTENT — CHOOSE WHAT HAPPENS');
-    expect(html.match(/class="block-type-tile/g)?.length).toBe(AUTHORABLE_BLOCK_TYPES.length);
-    expect(html).toContain('Phones switch to 4 big answer buttons');
+    expect(html).toContain('ADD A QUESTION');
+    expect(html).toContain('ANSWER OPTIONS · TICK EVERY CORRECT ONE');
+    expect(html).toContain('Points for this question');
+    expect(html).toContain('Hoofdstad van Frankrijk?');
     expect(html).toContain('ROUND GROUPS');
+    // No slide or subject editor in sight — this round is not those types.
+    expect(html).not.toContain('ADD A SLIDE');
+    expect(html).not.toContain('ADD A SUBJECT');
+  });
+
+  it('renders the presentation editor for a PRESENTATIE round', () => {
+    const state = adminState({
+      rounds: [{ ...QUIZ_ROUND, id: 9, type: 'PRESENTATIE', title: 'Intro', questions: undefined, slides: [] }],
+    });
+    const html = render(createElement(RoundsPage, { state, gameId: 1, roundId: 9, run }));
+    expect(html).toContain('ADD A SLIDE');
+    expect(html).toContain('THE SECRET — WHAT STAYS OFF THE PROJECTOR UNTIL YOU REVEAL');
+    expect(html).not.toContain('ADD A QUESTION');
+  });
+
+  it('renders the Fotoronde editor with per-subject credits', () => {
+    const state = adminState({
+      rounds: [{ ...QUIZ_ROUND, id: 9, type: 'FOTORONDE', title: 'Fotoronde', questions: undefined, subjects: [{ id: 1, sortOrder: 0, key: 'moois', label: 'Iets moois', points: 15, referenceMediaKey: null }] }],
+    });
+    const html = render(createElement(RoundsPage, { state, gameId: 1, roundId: 9, run }));
+    expect(html).toContain('ADD A SUBJECT');
+    expect(html).toContain('Iets moois');
+    expect(html).toContain('15 CREDITS');
+  });
+
+  // A game round has nothing to author beyond its own settings, and says so rather than
+  // showing an empty content list.
+  it('says there is nothing to author for a Pak een Zes round', () => {
+    const state = adminState({
+      rounds: [{ ...QUIZ_ROUND, id: 9, type: 'PAK_EEN_ZES', title: 'Pak een Zes', questions: undefined, defaultPoints: 25 }],
+    });
+    const html = render(createElement(RoundsPage, { state, gameId: 1, roundId: 9, run }));
+    expect(html).toContain('Nothing to author');
+    expect(html).toContain('25');
   });
 
   it('renders a read-only round detail for a completed round', () => {
-    const state = adminState();
-    state.rounds[0].status = 'COMPLETED';
+    const state = adminState({ rounds: [{ ...QUIZ_ROUND, status: 'COMPLETED' }, FINALE_ROUND] });
     const html = render(createElement(RoundsPage, { state, gameId: 1, roundId: 3, run }));
-    expect(html).not.toContain('ADD CONTENT — CHOOSE WHAT HAPPENS');
-    expect(html).not.toContain('block-type-tile');
+    expect(html).not.toContain('ADD A QUESTION');
     expect(html).toContain('Membership is frozen');
   });
 
@@ -351,7 +452,7 @@ describe('admin pages render', () => {
   });
 
   it('renders an empty game without throwing', () => {
-    const empty = { ...adminState(), rounds: [], players: [], predictions: [], recentTransactions: [], currentBlock: null, game: { ...adminState().game, current_round_id: null, current_round_block_id: null } };
+    const empty = { ...adminState(), rounds: [], players: [], predictions: [], recentTransactions: [], activeRound: null, game: { ...adminState().game, current_round_id: null } };
     expect(() => render(createElement(ControlPage, { state: empty, gameId: 1, run }))).not.toThrow();
     expect(() => render(createElement(RoundsPage, { state: empty, gameId: 1, roundId: null, run }))).not.toThrow();
     expect(() => render(createElement(PredictionsPage, { state: empty, run }))).not.toThrow();

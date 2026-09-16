@@ -19,7 +19,6 @@ const SUBJECTS = [
 /** The `photoRound` block of a player-state payload. */
 function photo(overrides: Record<string, unknown> = {}) {
   return {
-    blockId: 51,
     roundId: 3,
     title: 'Fotoronde',
     instructions: 'Ga op jacht.',
@@ -134,9 +133,6 @@ describe('Fotoronde on the phone', () => {
 });
 
 describe('Fotoronde in the Control Center', () => {
-  const blocks = [
-    { id: 51, round_id: 3, type: 'FOTORONDE', title: 'Fotoronde', sort_order: 1, payload: {}, answer_count: 0 },
-  ];
   const TEAMS = [
     { groupId: 7, name: 'Team Blauw', memberIds: [1, 2, 3, 4], memberNames: ['Bas', 'Daan', 'Emma', 'Twan'] },
     { groupId: 8, name: 'Team Rood', memberIds: [5, 6], memberNames: ['Jorrit', 'Sanne'] },
@@ -155,14 +151,8 @@ describe('Fotoronde in the Control Center', () => {
     distribution: credits == null ? 'no credits' : '1 × 7 + 3 × 6',
   });
 
-  const state = (photoOverrides: Record<string, unknown> = {}) => ({
-    version: 1,
-    game: { id: 1, name: 'Game Night', starting_balance: 100, maximum_wallet_percentage: null, current_round_id: 3, current_round_block_id: 51, current_screen_mode: 'FOTORONDE', game_state_version: 1 },
-    screen: { mode: 'FOTORONDE', roundId: 3, blockId: 51, predictionId: null, staged: { mode: 'FOTORONDE', roundId: 3, blockId: 51, predictionId: null }, previous: { mode: null, roundId: null, blockId: null, predictionId: null } },
-    runOfShow: [{ kind: 'block', id: 51, roundId: 3, type: 'FOTORONDE', label: 'Fotoronde' }],
-    predictionRequests: [],
-    rounds: [{
-      id: 3, round_number: 3, title: 'Kennisquiz', status: 'ACTIVE', description: '', blocks,
+  const PHOTO_ROUND = {
+    id: 3, sortOrder: 3, title: 'Fotoronde', type: 'FOTORONDE', status: 'ACTIVE', description: '', instructions: '', defaultPoints: 10, subjects: [],
       groups: [
         { id: 7, round_id: 3, name: 'Team Blauw', members: [
           { id: 1, display_name: 'Bas', public_color: '#3D5AFE', active: true },
@@ -175,8 +165,16 @@ describe('Fotoronde in the Control Center', () => {
           { id: 6, display_name: 'Sanne', public_color: '#1FD8E0', active: true },
         ] },
       ],
-    }],
-    currentBlock: blocks[0],
+    };
+
+  const state = (photoOverrides: Record<string, unknown> = {}) => ({
+    version: 1,
+    game: { id: 1, name: 'Game Night', starting_balance: 100, maximum_wallet_percentage: null, current_round_id: 3, current_screen_mode: 'FOTORONDE', game_state_version: 1 },
+    screen: { mode: 'FOTORONDE', roundId: 3, questionId: null, slideId: null, predictionId: null, staged: { mode: 'FOTORONDE', roundId: 3, questionId: null, slideId: null, predictionId: null }, previous: { mode: null, roundId: null, questionId: null, slideId: null, predictionId: null } },
+    roundRuntime: { currentQuizQuestionId: null, currentSlideId: null, revision: 0 },
+    predictionRequests: [],
+    rounds: [PHOTO_ROUND],
+    activeRound: PHOTO_ROUND,
     players: [
       { id: 1, display_name: 'Bas', public_color: '#3D5AFE', active: true, current_balance: 290, locked_prediction: 0, rank: 1, joined: true },
       { id: 2, display_name: 'Daan', public_color: '#9B2FF2', active: true, current_balance: 280, locked_prediction: 0, rank: 2, joined: true },
@@ -189,7 +187,7 @@ describe('Fotoronde in the Control Center', () => {
     activeSlot: null,
     pakEenZes: null,
     photoRound: {
-      blockId: 51,
+      roundId: 3,
       id: 3,
       status: 'CLOSED',
       instructions: '',
@@ -245,7 +243,8 @@ describe('Fotoronde in the Control Center', () => {
     const html = renderRouted(createElement(ControlPage, {
       state: {
         ...state({ teams: [], bySubject: [], submissions: [], teamTotals: [] }),
-        rounds: [{ id: 3, round_number: 3, title: 'Kennisquiz', status: 'ACTIVE', description: '', blocks, groups: [] }],
+        rounds: [{ ...PHOTO_ROUND, groups: [] }],
+        activeRound: { ...PHOTO_ROUND, groups: [] },
       },
       gameId: 1,
       run,

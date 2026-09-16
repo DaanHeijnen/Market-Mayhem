@@ -8,42 +8,58 @@ erDiagram
   players ||--|| wallets : owns
   players ||--o{ ledger_entries : affects
   game_nights ||--o{ rounds : has
-  rounds ||--o{ round_blocks : contains
+  rounds ||--|| round_runtime : "tracks progress in"
   rounds ||--o{ round_groups : scopes
   round_groups ||--o{ round_group_members : contains
   players ||--o{ round_group_members : joins
-  round_blocks ||--o{ round_question_answers : receives
-  players ||--o{ round_question_answers : submits
-  game_nights ||--o{ predictions : has
-  rounds ||--o{ predictions : schedules
-  predictions ||--o{ bets : receives
-  players ||--o{ bets : places
-  round_blocks ||--o{ roulette_games : runs
-  roulette_games ||--o{ roulette_bets : receives
-  players ||--o{ roulette_bets : places
+
+  rounds ||--o{ live_quiz_questions : "LIVE_QUIZ authors"
+  live_quiz_questions ||--o{ live_quiz_question_options : offers
+  live_quiz_questions ||--|| live_quiz_question_state : "runs as"
+  live_quiz_questions ||--o{ quiz_answers : receives
+  live_quiz_question_options ||--o{ quiz_answers : "is picked by"
+  players ||--o{ quiz_answers : submits
+  live_quiz_questions ||--o{ ledger_entries : attributes
+
+  rounds ||--o{ presentation_slides : "PRESENTATIE authors"
+  presentation_slides ||--|| presentation_slide_state : "runs as"
+
+  rounds ||--o{ fotoronde_subjects : "FOTORONDE authors"
+  rounds ||--o{ photo_rounds : "FOTORONDE runs"
+  photo_rounds ||--o{ photo_submissions : collects
+  round_groups ||--o{ photo_submissions : submits
+  players ||--o{ photo_submissions : uploads
+  photo_submissions ||--o{ ledger_entries : attributes
+
+  rounds ||--|| slotmachine_rounds : "SLOTMACHINE configures"
+  rounds ||--o{ slotmachine_round_participants : allows
+  rounds ||--o{ slot_series : "SLOTMACHINE runs"
   game_nights ||--|| slot_configs : configures
   game_nights ||--o{ slot_reel_symbols : owns
-  game_nights ||--o{ slot_outcomes : weights
-  round_blocks ||--o{ slot_series : runs
+  game_nights ||--o{ slot_outcome_types : weights
   players ||--o{ slot_series : locks
   slot_series ||--o{ slot_spins : produces
   slot_series ||--o{ ledger_entries : attributes
   slot_spins ||--o{ ledger_entries : attributes
-  rounds ||--o{ ledger_entries : attributes
-  predictions ||--o{ ledger_entries : attributes
-  round_groups ||--o{ ledger_entries : attributes
-  round_blocks ||--o{ ledger_entries : attributes
-  round_blocks ||--o{ pak_een_zes_games : runs
+
+  rounds ||--o{ roulette_games : "ROULETTE runs"
+  roulette_games ||--o{ roulette_bets : receives
+  players ||--o{ roulette_bets : places
+
+  rounds ||--o{ pak_een_zes_games : "PAK_EEN_ZES runs"
   pak_een_zes_games ||--o{ pak_een_zes_participants : orders
   pak_een_zes_games ||--o{ pak_een_zes_predictions : collects
   pak_een_zes_games ||--o{ pak_een_zes_draws : records
   players ||--o{ pak_een_zes_predictions : submits
   players ||--o{ pak_een_zes_draws : draws
-  round_blocks ||--o{ photo_rounds : runs
-  photo_rounds ||--o{ photo_submissions : collects
-  round_groups ||--o{ photo_submissions : submits
-  players ||--o{ photo_submissions : uploads
-  photo_submissions ||--o{ ledger_entries : attributes
+
+  game_nights ||--o{ predictions : has
+  rounds ||--o{ predictions : schedules
+  predictions ||--o{ bets : receives
+  players ||--o{ bets : places
+  rounds ||--o{ ledger_entries : attributes
+  predictions ||--o{ ledger_entries : attributes
+  round_groups ||--o{ ledger_entries : attributes
   game_nights ||--|| screen_state : broadcasts
 ```
 
@@ -63,29 +79,88 @@ The old game-level prediction duration/minimum/maximum columns were introduced b
 - `prediction_id` / `bet_id`
 - `roulette_game_id` / `roulette_bet_id`
 - `round_group_id`
-- `round_block_id`
+- `quiz_question_id`
 
 Manual/group reasons are stored as exact descriptions. Corrections create new ledger rows.
 
-## Rounds and blocks
+## Rounds
 
-`rounds` have `UPCOMING`, `ACTIVE`, `COMPLETED`. A partial unique index from migration 0004 enforces at most one active round per game.
+```
+rounds  id, game_night_id, sort_order, title, description,
+        type, status, instructions, default_points, timestamps
+```
 
-`round_blocks` has game/round/type/order/title/JSON payload plus interactive timestamps/status. Migration 0006 expanded allowed types to `TEXT`, `QUESTION`, `DUOLINGO_QUESTION`, `ROULETTE`; migration 0007 adds `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`; migration 0010 adds `SLOTMACHINE`; migration 0013 adds `PAK_EEN_ZES`; migration 0015 adds `FOTORONDE`.
+`type` is one of `LIVE_QUIZ`, `PRESENTATIE`, `ROULETTE`, `SLOTMACHINE`, `PAK_EEN_ZES`,
+`FOTORONDE`, pinned by `rounds_type_check`. `status` is `UPCOMING`/`ACTIVE`/`COMPLETED`,
+and the partial unique index `one_active_round_per_game` allows at most one `ACTIVE` round
+per game. `sort_order` (renamed from `round_number` by migration 0016) is unique per game
+and is a label and an ordering, never an execution pointer.
 
-Payload keys for the types added by 0007. Media blocks store only a Netlify Blobs **key**, never the bytes — the payload travels in every admin-state snapshot, so embedding a file would bloat each poll response:
+`default_points` is what new content inherits and every item can override; for
+`PAK_EEN_ZES` it is the rate itself.
 
-- `PICTURE` — `imageKey`
-- `MUSIC` — `audioKey`, `audioName` (original filename, Admin-facing only; the block title is the song title and stays hidden until reveal)
-- `WAGER` — `correctAnswer`
+There is no generic payload column. Each type's content is its own table, and a trigger
+(`assert_round_type`) refuses content whose round is of the wrong type — without it a quiz
+question could be inserted against a roulette round and no constraint would object, because
+the type lives on the parent row where a `CHECK` cannot see it.
 
-Payload keys for the type added by 0010:
+### `LIVE_QUIZ`
 
-- `SLOTMACHINE` — `maxSpins` (per series), `allowedPlayerIds` (empty array means everyone), plus `body` as the instruction text shown on phones. The reel artwork and the outcome distribution are **not** here: they are game-wide and live in their own tables.
-- `FOTORONDE` — `subjects` as `{key, label}` pairs (defaulting to the standard six) plus `body` as the instruction text shown on phones. The key is the identity a submission is filed under, so renaming a subject keeps its photos.
-- `PAK_EEN_ZES` — `body` only, as the instruction text shown on phones. There is nothing else to author: the deck is a fixed 52 cards, the game ends on the fourth six, every active player takes part, and the turn order is frozen when the host starts.
+- `live_quiz_questions` — `sort_order`, `prompt`, `body`, `points`, optional
+  `time_limit_seconds`, optional `context_media_key`. Unique on `(round_id, sort_order)`,
+  deferrable so a reorder can renumber in one transaction.
+- `live_quiz_question_options` — `sort_order` 0–5, `text`, `is_correct`. Rows rather than a
+  JSON array because options have their own ordering and their own correctness, and because
+  **more than one may be correct** — which a single `correctAnswerIndex` could not express.
+  A partial index on `is_correct` is what makes scoring a lookup rather than a scan.
+- `live_quiz_question_state` — 1:1 with a question: `status`
+  (`READY`/`OPEN`/`CLOSED`/`REVEALED`/`SETTLED`), its four phase timestamps,
+  `context_photo_shown` and `revision`. Separate from the authored row on purpose, so
+  editing a question and running one are two writes to two tables.
 
-`BUZZER` and `WAGER` are authorable and presentable but have no phone-side interaction and no live state machine, matching the Admin UX redesign, which specifies none for them. `blockMeta.ts` marks this with `interactive: false`.
+### `PRESENTATIE`
+
+- `presentation_slides` — `title`, `body`, one optional `media_key` + `media_kind`
+  (`IMAGE`/`AUDIO`), `reveal_text` and `hide_title_until_reveal`. A `CHECK` ties
+  `media_key` and `media_kind` together so neither can exist without the other. The last
+  two fields are the secret: `reveal_text` is where a wager's correct answer landed, and
+  `hide_title_until_reveal` is what a picture or music round needs, where the title *is*
+  the answer.
+- `presentation_slide_state` — 1:1: `revealed_at` and `revision`.
+
+### `FOTORONDE`
+
+- `fotoronde_subjects` — `sort_order`, `subject_key`, `label`, `points`, optional
+  `reference_media_key`. Unique on `(round_id, subject_key)`: the key is the identity a
+  photo is filed under, so it is derived once and never edited, which is what keeps a
+  renamed subject attached to its photos.
+
+### `SLOTMACHINE`
+
+- `slotmachine_rounds` — `round_id` PK, `max_spins` (1–10).
+- `slotmachine_round_participants` — `(round_id, player_id)`. **No rows means everyone
+  plays**, which is the usual case. Rows rather than an array of ids in a payload, so a
+  removed player cascades out instead of leaving a dangling id.
+
+`ROULETTE` and `PAK_EEN_ZES` have no authored content beyond the round's own `title` and
+`instructions`: the wheel, its bet types and their payouts are the game, and the deck is a
+fixed 52 cards.
+
+## Round runtime
+
+```
+round_runtime  round_id PK, game_night_id,
+               current_quiz_question_id, current_slide_id, revision
+```
+
+One row per round, created with the round. This is the execution cursor that replaced
+`game_nights.current_round_block_id`, and the move is the point: progression belongs to the
+round being played rather than to the game, so a completed round keeps the cursor it ended
+on and a round that has never been played still has somewhere to start.
+
+`revision` is the optimistic-locking token. `advanceRoundCursor` writes
+`WHERE round_id = $1 AND revision = $2`, so a stale command from a second admin tab matches
+no row and is turned into a 409 rather than silently rewinding the room.
 
 ## Slotmachine
 
@@ -99,7 +174,7 @@ Migration 0010 adds five tables, split by what each thing is scoped to.
 
 ### Play (per player, per block)
 
-- `slot_series` — one locked reeks: `stake_per_spin`, `total_spins`, `spins_remaining`, `total_stake`, `refunded_spins` and `ACTIVE`/`COMPLETED`/`CANCELLED`. A partial unique index allows at most one `ACTIVE` series per `(round_block_id, player_id)`. `CHECK (spins_remaining <= total_spins)` and `CHECK (spins_remaining >= 0)` are what stop a replayed or racing SPIN from manufacturing spins or driving the counter negative.
+- `slot_series` — one locked reeks: `stake_per_spin`, `total_spins`, `spins_remaining`, `total_stake`, `refunded_spins` and `ACTIVE`/`COMPLETED`/`CANCELLED`. A partial unique index allows at most one `ACTIVE` series per `(round_id, player_id)`. `CHECK (spins_remaining <= total_spins)` and `CHECK (spins_remaining >= 0)` are what stop a replayed or racing SPIN from manufacturing spins or driving the counter negative.
 - `slot_spins` — the outcome the server chose, with `spin_number`, `outcome_type` (the category drawn and verified), `grid` (the whole 3x3 field as `{p: position, k: media key}` cells), `win_cells` (the `[row, column]` pairs the projector highlights), `stake`, `payout_multiplier`, `payout` and `SPINNING`/`RESULT`. The `reel1/2/3_position` and `media_key` columns keep their meaning as the **main row** — the row that decides the two-alike categories. Media keys are snapshotted in `grid` too, because Settings can be re-uploaded later in the evening and history must still show the symbols the room actually saw. Unique on `(slot_series_id, spin_number)` and on `(slot_series_id, idempotency_key)` — the second is what answers a double-tapped SPIN with the spin it already produced.
 
 ### Ledger attribution
@@ -125,7 +200,7 @@ The drawn rows *are* the deck's history: what remains is derived from them, neve
 
 Scoring (migration 0014):
 
-- `game_nights.pak_een_zes_points_per_correct` — one game-wide amount per correct prediction, defaulting to 25.
+- `rounds.default_points` — the amount per correct prediction, per round. Migration 0016 moved it off `game_nights`, where it was one rate for the whole night.
 - `pak_een_zes_games.points_per_correct` — the rate that game actually paid, snapshotted when it finishes, so a later Settings change never rewrites history. Null until it pays.
 - `ledger_entries.pak_een_zes_game_id` — attribution for the `PAK_EEN_ZES_REWARD` rows, with a partial unique index on `(pak_een_zes_game_id, player_id)` that makes a double payout impossible rather than unlikely.
 
@@ -135,7 +210,7 @@ Correct predictions are a multiset match, so a name picked twice can score twice
 
 Migration 0015 adds two tables. "Team" means a **round group**: `round_group_members` is unique by `(round_id, player_id)`, so a player's team is derivable from their session rather than sent by their phone. The legacy `teams` table is untouched and unread.
 
-- `photo_rounds` — one per block, with `status` (`DRAFT`/`OPEN`/`CLOSED`/`COMPLETED`) and its phase timestamps. A unique index on `round_block_id` allows exactly one for the life of the block: unlike the other games there is no "start over", because the photos and the credits awarded for them are history.
+- `photo_rounds` — one per round, with `status` (`DRAFT`/`OPEN`/`CLOSED`/`COMPLETED`) and its phase timestamps. A unique index on `round_id` allows exactly one for the life of the round: unlike the other games there is no "start over", because the photos and the credits awarded for them are history.
 - `photo_submissions` — one photo per team per subject, keyed `(photo_round_id, subject_key, group_id)` by a unique constraint. That constraint *is* the "one active submission per team per subject" rule; replacing upserts the row rather than inserting a second. `group_id` cascades with the group (a photo for a team that no longer exists has nobody to pay), while `uploaded_by` is `ON DELETE SET NULL` so removing a player never erases their team's photo or the credits it earned. Only the Netlify Blobs `media_key` is stored, never the bytes. A partial index on `credits_awarded IS NULL` carries the Admin's unjudged working list.
 
 `ledger_entries.photo_submission_id` attributes the `PHOTO_ROUND_REWARD` rows, with a partial unique index on `(photo_submission_id, player_id)` that makes a double payout impossible rather than unlikely. Credits are real coins in wallets — there is no second currency.
@@ -172,9 +247,9 @@ Membership is unique per `(round_id, player_id)`, so a player belongs to at most
 
 ## Live question answers
 
-`round_question_answers` stores only the selected answer index and submission timestamp. `(round_block_id, player_id)` is unique, enforcing one response per player/question server-side.
+`quiz_answers` (renamed from `round_question_answers` by migration 0016) stores `question_id`, `option_id` and the submission timestamp — the option the player picked, not an index into an array that no longer exists. `(question_id, player_id)` is unique, and the insert is `ON CONFLICT DO NOTHING`, so one answer per player is a guarantee rather than a check two simultaneous taps could both pass.
 
-Question rewards use `ledger_entries.round_block_id` and a partial unique index on `(round_block_id, player_id, transaction_type='QUESTION_REWARD')` to prevent double rewards.
+Question rewards use `ledger_entries.quiz_question_id` and a partial unique index on `(quiz_question_id, player_id, transaction_type='QUESTION_REWARD')`, which makes a double payout impossible rather than unlikely.
 
 ## Predictions and bets
 
@@ -209,8 +284,9 @@ Migration 0006 adds market-owned:
 
 Full Reset splits every table in this schema into two groups, listed explicitly as `RUNTIME_TABLES` and `PRESERVED_TABLES` in `netlify/lib/full-reset.ts`:
 
-- **Runtime** — what playing the evening produced: `ledger_entries`, `bets`, `roulette_games`/`roulette_bets`, `slot_series`/`slot_spins`, the four `pak_een_zes_*` tables, `photo_rounds`/`photo_submissions`, `round_question_answers`, `prediction_requests`, and the legacy `player_timers`/`player_codewords`. Deleted, children before parents.
-- **Configuration** — what the Admin prepared: `rounds`, `round_blocks` and their payloads, `round_groups`/`round_group_members`, `predictions`, `slot_configs`/`slot_reel_symbols`/`slot_outcome_types`, `players`, `wallets`, `player_join_tokens`, `player_sessions`, `game_nights`, `screen_state`, `admin_sessions`, `admin_audit_log`. Kept, with any runtime columns reset in place.
+- **Runtime** — what playing the evening produced: `ledger_entries`, `bets`, `roulette_games`/`roulette_bets`, `slot_series`/`slot_spins`, the four `pak_een_zes_*` tables, `photo_rounds`/`photo_submissions`, `quiz_answers`, `prediction_requests`, and the legacy `player_timers`/`player_codewords`. Deleted, children before parents.
+- **Configuration** — what the Admin prepared: `rounds`, the six per-type content tables (`live_quiz_questions`, `live_quiz_question_options`, `presentation_slides`, `fotoronde_subjects`, `slotmachine_rounds`, `slotmachine_round_participants`), `round_groups`/`round_group_members`, `predictions`, `slot_configs`/`slot_reel_symbols`/`slot_outcome_types`, `players`, `wallets`, `player_join_tokens`, `player_sessions`, `game_nights`, `screen_state`, `admin_sessions`, `admin_audit_log`, and the two archives `round_blocks_archive`/`migration_notes`. Kept, with any runtime columns reset in place.
+- **Runtime that lives beside configuration** — `live_quiz_question_state`, `presentation_slide_state` and `round_runtime` are listed as preserved because their rows are 1:1 with authored content and must not disappear; their *columns* are reset in place instead.
 
 **A new table must be added to one of those two lists.** `tests/full-reset.test.ts` reads the live table set out of the migrations in this directory and fails when a table appears in neither — an unclassified table is one whose test data would silently survive a reset, or whose configuration would silently be wiped by one.
 
@@ -232,3 +308,6 @@ Four tables have no `game_night_id` of their own and are scoped through their pa
 - `0015_photo_round.sql`: Fotoronde rounds and submissions, `PHOTO_ROUND_REWARD` ledger attribution with a one-reward-per-player index, and `FOTORONDE` added to `round_blocks.type` and to the live/staged/previous `screen_state` mode constraints.
 
 Unrelated legacy schema (`teams`, `players.team_id`, avatar/admin-note fields, codewords/timers, session `last_seen_at`, correction link) remains for upgrade safety even though current production UI does not use it.
+- `0016_round_is_the_content.sql`: rounds become the primary content type. Adds `rounds.type`, `instructions` and `default_points`, renames `round_number` to `sort_order`, and creates the per-type content tables plus the runtime tables beside them (`round_runtime`, `live_quiz_question_state`, `presentation_slide_state`). Converts every block: `DUOLINGO_QUESTION` becomes a question with option rows; `TEXT`/`QUESTION`/`PICTURE`/`MUSIC`/`BUZZER`/`WAGER` become presentation slides, keeping their reveal semantics as `reveal_text` and `hide_title_until_reveal`; `FOTORONDE` payload subjects become rows; `SLOTMACHINE` payload settings become `slotmachine_rounds` plus an allowlist. Repoints every runtime table from `round_block_id` to `round_id`, replaces the screen payload's `blockId` with typed pointers, then drops `round_blocks` and `game_nights.current_round_block_id`.
+
+  **A round that mixed content types becomes several rounds.** A round cannot hold a roulette block and a quiz block at once and still have one type, so the migration splits it: the first segment keeps the original round row — and therefore its id, its ledger attribution and its groups — and each further segment becomes a new round placed directly after it, starting as `UPCOMING` because only one round may be `ACTIVE`. Nothing is deleted: `round_blocks_archive` holds every block and payload verbatim, and `migration_notes` records each split, each re-attributed ledger row and each allowlist entry naming a player who no longer exists.

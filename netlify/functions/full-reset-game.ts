@@ -36,7 +36,8 @@ export default wrap(async request => {
       deleted: summary.deleted,
       playersReset: summary.playersReset,
       roundsReset: summary.roundsReset,
-      blocksReset: summary.blocksReset,
+      questionsReset: summary.questionsReset,
+      slidesReset: summary.slidesReset,
       predictionsReset: summary.predictionsReset,
     });
 

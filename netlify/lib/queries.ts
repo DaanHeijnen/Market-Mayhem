@@ -2,14 +2,18 @@ import { database, withTransaction } from './db';
 import { HttpError } from './http';
 import { incrementGameVersion } from './game-state';
 import { publicPredictionStatus } from './economy';
-import { orderRunOfShow } from './run-of-show';
 import { cooldownMinutesLeft, describeRequestStatus, requestsRemaining } from './prediction-requests';
-import { loadSlotConfig, loadSlotTurn, slotBlockSettings } from './slot-state';
-import { loadPakEenZesGame, pakEenZesBlockSettings } from './pak-een-zes-state';
-import { loadPhotoRound, photoRoundInstructions, photoRoundSubjects, playerTeamForRound } from './photo-round-state';
+import { loadSlotConfig, loadSlotTurn } from './slot-state';
+import { loadPakEenZesGame } from './pak-een-zes-state';
+import { loadPhotoRound, playerTeamForRound } from './photo-round-state';
 import { countCorrectPredictions, playerAtTurn, predictionPoints } from './pak-een-zes';
 import { describeSlotConfig, maySpin, symbolLetter, SLOT_OUTCOME_LABELS, SLOT_SPIN_MS, type SlotOutcomeType } from './slotmachine';
-import { isRevealed, mayShowContextPhoto, questionParticipation } from './question';
+import { isRevealed, mayShowContextPhoto, questionParticipation } from './live-quiz';
+import { loadAllRoundContent, loadRoundRuntime } from './rounds';
+import {
+  adminRound, adminQuizQuestion, adminSlide, adminSubject,
+  playerQuizQuestion, publicRound, publicSubject, screenQuizQuestion, screenRoulette, screenSlide,
+} from './dto';
 
 const ROULETTE_SPIN_MS = 5500;
 
@@ -122,71 +126,6 @@ export async function getGameVersion(gameId: number): Promise<GameVersion> {
   return value;
 }
 
-/**
- * Shape a round_blocks row for one audience.
- *
- * Exported because what it withholds from non-admin surfaces — a wager's answer, a
- * picture round's title, a live question's correct answer and context photo — is a
- * security rule rather than a formatting detail, and is worth testing directly rather
- * than only through a snapshot.
- */
-export function normalizeBlock(row: any, admin = true, eligibleCount = 0) {
-  if (!row) return null;
-  const payload = row.payload || {};
-  const revealed = isRevealed(row.interactive_status);
-
-  const normalizedPayload = admin ? payload : (() => {
-    if (row.type === 'DUOLINGO_QUESTION') {
-      const safe: Record<string, unknown> = {
-        answers: Array.isArray(payload.answers) ? payload.answers : [],
-        rewardCoins: Number(payload.rewardCoins || 0),
-        // Supporting text is part of the question being asked, so it travels from the
-        // start. The correct answer and the context photo do not.
-        body: typeof payload.body === 'string' ? payload.body : '',
-      };
-      if (revealed && Number.isInteger(Number(payload.correctAnswerIndex))) {
-        safe.correctAnswerIndex = Number(payload.correctAnswerIndex);
-      }
-      // Withheld until the reveal, like the answer itself. Stripping the key here rather
-      // than hiding the image in the UI is what makes "never before the reveal"
-      // structural: until then the projector has no way to name the file.
-      if (revealed && typeof payload.contextImageKey === 'string' && payload.contextImageKey) {
-        safe.contextImageKey = payload.contextImageKey;
-      }
-      return safe;
-    }
-    // A wager round's correct answer is the thing being guessed; it must not leave the
-    // server before the host reveals it.
-    if (row.type === 'WAGER') {
-      const { correctAnswer, ...rest } = payload;
-      return revealed ? payload : rest;
-    }
-    return payload;
-  })();
-
-  // A music round's title IS the song title and a picture round's title is the answer,
-  // so both are withheld from non-admin surfaces until reveal. Stripped here rather
-  // than in the UI so the secret never crosses the wire.
-  const hideTitle = !admin && ['MUSIC', 'PICTURE'].includes(row.type) && !revealed;
-
-  return {
-    ...row,
-    id: Number(row.id),
-    round_id: Number(row.round_id),
-    sort_order: Number(row.sort_order),
-    answer_count: Number(row.answer_count || 0),
-    title: hideTitle ? null : row.title,
-    payload: normalizedPayload,
-    // Computed here rather than on each surface so the Admin bar, the projector and the
-    // round list can never disagree about how far along the room is. Only meaningful for
-    // a live question, so the other block types are not given a misleading zero.
-    participation: row.type === 'DUOLINGO_QUESTION'
-      ? questionParticipation(Number(row.answer_count || 0), eligibleCount)
-      : null,
-    hasContextPhoto: row.type === 'DUOLINGO_QUESTION' && Boolean(payload.contextImageKey),
-  };
-}
-
 function normalizePrediction(p: any) {
   const status = p.status;
   return {
@@ -217,19 +156,12 @@ export async function getAdminState(gameId: number) {
   const gameResult = await pool.query('SELECT * FROM game_nights WHERE id=$1', [gameId]);
   const game = gameResult.rows[0];
   if (!game) throw new HttpError(404, 'Game not found');
+  const activeRoundId = game.current_round_id ? Number(game.current_round_id) : null;
 
-  const [rounds, blocks, groups, players, predictions, recent, roulette, screen, requests, slotConfig, slotSeries, slotSpins, pakEenZes, slotTurn, photoRound] = await Promise.all([
-    pool.query('SELECT * FROM rounds WHERE game_night_id=$1 ORDER BY round_number,id', [gameId]),
+  const [rounds, groups, players, predictions, recent, screen, requests, slotConfig] = await Promise.all([
     pool.query(
-      // Answers are counted from active players only, matching the denominator the
-      // participation bar divides by — otherwise deactivating someone mid-question shows
-      // the host more answers than there are players. Reward eligibility at REVEAL is a
-      // separate question and deliberately unchanged.
-      `SELECT b.*,COUNT(ap.id)::int AS answer_count
-       FROM round_blocks b
-       LEFT JOIN round_question_answers a ON a.round_block_id=b.id
-       LEFT JOIN players ap ON ap.id=a.player_id AND ap.active=TRUE
-       WHERE b.game_night_id=$1 GROUP BY b.id ORDER BY b.round_id,b.sort_order,b.id`, [gameId],
+      `SELECT id,game_night_id,sort_order,title,description,type,status,instructions,default_points,started_at,completed_at
+       FROM rounds WHERE game_night_id=$1 ORDER BY sort_order,id`, [gameId],
     ),
     pool.query(
       `SELECT g.id,g.round_id,g.name,g.created_at,
@@ -252,29 +184,22 @@ export async function getAdminState(gameId: number) {
     pool.query(
       `SELECT p.*,COUNT(b.id)::int AS bet_count,COUNT(b.id)::int AS participation_count,
               COALESCE(SUM(b.stake) FILTER (WHERE b.status='ACTIVE'),0)::int AS deposited_coins,
-              r.round_number,r.title AS round_title
+              r.sort_order AS round_number,r.title AS round_title
        FROM predictions p LEFT JOIN rounds r ON r.id=p.round_id LEFT JOIN bets b ON b.prediction_id=p.id
-       WHERE p.game_night_id=$1 GROUP BY p.id,r.round_number,r.title ORDER BY p.display_number,p.id`, [gameId],
+       WHERE p.game_night_id=$1 GROUP BY p.id,r.sort_order,r.title ORDER BY p.display_number,p.id`, [gameId],
     ),
     pool.query(
       `SELECT l.id,l.amount,l.description,l.transaction_type,l.created_at,p.display_name,
-              r.round_number,pr.display_number AS prediction_number,l.roulette_game_id,g.name AS group_name
+              r.sort_order AS round_number,pr.display_number AS prediction_number,l.roulette_game_id,g.name AS group_name
        FROM ledger_entries l JOIN players p ON p.id=l.player_id
        LEFT JOIN rounds r ON r.id=l.attributed_round_id LEFT JOIN predictions pr ON pr.id=l.prediction_id
        LEFT JOIN round_groups g ON g.id=l.round_group_id
        WHERE l.game_night_id=$1 ORDER BY l.created_at DESC,l.id DESC LIMIT 12`, [gameId],
     ),
     pool.query(
-      `SELECT rg.*,COUNT(rb.id) FILTER (WHERE rb.status='ACTIVE')::int AS bet_count,
-              COALESCE(SUM(rb.stake) FILTER (WHERE rb.status='ACTIVE'),0)::int AS total_stake
-       FROM roulette_games rg LEFT JOIN roulette_bets rb ON rb.roulette_game_id=rg.id
-       WHERE rg.game_night_id=$1 AND rg.round_block_id=$2 AND rg.status IN ('DRAFT','OPEN','LOCKED','SPINNING','RESULT')
-       GROUP BY rg.id ORDER BY rg.id DESC LIMIT 1`, [gameId, game.current_round_block_id],
-    ),
-    pool.query(
-      `SELECT mode,round_id,prediction_id,payload,
-              staged_mode,staged_round_id,staged_prediction_id,staged_payload,
-              previous_mode,previous_round_id,previous_prediction_id,previous_payload
+      `SELECT mode,round_id,prediction_id,quiz_question_id,slide_id,payload,
+              staged_mode,staged_round_id,staged_prediction_id,staged_quiz_question_id,staged_slide_id,
+              previous_mode,previous_round_id,previous_prediction_id,previous_quiz_question_id,previous_slide_id
        FROM screen_state WHERE game_night_id=$1`, [gameId],
     ),
     pool.query(
@@ -286,104 +211,147 @@ export async function getAdminState(gameId: number) {
     // Settings page edits it, and the Control Center needs its validity to tell the host
     // whether the machine can be used at all.
     loadSlotConfig(pool, gameId),
-    pool.query(
-      `SELECT sr.id,sr.player_id,sr.stake_per_spin,sr.total_spins,sr.spins_remaining,sr.total_stake,sr.status,sr.created_at,
-              p.display_name,p.public_color
-       FROM slot_series sr JOIN players p ON p.id=sr.player_id
-       WHERE sr.game_night_id=$1 AND sr.round_block_id=$2
-       ORDER BY CASE sr.status WHEN 'ACTIVE' THEN 0 ELSE 1 END,sr.id DESC LIMIT 20`,
-      [gameId, game.current_round_block_id],
-    ),
-    pool.query(
-      `SELECT ss.id,ss.player_id,ss.spin_number,ss.outcome_type,
-              ss.stake,ss.payout_multiplier,ss.payout,ss.status,ss.spun_at,p.display_name
-       FROM slot_spins ss JOIN players p ON p.id=ss.player_id
-       WHERE ss.game_night_id=$1 AND ss.round_block_id=$2
-       ORDER BY ss.spun_at DESC,ss.id DESC LIMIT 8`,
-      [gameId, game.current_round_block_id],
-    ),
-    // Null unless the current block is a Pak een Zes, so the Control Center can key off
-    // the block type the same way it does for roulette and the slotmachine.
-    game.current_round_block_id
-      ? loadPakEenZesGame(pool, gameId, Number(game.current_round_block_id))
-      : Promise.resolve(null),
-    game.current_round_block_id
-      ? loadSlotTurn(pool, gameId, Number(game.current_round_block_id))
-      : Promise.resolve(null),
-    // Loaded from the block's own payload, so the subject list the Admin is judging
-    // against is the one authored on the block.
-    game.current_round_block_id
-      ? pool.query('SELECT payload FROM round_blocks WHERE id=$1 AND game_night_id=$2', [game.current_round_block_id, gameId])
-        .then(r => (r.rows[0]
-          ? loadPhotoRound(pool, gameId, Number(game.current_round_block_id), r.rows[0].payload)
-          : null))
-      : Promise.resolve(null),
   ]);
 
   // Who may answer a live question: every active player. Derived from the player rows
   // this snapshot already fetched rather than a second query.
   const eligibleCount = players.rows.filter((p: any) => p.active).length;
-  const normalizedBlocks = blocks.rows.map((b: any) => normalizeBlock(b, true, eligibleCount));
-  const groupRows = groups.rows.map((g: any) => ({ ...g, id: Number(g.id), round_id: Number(g.round_id), members: (g.members || []).map((m: any) => ({ ...m, id: Number(m.id), active: Boolean(m.active) })) }));
+
+  // All content for the whole game in a fixed number of queries, then grouped in memory.
+  // One query per round would have been simpler to write and would have made a ten-round
+  // evening cost ten times as much database compute, for the whole evening, on a snapshot
+  // every client polls.
+  const content = await loadAllRoundContent(pool, gameId);
+  const roundsWithContent = rounds.rows.map((row: any) => {
+    const round = adminRound(row);
+    const id = round.id;
+    const base = {
+      ...round,
+      groups: groups.rows
+        .filter((g: any) => Number(g.round_id) === id)
+        .map((g: any) => ({
+          id: Number(g.id), round_id: Number(g.round_id), name: g.name, created_at: g.created_at,
+          members: (g.members || []).map((m: any) => ({ ...m, id: Number(m.id), active: Boolean(m.active) })),
+        })),
+    };
+
+    // Only the content that round's type can have. A quiz round is not given an empty
+    // slide list, so a surface reading `slides` on it gets undefined rather than a lie.
+    if (round.type === 'LIVE_QUIZ') {
+      return {
+        ...base,
+        questions: (content.questionsByRound.get(id) || []).map(q => adminQuizQuestion(q.row, q.options, eligibleCount)),
+      };
+    }
+    if (round.type === 'PRESENTATIE') {
+      return { ...base, slides: (content.slidesByRound.get(id) || []).map(adminSlide) };
+    }
+    if (round.type === 'FOTORONDE') {
+      return { ...base, subjects: (content.subjectsByRound.get(id) || []).map(adminSubject) };
+    }
+    if (round.type === 'SLOTMACHINE') {
+      return { ...base, slotmachine: content.slotByRound.get(id) || { maxSpins: 10, allowedPlayerIds: [] } };
+    }
+    return base;
+  });
+
+  // Everything below is about the round being played. A game with no active round gets
+  // nulls rather than a shape full of empty lists, so the Control Center can tell "no
+  // round" from "a round with nothing in it".
+  const activeRound = roundsWithContent.find(r => r.id === activeRoundId) || null;
+  const runtime = activeRoundId ? await loadRoundRuntime(pool, activeRoundId) : null;
+
+  const [roulette, slotSeries, slotSpins, pakEenZes, slotTurn, photoRound] = await Promise.all([
+    activeRound?.type === 'ROULETTE'
+      ? pool.query(
+        `SELECT rg.*,COUNT(rb.id) FILTER (WHERE rb.status='ACTIVE')::int AS bet_count,
+                COALESCE(SUM(rb.stake) FILTER (WHERE rb.status='ACTIVE'),0)::int AS total_stake
+         FROM roulette_games rg LEFT JOIN roulette_bets rb ON rb.roulette_game_id=rg.id
+         WHERE rg.game_night_id=$1 AND rg.round_id=$2 AND rg.status IN ('DRAFT','OPEN','LOCKED','SPINNING','RESULT')
+         GROUP BY rg.id ORDER BY rg.id DESC LIMIT 1`, [gameId, activeRoundId])
+      : Promise.resolve({ rows: [] as any[] }),
+    activeRound?.type === 'SLOTMACHINE'
+      ? pool.query(
+        `SELECT sr.id,sr.player_id,sr.stake_per_spin,sr.total_spins,sr.spins_remaining,sr.total_stake,sr.status,sr.created_at,
+                p.display_name,p.public_color
+         FROM slot_series sr JOIN players p ON p.id=sr.player_id
+         WHERE sr.game_night_id=$1 AND sr.round_id=$2
+         ORDER BY CASE sr.status WHEN 'ACTIVE' THEN 0 ELSE 1 END,sr.id DESC LIMIT 20`, [gameId, activeRoundId])
+      : Promise.resolve({ rows: [] as any[] }),
+    activeRound?.type === 'SLOTMACHINE'
+      ? pool.query(
+        `SELECT ss.id,ss.player_id,ss.spin_number,ss.outcome_type,
+                ss.stake,ss.payout_multiplier,ss.payout,ss.status,ss.spun_at,p.display_name
+         FROM slot_spins ss JOIN players p ON p.id=ss.player_id
+         WHERE ss.game_night_id=$1 AND ss.round_id=$2
+         ORDER BY ss.spun_at DESC,ss.id DESC LIMIT 8`, [gameId, activeRoundId])
+      : Promise.resolve({ rows: [] as any[] }),
+    activeRound?.type === 'PAK_EEN_ZES' ? loadPakEenZesGame(pool, gameId, activeRoundId!) : Promise.resolve(null),
+    activeRound?.type === 'SLOTMACHINE' ? loadSlotTurn(pool, gameId, activeRoundId!) : Promise.resolve(null),
+    activeRound?.type === 'FOTORONDE'
+      ? loadPhotoRound(pool, gameId, activeRoundId!, (activeRound as any).subjects.map((s: any) => ({ key: s.key, label: s.label })))
+      : Promise.resolve(null),
+  ]);
+
   const normalizedPredictions = predictions.rows.map(normalizePrediction);
+  const screenRow = screen.rows[0];
+
   return {
     version: Number(game.game_state_version),
     game: {
       id: Number(game.id), name: game.name, starting_balance: Number(game.starting_balance),
       maximum_wallet_percentage: game.maximum_wallet_percentage == null ? null : Number(game.maximum_wallet_percentage),
-      pak_een_zes_points_per_correct: Number(game.pak_een_zes_points_per_correct ?? 0),
-      current_round_id: game.current_round_id ? Number(game.current_round_id) : null,
-      current_round_block_id: game.current_round_block_id ? Number(game.current_round_block_id) : null,
+      current_round_id: activeRoundId,
       current_screen_mode: game.current_screen_mode,
       game_state_version: Number(game.game_state_version),
     },
-    // Live, staged and previous presentation pointers, all from the one screen_state
-    // row. `staged` is what GO LIVE will promote; `previous` is what BACK TO RUN OF SHOW
-    // restores after a detour to the dashboard.
+    // Live, staged and previous presentation pointers, all from the one screen_state row.
+    // Typed columns now rather than ids inside a JSON payload, so a pointer at deleted
+    // content is a null instead of a number naming nothing.
     screen: (() => {
-      const row = screen.rows[0];
-      const slot = (mode: any, roundId: any, predictionId: any, payload: any) => ({
+      const slot = (mode: any, roundId: any, predictionId: any, questionId: any, slideId: any) => ({
         mode: mode || null,
         roundId: Number(roundId || 0) || null,
         predictionId: Number(predictionId || 0) || null,
-        blockId: Number(payload?.blockId || 0) || null,
+        questionId: Number(questionId || 0) || null,
+        slideId: Number(slideId || 0) || null,
       });
       return {
-        ...slot(row?.mode || game.current_screen_mode, row?.round_id, row?.prediction_id, row?.payload),
-        staged: slot(row?.staged_mode, row?.staged_round_id, row?.staged_prediction_id, row?.staged_payload),
-        previous: slot(row?.previous_mode, row?.previous_round_id, row?.previous_prediction_id, row?.previous_payload),
-        // Which question's context photo is on the projector, so the Admin button can
-        // read SHOW or HIDE rather than guessing.
-        questionContextPhotoBlockId: Number(row?.payload?.questionContextPhotoBlockId || 0) || null,
+        ...slot(screenRow?.mode || game.current_screen_mode, screenRow?.round_id, screenRow?.prediction_id, screenRow?.quiz_question_id, screenRow?.slide_id),
+        staged: slot(screenRow?.staged_mode, screenRow?.staged_round_id, screenRow?.staged_prediction_id, screenRow?.staged_quiz_question_id, screenRow?.staged_slide_id),
+        previous: slot(screenRow?.previous_mode, screenRow?.previous_round_id, screenRow?.previous_prediction_id, screenRow?.previous_quiz_question_id, screenRow?.previous_slide_id),
+        // Which Fotoronde photo is enlarged on the projector — presentational only.
+        photoSubmissionId: Number(screenRow?.payload?.photoSubmissionId || 0) || null,
       };
     })(),
-    // Server-ordered so the strip the host sees and the pointer GO LIVE advances can
-    // never disagree. Computed from rows already fetched above — no extra query.
-    runOfShow: orderRunOfShow(blocks.rows, predictions.rows, game.current_round_id ? Number(game.current_round_id) : null),
     predictionRequests: requests.rows.map((r: any) => ({
       id: Number(r.id), playerId: Number(r.player_id), playerName: r.display_name,
       question: r.question, status: r.status, reason: r.reason, createdAt: r.created_at,
     })),
-    rounds: rounds.rows.map((r: any) => ({
-      ...r, id: Number(r.id), round_number: Number(r.round_number),
-      blocks: normalizedBlocks.filter((b: any) => b.round_id === Number(r.id)),
-      groups: groupRows.filter((g: any) => g.round_id === Number(r.id)),
-    })),
-    currentBlock: normalizedBlocks.find((b: any) => b.id === Number(game.current_round_block_id)) || null,
+    rounds: roundsWithContent,
+    activeRound,
+    // The round's own execution cursor. Separate from `screen` above, and deliberately
+    // so: one is where the game is, the other is what the audience is looking at.
+    roundRuntime: runtime,
     players: players.rows.map((p: any) => ({ ...p, id: Number(p.id), current_balance: Number(p.current_balance), locked_prediction: Number(p.locked_prediction), rank: p.rank ? Number(p.rank) : null, active: Boolean(p.active), joined: Boolean(p.joined) })),
     predictions: normalizedPredictions,
     activePredictions: normalizedPredictions.filter((p: any) => ['OPEN','LOCKED','RESULT'].includes(p.status)),
     recentTransactions: recent.rows.map((r: any) => ({ ...r, id: Number(r.id), amount: Number(r.amount) })),
-    activeRoulette: (() => { const r = roulette.rows[0]; return r ? { ...r, id: Number(r.id), round_id: r.round_id ? Number(r.round_id) : null, round_block_id: r.round_block_id ? Number(r.round_block_id) : null, result_number: r.status === 'SPINNING' || r.result_number == null ? null : Number(r.result_number), bet_count: Number(r.bet_count), total_stake: Number(r.total_stake) } : null; })(),
+    activeRoulette: (() => {
+      const r = roulette.rows[0];
+      return r ? {
+        ...r, id: Number(r.id), round_id: r.round_id ? Number(r.round_id) : null,
+        result_number: r.status === 'SPINNING' || r.result_number == null ? null : Number(r.result_number),
+        bet_count: Number(r.bet_count), total_stake: Number(r.total_stake),
+      } : null;
+    })(),
     // Everything the host judges from: photos grouped by subject, which teams are still
     // missing, what each has earned, and how each award was split.
     photoRound: (() => {
-      const currentBlock = normalizedBlocks.find((b: any) => b.id === Number(game.current_round_block_id)) || null;
-      if (!currentBlock || currentBlock.type !== 'FOTORONDE') return null;
-      const screenRow = screen.rows[0];
-      const subjects = photoRoundSubjects(currentBlock.payload);
+      if (!activeRound || activeRound.type !== 'FOTORONDE') return null;
+      const subjects = ((activeRound as any).subjects || []).map((s: any) => ({ key: s.key, label: s.label }));
       // Spread first so the loaded round's own fields win; the fallback stands in for a
-      // block the host has not opened yet, which has no row.
+      // round the host has not opened yet, which has no row.
       return {
         ...(photoRound || {
           id: null,
@@ -391,7 +359,7 @@ export async function getAdminState(gameId: number) {
           teams: [],
           submissions: [],
           // Still list the subjects, so the host sees what will be asked.
-          bySubject: subjects.map(subject => ({ subject, submissions: [], missingTeams: [], submittedCount: 0 })),
+          bySubject: subjects.map((subject: any) => ({ subject, submissions: [], missingTeams: [], submittedCount: 0 })),
           teamTotals: [],
           submissionCount: 0,
           judgedCount: 0,
@@ -399,10 +367,9 @@ export async function getAdminState(gameId: number) {
           acceptsUploads: false,
           acceptsAwards: false,
         }),
-        blockId: currentBlock.id,
-        subjects,
-        instructions: photoRoundInstructions(currentBlock.payload),
-        // Which photo, if any, the projector is currently showing.
+        roundId: activeRound.id,
+        subjects: (activeRound as any).subjects,
+        instructions: activeRound.instructions,
         shownSubmissionId: Number(screenRow?.payload?.photoSubmissionId || 0) || null,
       };
     })(),
@@ -410,14 +377,12 @@ export async function getAdminState(gameId: number) {
     // What the host needs while a Pak een Zes runs: whose turn it is, how far the deck
     // has gone, which sixes are out and who is still missing a prediction.
     pakEenZes: (() => {
-      if (!pakEenZes) return null;
-      const currentBlock = normalizedBlocks.find((b: any) => b.id === Number(game.current_round_block_id)) || null;
-      if (!currentBlock || currentBlock.type !== 'PAK_EEN_ZES') return null;
+      if (!pakEenZes || !activeRound || activeRound.type !== 'PAK_EEN_ZES') return null;
       const activePlayers = players.rows.filter((p: any) => p.active);
       const predicted = new Set(pakEenZes.predictedPlayerIds);
       return {
         ...pakEenZes,
-        blockId: currentBlock.id,
+        roundId: activeRound.id,
         // Named rather than counted: the host is explicitly allowed to close without
         // everyone, so they need to see who they are closing without.
         awaitingPrediction: activePlayers
@@ -425,15 +390,13 @@ export async function getAdminState(gameId: number) {
           .map((p: any) => ({ playerId: Number(p.id), name: p.display_name })),
         sixesFound: pakEenZes.sixes.length,
         activePlayerCount: activePlayers.length,
+        pointsPerCorrect: activeRound.defaultPoints,
       };
     })(),
-    // Live slotmachine picture for whatever block is current. Null-ish rather than
-    // absent when the current block is not a slotmachine, so the Control Center can key
-    // off the block type as it does for roulette.
+    // Live slotmachine picture for the active round.
     activeSlot: (() => {
-      const currentBlock = normalizedBlocks.find((b: any) => b.id === Number(game.current_round_block_id)) || null;
-      if (!currentBlock || currentBlock.type !== 'SLOTMACHINE') return null;
-      const settings = slotBlockSettings(currentBlock.payload);
+      if (!activeRound || activeRound.type !== 'SLOTMACHINE') return null;
+      const settings = (activeRound as any).slotmachine as { maxSpins: number; allowedPlayerIds: number[] };
       const series = slotSeries.rows.map((row: any) => ({
         id: Number(row.id),
         playerId: Number(row.player_id),
@@ -459,7 +422,7 @@ export async function getAdminState(gameId: number) {
         spunAt: row.spun_at,
       }));
       return {
-        blockId: currentBlock.id,
+        roundId: activeRound.id,
         maxSpins: settings.maxSpins,
         participantCount: settings.allowedPlayerIds.length,
         activeSeries: series.filter(x => x.status === 'ACTIVE'),
@@ -506,31 +469,34 @@ export async function getPlayerState(gameId: number, playerId: number) {
   if (!player) throw new HttpError(404, 'Player not found');
 
   const [ledger, predictions, roulette, interactive, myRequests, slotBlock, slotSeries, pakBlock, pakMine, pakSixes, pakRoster, slotTurn, photoBlock] = await Promise.all([
-    pool.query('SELECT id,amount,transaction_type,description,created_at,attributed_round_id,prediction_id,roulette_game_id,round_block_id FROM ledger_entries WHERE game_night_id=$1 AND player_id=$2 ORDER BY created_at DESC,id DESC LIMIT 12', [gameId, playerId]),
+    pool.query('SELECT id,amount,transaction_type,description,created_at,attributed_round_id,prediction_id,roulette_game_id,quiz_question_id FROM ledger_entries WHERE game_night_id=$1 AND player_id=$2 ORDER BY created_at DESC,id DESC LIMIT 12', [gameId, playerId]),
     pool.query(
-      `SELECT p.id,p.display_number,p.question,p.status,p.probability_yes,p.yes_odds,p.no_odds,p.prediction_time_seconds,p.minimum_stake,p.maximum_stake,p.opened_at,p.closes_at,p.result,p.round_id,r.round_number,
+      `SELECT p.id,p.display_number,p.question,p.status,p.probability_yes,p.yes_odds,p.no_odds,p.prediction_time_seconds,p.minimum_stake,p.maximum_stake,p.opened_at,p.closes_at,p.result,p.round_id,r.sort_order AS round_number,
               b.id AS own_bet_id,b.side AS own_bet_side,b.stake AS own_bet_stake,b.odds_snapshot AS own_bet_odds,b.potential_return AS own_bet_return,b.status AS own_bet_status
        FROM predictions p LEFT JOIN rounds r ON r.id=p.round_id LEFT JOIN bets b ON b.prediction_id=p.id AND b.player_id=$2
        WHERE p.game_night_id=$1 AND p.status NOT IN ('DRAFT','SCHEDULED')
        ORDER BY CASE p.status WHEN 'OPEN' THEN 0 WHEN 'LOCKED' THEN 1 WHEN 'RESULT' THEN 2 ELSE 3 END,p.updated_at DESC,p.id DESC LIMIT 30`, [gameId, playerId],
     ),
     pool.query(
-      `SELECT rg.id,rg.status,rg.result_number,rg.spun_at,rg.round_id,rg.round_block_id,rb.title AS block_title,
+      `SELECT rg.id,rg.status,rg.result_number,rg.spun_at,rg.round_id,rb.title AS round_title,
               COALESCE(json_agg(json_build_object('id',b.id,'bet_type',b.bet_type,'selection',b.selection,'stake',b.stake,'payout_multiplier',b.payout_multiplier,'potential_return',b.potential_return,'status',b.status) ORDER BY b.id)
                 FILTER (WHERE b.id IS NOT NULL),'[]') AS own_bets
-       FROM roulette_games rg LEFT JOIN round_blocks rb ON rb.id=rg.round_block_id LEFT JOIN roulette_bets b ON b.roulette_game_id=rg.id AND b.player_id=$2
-       WHERE rg.id=(SELECT rg2.id FROM roulette_games rg2 WHERE rg2.game_night_id=$1 AND rg2.round_block_id=(SELECT current_round_block_id FROM game_nights WHERE id=$1) ORDER BY rg2.id DESC LIMIT 1)
+       FROM roulette_games rg LEFT JOIN rounds rb ON rb.id=rg.round_id LEFT JOIN roulette_bets b ON b.roulette_game_id=rg.id AND b.player_id=$2
+       WHERE rg.id=(SELECT rg2.id FROM roulette_games rg2 WHERE rg2.game_night_id=$1 AND rg2.round_id=(SELECT current_round_id FROM game_nights WHERE id=$1) ORDER BY rg2.id DESC LIMIT 1)
        GROUP BY rg.id,rb.title`, [gameId, playerId],
     ),
+    // The question the round's own cursor is on, and only while that round is active.
+    // The phone never names the question; the server decides which one is live.
     pool.query(
-      `SELECT b.id,b.round_id,b.title,b.interactive_status,b.payload,
-              a.selected_answer,
-              CASE WHEN b.interactive_status IN ('REVEALED','SETTLED') AND a.id IS NOT NULL
-                   THEN a.selected_answer=(b.payload->>'correctAnswerIndex')::int ELSE NULL END AS is_correct
-       FROM game_nights g JOIN round_blocks b ON b.id=g.current_round_block_id
-       LEFT JOIN round_question_answers a ON a.round_block_id=b.id AND a.player_id=$2
-       JOIN rounds r ON r.id=b.round_id
-       WHERE g.id=$1 AND b.type='DUOLINGO_QUESTION' AND r.status='ACTIVE'`, [gameId, playerId],
+      `SELECT q.id,q.round_id,q.sort_order,q.prompt,q.body,q.points,q.time_limit_seconds,q.context_media_key,
+              st.status,st.closed_at,a.option_id AS my_option_id
+       FROM game_nights g
+       JOIN rounds r ON r.id=g.current_round_id AND r.status='ACTIVE' AND r.type='LIVE_QUIZ'
+       JOIN round_runtime rt ON rt.round_id=r.id
+       JOIN live_quiz_questions q ON q.id=rt.current_quiz_question_id
+       JOIN live_quiz_question_state st ON st.question_id=q.id
+       LEFT JOIN quiz_answers a ON a.question_id=q.id AND a.player_id=$2
+       WHERE g.id=$1`, [gameId, playerId],
     ),
     pool.query(
       'SELECT id,question,status,reason,created_at FROM prediction_requests WHERE game_night_id=$1 AND player_id=$2 ORDER BY created_at DESC,id DESC',
@@ -540,17 +506,21 @@ export async function getPlayerState(gameId: number, playerId: number) {
     // is active — the same gate the live question uses. That is what makes the controls
     // appear and disappear with the block instead of living on a page of their own.
     pool.query(
-      `SELECT b.id,b.round_id,b.title,b.payload,
+      `SELECT r.id,r.id AS round_id,r.title,r.instructions,
+              COALESCE(sm.max_spins,10)::int AS max_spins,
+              EXISTS(SELECT 1 FROM slotmachine_round_participants sp WHERE sp.round_id=r.id) AS has_allowlist,
+              EXISTS(SELECT 1 FROM slotmachine_round_participants sp WHERE sp.round_id=r.id AND sp.player_id=$2) AS is_allowed,
               COALESCE(sc.total_weight,0)::int AS total_weight,
               COALESCE((SELECT SUM(o.weight) FROM slot_outcome_types o WHERE o.game_night_id=g.id),0)::int AS allocated_weight,
               COALESCE((SELECT COUNT(*) FROM slot_reel_symbols s WHERE s.game_night_id=g.id),0)::int AS symbol_count
-       FROM game_nights g JOIN round_blocks b ON b.id=g.current_round_block_id
-       JOIN rounds r ON r.id=b.round_id
+       FROM game_nights g
+       JOIN rounds r ON r.id=g.current_round_id AND r.status='ACTIVE' AND r.type='SLOTMACHINE'
+       LEFT JOIN slotmachine_rounds sm ON sm.round_id=r.id
        LEFT JOIN slot_configs sc ON sc.game_night_id=g.id
-       WHERE g.id=$1 AND b.type='SLOTMACHINE' AND r.status='ACTIVE'`, [gameId],
+       WHERE g.id=$1`, [gameId, playerId],
     ),
     pool.query(
-      `SELECT sr.id,sr.round_block_id,sr.stake_per_spin,sr.total_spins,sr.spins_remaining,sr.total_stake,sr.status,
+      `SELECT sr.id,sr.round_id,sr.stake_per_spin,sr.total_spins,sr.spins_remaining,sr.total_stake,sr.status,
               ss.id AS spin_id,ss.spin_number,ss.outcome_type,
               ss.payout_multiplier,ss.payout,ss.status AS spin_status,ss.spun_at
        FROM slot_series sr
@@ -558,23 +528,23 @@ export async function getPlayerState(gameId: number, playerId: number) {
          SELECT * FROM slot_spins WHERE slot_series_id=sr.id ORDER BY spin_number DESC LIMIT 1
        ) ss ON TRUE
        WHERE sr.game_night_id=$1 AND sr.player_id=$2
-         AND sr.round_block_id=(SELECT current_round_block_id FROM game_nights WHERE id=$1)
+         AND sr.round_id=(SELECT current_round_id FROM game_nights WHERE id=$1)
        ORDER BY CASE sr.status WHEN 'ACTIVE' THEN 0 ELSE 1 END,sr.id DESC LIMIT 1`, [gameId, playerId],
     ),
     // Like the live question and the slotmachine, Pak een Zes only reaches a phone while
     // its block is the live one and its round is active — that is what makes the
     // controls appear and disappear with the block rather than living on a page.
     pool.query(
-      `SELECT b.id,b.round_id,b.title,b.payload,
+      `SELECT r.id,r.id AS round_id,r.title,r.instructions,r.default_points,
               pz.id AS pak_game_id,pz.status,pz.turn_index,
-              COALESCE(pz.points_per_correct, g.pak_een_zes_points_per_correct) AS points_per_correct
-       FROM game_nights g JOIN round_blocks b ON b.id=g.current_round_block_id
-       JOIN rounds r ON r.id=b.round_id
+              COALESCE(pz.points_per_correct, r.default_points) AS points_per_correct
+       FROM game_nights g
+       JOIN rounds r ON r.id=g.current_round_id AND r.status='ACTIVE' AND r.type='PAK_EEN_ZES'
        LEFT JOIN LATERAL (
-         SELECT id,status,turn_index FROM pak_een_zes_games
-         WHERE game_night_id=g.id AND round_block_id=b.id ORDER BY id DESC LIMIT 1
+         SELECT id,status,turn_index,points_per_correct FROM pak_een_zes_games
+         WHERE game_night_id=g.id AND round_id=r.id ORDER BY id DESC LIMIT 1
        ) pz ON TRUE
-       WHERE g.id=$1 AND b.type='PAK_EEN_ZES' AND r.status='ACTIVE'`, [gameId],
+       WHERE g.id=$1`, [gameId],
     ),
     // The player's own four picks, in slot order. Duplicates survive because the rows
     // are per slot, so "Daan, Twan, Daan, Bas" comes back as four picks.
@@ -583,7 +553,7 @@ export async function getPlayerState(gameId: number, playerId: number) {
        FROM pak_een_zes_predictions pr
        JOIN pak_een_zes_games pz ON pz.id=pr.pak_een_zes_game_id
        WHERE pz.game_night_id=$1 AND pr.player_id=$2
-         AND pz.round_block_id=(SELECT current_round_block_id FROM game_nights WHERE id=$1)
+         AND pz.round_id=(SELECT current_round_id FROM game_nights WHERE id=$1)
        ORDER BY pr.slot`, [gameId, playerId],
     ),
     // Who actually drew a six, so this player's own score can be shown afterwards.
@@ -592,7 +562,7 @@ export async function getPlayerState(gameId: number, playerId: number) {
        FROM pak_een_zes_draws d
        JOIN pak_een_zes_games pz ON pz.id=d.pak_een_zes_game_id
        WHERE pz.game_night_id=$1 AND d.is_six
-         AND pz.round_block_id=(SELECT current_round_block_id FROM game_nights WHERE id=$1)
+         AND pz.round_id=(SELECT current_round_id FROM game_nights WHERE id=$1)
        ORDER BY d.draw_number`, [gameId],
     ),
     // Two things in one read: every name the picker can offer, and the frozen turn order
@@ -605,7 +575,7 @@ export async function getPlayerState(gameId: number, playerId: number) {
          ON pt.player_id=pl.id
          AND pt.pak_een_zes_game_id=(
            SELECT id FROM pak_een_zes_games
-           WHERE game_night_id=$1 AND round_block_id=(SELECT current_round_block_id FROM game_nights WHERE id=$1)
+           WHERE game_night_id=$1 AND round_id=(SELECT current_round_id FROM game_nights WHERE id=$1)
            ORDER BY id DESC LIMIT 1
          )
        WHERE pl.game_night_id=$1 AND pl.active=TRUE
@@ -613,19 +583,19 @@ export async function getPlayerState(gameId: number, playerId: number) {
     ),
     // The turn, resolved by the same function the spin endpoint enforces, so the button
     // the phone enables and the turn the server allows cannot disagree.
-    pool.query('SELECT current_round_block_id FROM game_nights WHERE id=$1', [gameId])
+    pool.query('SELECT current_round_id FROM game_nights WHERE id=$1', [gameId])
       .then(r => {
-        const current = Number(r.rows[0]?.current_round_block_id || 0);
+        const current = Number(r.rows[0]?.current_round_id || 0);
         return current ? loadSlotTurn(pool, gameId, current) : null;
       }),
     // Like the other games, a Fotoronde only reaches a phone while its block is live and
     // its round is active. The team comes from the round's groups, never from the phone.
     pool.query(
-      `SELECT b.id,b.round_id,b.title,b.payload,fr.id AS photo_round_id,fr.status
-       FROM game_nights g JOIN round_blocks b ON b.id=g.current_round_block_id
-       JOIN rounds r ON r.id=b.round_id
-       LEFT JOIN photo_rounds fr ON fr.round_block_id=b.id AND fr.game_night_id=g.id
-       WHERE g.id=$1 AND b.type='FOTORONDE' AND r.status='ACTIVE'`, [gameId],
+      `SELECT r.id,r.id AS round_id,r.title,r.instructions,fr.id AS photo_round_id,fr.status
+       FROM game_nights g
+       JOIN rounds r ON r.id=g.current_round_id AND r.status='ACTIVE' AND r.type='FOTORONDE'
+       LEFT JOIN photo_rounds fr ON fr.round_id=r.id AND fr.game_night_id=g.id
+       WHERE g.id=$1`, [gameId],
     ),
   ]);
 
@@ -640,27 +610,27 @@ export async function getPlayerState(gameId: number, playerId: number) {
   const rouletteRow = roulette.rows[0];
   const currentRoulette = rouletteRow && rouletteRow.status !== 'DRAFT' ? {
     ...rouletteRow, id: Number(rouletteRow.id), round_id: rouletteRow.round_id ? Number(rouletteRow.round_id) : null,
-    round_block_id: rouletteRow.round_block_id ? Number(rouletteRow.round_block_id) : null,
     result_number: rouletteRow.status === 'SPINNING' || rouletteRow.result_number == null ? null : Number(rouletteRow.result_number), own_bets: rouletteRow.own_bets || [],
   } : null;
-  const interactiveRow = interactive.rows[0];
-  const interactiveBlock = interactiveRow ? (() => {
-    // Which answer was right is withheld until the host reveals it, so the phone is
-    // given it only from that moment — the same rule the projector is held to. Sending
-    // the text as well as the index means the player sees *what* the answer was, not
-    // just whether their own emoji happened to match.
-    const revealed = isRevealed(interactiveRow.interactive_status);
-    const correctIndex = Number(interactiveRow.payload?.correctAnswerIndex);
-    const answers = Array.isArray(interactiveRow.payload?.answers) ? interactiveRow.payload.answers : [];
-    return {
-      id: Number(interactiveRow.id), roundId: Number(interactiveRow.round_id),
-      status: interactiveRow.interactive_status, rewardCoins: Number(interactiveRow.payload?.rewardCoins || 0),
-      selectedAnswer: interactiveRow.selected_answer == null ? null : Number(interactiveRow.selected_answer),
-      isCorrect: interactiveRow.is_correct == null ? null : Boolean(interactiveRow.is_correct),
-      correctAnswer: revealed && Number.isInteger(correctIndex) ? Number(correctIndex) : null,
-      correctAnswerText: revealed && Number.isInteger(correctIndex) ? String(answers[correctIndex] ?? '') : '',
-    };
-  })() : null;
+  // The quiz question this player's phone should be showing, built by the player DTO so
+  // the option texts travel but correctness does not until the reveal. `interactive`
+  // holds at most one row: the question the round's cursor is on.
+  const quizRow = interactive.rows[0];
+  const quizQuestion = quizRow
+    ? await (async () => {
+      const options = await pool.query(
+        'SELECT id,question_id,sort_order,text,is_correct FROM live_quiz_question_options WHERE question_id=$1 ORDER BY sort_order,id',
+        [Number(quizRow.id)],
+      );
+      return {
+        ...playerQuizQuestion(quizRow, options.rows, {
+          optionId: quizRow.my_option_id == null ? null : Number(quizRow.my_option_id),
+        }),
+        roundId: Number(quizRow.round_id),
+      };
+    })()
+    : null;
+
   const predictionLocked = Number(player.prediction_locked || 0);
   const rouletteLocked = Number(player.roulette_locked || 0);
   const slotLocked = Number(player.slot_locked || 0);
@@ -678,9 +648,10 @@ export async function getPlayerState(gameId: number, playerId: number) {
       allocatedWeight: Number(slotBlockRow.allocated_weight),
       symbolCount: Number(slotBlockRow.symbol_count),
     });
-    const settings = slotBlockSettings(slotBlockRow.payload);
-    const allowed = settings.allowedPlayerIds.length === 0 || settings.allowedPlayerIds.includes(Number(player.id));
-    const series = slotSeriesRow && Number(slotSeriesRow.round_block_id) === Number(slotBlockRow.id) ? {
+    // An empty allowlist means everyone plays, which is the usual case and the reason
+    // the query asks whether a list exists at all rather than counting it here.
+    const allowed = !slotBlockRow.has_allowlist || Boolean(slotBlockRow.is_allowed);
+    const series = slotSeriesRow && Number(slotSeriesRow.round_id) === Number(slotBlockRow.round_id) ? {
       id: Number(slotSeriesRow.id),
       stakePerSpin: Number(slotSeriesRow.stake_per_spin),
       totalSpins: Number(slotSeriesRow.total_spins),
@@ -701,11 +672,10 @@ export async function getPlayerState(gameId: number, playerId: number) {
       } : null,
     } : null;
     return {
-      blockId: Number(slotBlockRow.id),
       roundId: Number(slotBlockRow.round_id),
       title: slotBlockRow.title || 'Slotmachine',
-      instructions: settings.instructions,
-      maxSpins: settings.maxSpins,
+      instructions: slotBlockRow.instructions || '',
+      maxSpins: Number(slotBlockRow.max_spins),
       allowed,
       // Whether the machine itself is configured. The phone needs it so INZET VASTZETTEN
       // can explain why it is unavailable rather than failing on submit.
@@ -733,7 +703,6 @@ export async function getPlayerState(gameId: number, playerId: number) {
   // card — the card is revealed on the projector.
   const pakRow = pakBlock.rows[0];
   const pakEenZes = pakRow ? (() => {
-    const settings = pakEenZesBlockSettings(pakRow.payload);
     const status = pakRow.status || 'READY';
     const picks = pakMine.rows.map((r: any) => Number(r.predicted_player_id));
     const roster = pakRoster.rows.map((r: any) => ({
@@ -749,10 +718,9 @@ export async function getPlayerState(gameId: number, playerId: number) {
       .sort((a: any, b: any) => (a.turnOrder as number) - (b.turnOrder as number));
     const currentPlayer = status === 'DRAWING' ? playerAtTurn(order, Number(pakRow.turn_index || 0)) : null;
     return {
-      blockId: Number(pakRow.id),
       roundId: Number(pakRow.round_id),
       title: pakRow.title || 'Pak een Zes',
-      instructions: settings.instructions,
+      instructions: pakRow.instructions || '',
       status,
       predicting: status === 'PREDICTING',
       drawing: status === 'DRAWING',
@@ -783,7 +751,13 @@ export async function getPlayerState(gameId: number, playerId: number) {
   // per round, so uploading for another team is not something the client can ask for.
   const photoRow = photoBlock.rows[0];
   const photoRound = photoRow ? await (async () => {
-    const subjects = photoRoundSubjects(photoRow.payload);
+    // The subject list is the round's own authored rows, so the phone is asked for
+    // exactly what the Admin wrote and nothing is derived from a payload.
+    const subjectRows = await pool.query(
+      'SELECT id,round_id,sort_order,subject_key,label,points,reference_media_key FROM fotoronde_subjects WHERE round_id=$1 ORDER BY sort_order,id',
+      [Number(photoRow.round_id)],
+    );
+    const subjects = subjectRows.rows.map(publicSubject);
     const status = photoRow.status || 'DRAFT';
     const team = await playerTeamForRound(pool, Number(photoRow.round_id), playerId);
     const own = team && photoRow.photo_round_id
@@ -798,16 +772,15 @@ export async function getPlayerState(gameId: number, playerId: number) {
     for (const row of own.rows) byKey.set(row.subject_key, row);
 
     return {
-      blockId: Number(photoRow.id),
       roundId: Number(photoRow.round_id),
       title: photoRow.title || 'Fotoronde',
-      instructions: photoRoundInstructions(photoRow.payload),
+      instructions: photoRow.instructions || '',
       status,
       open: status === 'OPEN',
       // Null when this player is in no team: they are told so rather than shown an
       // upload button that the server would refuse.
       team: team ? { groupId: team.groupId, name: team.name } : null,
-      subjects: subjects.map(subject => {
+      subjects: subjects.map((subject: any) => {
         const submitted = byKey.get(subject.key);
         return {
           ...subject,
@@ -847,11 +820,11 @@ export async function getPlayerState(gameId: number, playerId: number) {
     predictionAvailable: normalizedPredictions.some((p: any) => p.status === 'OPEN'),
     roulette: currentRoulette,
     rouletteAvailable: currentRoulette?.status === 'OPEN',
-    interactiveBlock,
+    quizQuestion,
     slotmachine,
     pakEenZes,
     photoRound,
-    actionable: normalizedPredictions.some((p: any) => p.status === 'OPEN') || currentRoulette?.status === 'OPEN' || interactiveBlock?.status === 'OPEN'
+    actionable: normalizedPredictions.some((p: any) => p.status === 'OPEN') || currentRoulette?.status === 'OPEN' || quizQuestion?.status === 'OPEN'
       || Boolean(slotmachine?.allowed && slotmachine.configValid)
       || Boolean(pakEenZes && ['PREDICTING', 'DRAWING'].includes(pakEenZes.status))
       || Boolean(photoRound?.open && photoRound.team),
@@ -874,16 +847,32 @@ export async function getScreenState(gameId: number) {
   const game = gameResult.rows[0];
   if (!game) throw new HttpError(404, 'Game not found');
   const screenMode = game.mode || game.current_screen_mode || 'DASHBOARD';
-  const blockId = ['ROUND_BLOCK','ROULETTE','SLOTMACHINE','PAK_EEN_ZES','FOTORONDE'].includes(screenMode) ? (Number(game.payload?.blockId || game.current_round_block_id || 0) || null) : null;
-  const rouletteGameId = screenMode === 'ROULETTE' ? (Number(game.payload?.rouletteGameId || 0) || null) : null;
+  // Typed pointers straight from the row. A scene that needs a round gets one; a scene
+  // that needs an item within it gets that too, and nothing is parsed out of JSON.
+  const screenRoundId = Number(game.screen_round_id || 0) || null;
+  const quizQuestionId = screenMode === 'QUIZ_QUESTION' ? (Number(game.quiz_question_id || 0) || null) : null;
+  const slideId = screenMode === 'SLIDE' ? (Number(game.slide_id || 0) || null) : null;
+  const gameRoundId = ['ROULETTE','SLOTMACHINE','PAK_EEN_ZES','FOTORONDE'].includes(screenMode) ? screenRoundId : null;
 
-  const [round, block, prediction, players, ledgerEvents, predictionEvents, rouletteEvents, ticker, totals, roulette, recentResults, slot, slotSpins, pakEenZesGame, pakPredictionCount, screenSlotTurn, screenPhotoRound] = await Promise.all([
-    pool.query('SELECT id,round_number,title,status FROM rounds WHERE id=COALESCE($1::bigint,$2::bigint) AND game_night_id=$3', [game.screen_round_id, game.current_round_id, gameId]),
-    blockId ? pool.query(
-      `SELECT b.*,COUNT(ap.id)::int AS answer_count FROM round_blocks b
-       LEFT JOIN round_question_answers a ON a.round_block_id=b.id
+  const [round, quizRow, prediction, players, ledgerEvents, predictionEvents, rouletteEvents, ticker, totals, roulette, recentResults, slot, slotSpins, pakEenZesGame, pakPredictionCount, screenSlotTurn, screenPhotoRound] = await Promise.all([
+    pool.query(
+      `SELECT id,game_night_id,sort_order,title,description,type,status,instructions,default_points
+       FROM rounds WHERE id=COALESCE($1::bigint,$2::bigint) AND game_night_id=$3`,
+      [game.screen_round_id, game.current_round_id, gameId],
+    ),
+    // The question and its options, or the slide — whichever the scene names. Both come
+    // back raw here and are shaped by the projector DTO below, which is where the
+    // withholding happens.
+    quizQuestionId ? pool.query(
+      `SELECT q.id,q.round_id,q.sort_order,q.prompt,q.body,q.points,q.time_limit_seconds,q.context_media_key,
+              st.status,st.context_photo_shown,
+              COUNT(ap.id)::int AS answer_count
+       FROM live_quiz_questions q
+       JOIN live_quiz_question_state st ON st.question_id=q.id
+       LEFT JOIN quiz_answers a ON a.question_id=q.id
        LEFT JOIN players ap ON ap.id=a.player_id AND ap.active=TRUE
-       WHERE b.id=$1 AND b.game_night_id=$2 GROUP BY b.id`, [blockId, gameId],
+       WHERE q.id=$1 AND q.game_night_id=$2
+       GROUP BY q.id,st.status,st.context_photo_shown`, [quizQuestionId, gameId],
     ) : Promise.resolve({ rows: [] } as any),
     game.prediction_id ? pool.query('SELECT id,display_number,question,status,probability_yes,yes_odds,no_odds,result,opened_at,closes_at FROM predictions WHERE id=$1 AND game_night_id=$2', [game.prediction_id, gameId]) : Promise.resolve({ rows: [] } as any),
     pool.query(
@@ -912,7 +901,7 @@ export async function getScreenState(gameId: number) {
        WHERE rg.game_night_id=$1 AND pl.active=TRUE AND b.status IN ('WON','LOST') AND b.settled_at IS NOT NULL ORDER BY b.settled_at,b.id`, [gameId],
     ),
     pool.query(
-      `SELECT l.id,p.display_name,l.amount,l.transaction_type,l.description,r.round_number,pr.display_number AS prediction_number,l.roulette_game_id
+      `SELECT l.id,p.display_name,l.amount,l.transaction_type,l.description,r.sort_order AS round_number,pr.display_number AS prediction_number,l.roulette_game_id
        FROM ledger_entries l JOIN players p ON p.id=l.player_id LEFT JOIN rounds r ON r.id=l.attributed_round_id LEFT JOIN predictions pr ON pr.id=l.prediction_id
        WHERE l.game_night_id=$1 AND p.active=TRUE AND l.public_visible=TRUE ORDER BY l.created_at DESC,l.id DESC LIMIT 14`, [gameId],
     ),
@@ -925,12 +914,12 @@ export async function getScreenState(gameId: number) {
     ),
     screenMode === 'ROULETTE'
       ? pool.query(
-        `SELECT rg.*,
+        `SELECT rg.id,rg.round_id,rg.status,rg.result_number,rg.spun_at,
                 COALESCE(json_agg(json_build_object('id',rb.id,'displayName',p.display_name,'color',p.public_color,'betType',rb.bet_type,'selection',rb.selection,'stake',rb.stake) ORDER BY rb.id)
                   FILTER (WHERE rb.id IS NOT NULL),'[]') AS public_bets
          FROM roulette_games rg LEFT JOIN roulette_bets rb ON rb.roulette_game_id=rg.id LEFT JOIN players p ON p.id=rb.player_id
-         WHERE rg.id=COALESCE($1::bigint,(SELECT id FROM roulette_games WHERE game_night_id=$2 AND round_block_id=$3 ORDER BY id DESC LIMIT 1)) AND rg.game_night_id=$2
-         GROUP BY rg.id`, [rouletteGameId, gameId, blockId])
+         WHERE rg.id=(SELECT id FROM roulette_games WHERE game_night_id=$1 AND round_id=$2 ORDER BY id DESC LIMIT 1) AND rg.game_night_id=$1
+         GROUP BY rg.id`, [gameId, gameRoundId])
       : Promise.resolve({ rows: [] } as any),
     pool.query(
       `SELECT id,display_number,question,result,yes_odds,no_odds,settled_at
@@ -940,31 +929,58 @@ export async function getScreenState(gameId: number) {
     // The projector is the only surface that renders reels, so it is the only one that
     // receives the reel strips.
     screenMode === 'SLOTMACHINE' ? loadSlotConfig(pool, gameId) : Promise.resolve(null),
-    screenMode === 'SLOTMACHINE' && blockId
+    screenMode === 'SLOTMACHINE' && gameRoundId
       ? pool.query(
         `SELECT ss.id,ss.spin_number,ss.outcome_type,ss.grid,ss.win_cells,
                 ss.stake,ss.payout_multiplier,ss.payout,ss.status,ss.spun_at,
                 p.display_name,p.public_color,
                 sr.id AS series_id,sr.stake_per_spin,sr.total_spins,sr.spins_remaining,sr.status AS series_status
          FROM slot_spins ss JOIN players p ON p.id=ss.player_id JOIN slot_series sr ON sr.id=ss.slot_series_id
-         WHERE ss.round_block_id=$1 AND ss.game_night_id=$2
-         ORDER BY ss.spun_at DESC,ss.id DESC LIMIT 6`, [blockId, gameId])
+         WHERE ss.round_id=$1 AND ss.game_night_id=$2
+         ORDER BY ss.spun_at DESC,ss.id DESC LIMIT 6`, [gameRoundId, gameId])
       : Promise.resolve({ rows: [] } as any),
     // The projector is the only surface that shows the deck and the reveal.
-    screenMode === 'PAK_EEN_ZES' && blockId
-      ? loadPakEenZesGame(pool, gameId, blockId)
+    screenMode === 'PAK_EEN_ZES' && gameRoundId
+      ? loadPakEenZesGame(pool, gameId, gameRoundId)
       : Promise.resolve(null),
     screenMode === 'PAK_EEN_ZES'
       ? pool.query('SELECT COUNT(*)::int AS n FROM players WHERE game_night_id=$1 AND active=TRUE', [gameId])
       : Promise.resolve({ rows: [{ n: 0 }] } as any),
-    screenMode === 'SLOTMACHINE' && blockId
-      ? loadSlotTurn(pool, gameId, blockId)
+    screenMode === 'SLOTMACHINE' && gameRoundId
+      ? loadSlotTurn(pool, gameId, gameRoundId)
       : Promise.resolve(null),
-    screenMode === 'FOTORONDE' && blockId
-      ? pool.query('SELECT payload FROM round_blocks WHERE id=$1 AND game_night_id=$2', [blockId, gameId])
-        .then(r => (r.rows[0] ? loadPhotoRound(pool, gameId, blockId, r.rows[0].payload) : null))
+    screenMode === 'FOTORONDE' && gameRoundId
+      ? pool.query(
+        'SELECT subject_key,label FROM fotoronde_subjects WHERE round_id=$1 ORDER BY sort_order,id',
+        [gameRoundId],
+      ).then(r => loadPhotoRound(
+        pool, gameId, gameRoundId,
+        r.rows.map((x: any) => ({ key: x.subject_key, label: x.label })),
+      ))
       : Promise.resolve(null),
   ]);
+
+  // The two pieces the scene DTOs still need, fetched only for the scene that is up.
+  const [quizOptionRows, slideRows] = await Promise.all([
+    quizQuestionId
+      ? pool.query(
+        'SELECT id,question_id,sort_order,text,is_correct FROM live_quiz_question_options WHERE question_id=$1 ORDER BY sort_order,id',
+        [quizQuestionId],
+      )
+      : Promise.resolve({ rows: [] } as any),
+    slideId
+      ? pool.query(
+        `SELECT s.id,s.round_id,s.sort_order,s.title,s.body,s.media_key,s.media_kind,s.media_name,
+                s.reveal_text,s.hide_title_until_reveal,st.revealed_at
+         FROM presentation_slides s
+         LEFT JOIN presentation_slide_state st ON st.slide_id=s.id
+         WHERE s.id=$1 AND s.game_night_id=$2`,
+        [slideId, gameId],
+      )
+      : Promise.resolve({ rows: [] } as any),
+  ]);
+  const quizOptions = quizOptionRows.rows;
+  const slideRow = slideRows.rows[0] ?? null;
 
   type EconEvent = { playerId: number; delta: number; time: number; key: string };
   const events: EconEvent[] = [];
@@ -1010,23 +1026,16 @@ export async function getScreenState(gameId: number) {
   return {
     version: Number(game.game_state_version),
     game: { id: Number(game.id), name: game.name }, mode: screenMode,
-    round: round.rows[0] ? { id: Number(round.rows[0].id), number: Number(round.rows[0].round_number), title: round.rows[0].title, status: round.rows[0].status } : null,
+    round: publicRound(round.rows[0]),
     // The projector's player list is already active-only, so its length is the same
     // eligible count the Admin bar uses.
-    block: (() => {
-      const normalized = normalizeBlock(block.rows[0], false, players.rows.length);
-      if (!normalized || normalized.type !== 'DUOLINGO_QUESTION') return normalized;
-      // The host asked for the photo as its own presentation beat, which rides in the
-      // screen payload exactly as the Fotoronde selection does. Re-checked against the
-      // block's own phase, so a payload left over from a previous question cannot put a
-      // photo up before this one is revealed.
-      return {
-        ...normalized,
-        showingContextPhoto: Number(game.payload?.questionContextPhotoBlockId || 0) === normalized.id
-          && mayShowContextPhoto(normalized.interactive_status)
-          && Boolean(normalized.payload?.contextImageKey),
-      };
-    })(),
+    //
+    // Both scenes are built by an explicit DTO rather than by stripping a row: the
+    // question's correct options and its context photo key, and the slide's reveal line
+    // and hidden title, are simply not put on the wire until the host reveals them, so a
+    // viewer with the projector URL has nothing to read early.
+    quizQuestion: quizRow.rows[0] ? screenQuizQuestion(quizRow.rows[0], quizOptions, players.rows.length) : null,
+    slide: slideRow ? screenSlide(slideRow) : null,
     prediction: pred ? { id: Number(pred.id), number: Number(pred.display_number), question: pred.question, status: pred.status, publicStatus: publicPredictionStatus(pred.status, pred.result), probabilityYes: Number(pred.probability_yes), yesOdds: Number(pred.yes_odds), noOdds: Number(pred.no_odds), result: pred.result, openedAt: pred.opened_at, closesAt: pred.closes_at } : null,
     leaderboard: players.rows.map((p: any) => ({
       id: Number(p.id), display_name: p.display_name, public_color: p.public_color,
@@ -1036,7 +1045,7 @@ export async function getScreenState(gameId: number) {
     ticker: ticker.rows.map((t: any) => ({ ...t, id: Number(t.id), amount: Number(t.amount) })),
     marketsOpen: Number(total.markets_open),
     totalCoinsInPlay: Number(total.wallets) + Number(total.prediction_stakes) + Number(total.roulette_stakes) + Number(total.slot_stakes),
-    roulette: rouletteRow ? { ...rouletteRow, id: Number(rouletteRow.id), round_id: rouletteRow.round_id ? Number(rouletteRow.round_id) : null, round_block_id: rouletteRow.round_block_id ? Number(rouletteRow.round_block_id) : null, result_number: rouletteRow.result_number == null ? null : Number(rouletteRow.result_number), public_bets: rouletteRow.public_bets || [] } : null,
+    roulette: screenRoulette(rouletteRow),
     // The whole slotmachine scene. The projector is the only surface that draws the
     // field, so it is the only one that receives it. `currentSpin.grid` is the outcome
     // the server already committed, which is what the animation lands on, and
@@ -1070,7 +1079,7 @@ export async function getScreenState(gameId: number) {
         seriesStatus: row.series_status,
       }));
       return {
-        blockId,
+        roundId: gameRoundId,
         configValid: slot.status.valid,
         configReason: slot.status.reason,
         // The twelve symbols, sent once. The projector uses them as the blur each reel
@@ -1098,7 +1107,7 @@ export async function getScreenState(gameId: number) {
     // deck, the turn and the last card, and after it lists the four sixes and who drew
     // them. `lastDraw` is what the reveal animates to — it is already committed.
     pakEenZes: pakEenZesGame ? {
-      blockId,
+      roundId: gameRoundId,
       status: pakEenZesGame.status,
       turnIndex: pakEenZesGame.turnIndex,
       participants: pakEenZesGame.participants,
@@ -1127,7 +1136,7 @@ export async function getScreenState(gameId: number) {
         ? screenPhotoRound.subjects.find(subject => subject.key === shown.subjectKey) || null
         : null;
       return {
-        blockId,
+        roundId: gameRoundId,
         status: screenPhotoRound.status,
         teamCount: screenPhotoRound.teams.length,
         subjects: screenPhotoRound.bySubject.map(entry => ({
@@ -1163,10 +1172,10 @@ export async function getLedgerState(gameId: number, roundFilter: 'all'|'general
   else if (typeof roundFilter === 'number') { params.push(roundFilter); where += ' AND l.attributed_round_id=$2'; }
   const [entries, summary] = await Promise.all([
     pool.query(
-      `SELECT l.id,l.created_at,l.amount,l.description,l.transaction_type,l.attributed_round_id,l.prediction_id,l.roulette_game_id,l.round_group_id,l.round_block_id,
-              p.display_name,r.round_number,r.title AS round_title,pr.display_number AS prediction_number,g.name AS group_name,rb.title AS block_title
+      `SELECT l.id,l.created_at,l.amount,l.description,l.transaction_type,l.attributed_round_id,l.prediction_id,l.roulette_game_id,l.round_group_id,l.quiz_question_id,
+              p.display_name,r.sort_order AS round_number,r.title AS round_title,pr.display_number AS prediction_number,g.name AS group_name,q.prompt AS question_prompt
        FROM ledger_entries l JOIN players p ON p.id=l.player_id LEFT JOIN rounds r ON r.id=l.attributed_round_id
-       LEFT JOIN predictions pr ON pr.id=l.prediction_id LEFT JOIN round_groups g ON g.id=l.round_group_id LEFT JOIN round_blocks rb ON rb.id=l.round_block_id
+       LEFT JOIN predictions pr ON pr.id=l.prediction_id LEFT JOIN round_groups g ON g.id=l.round_group_id LEFT JOIN live_quiz_questions q ON q.id=l.quiz_question_id
        WHERE ${where} ORDER BY l.created_at DESC,l.id DESC`, params,
     ),
     pool.query(
@@ -1179,7 +1188,7 @@ export async function getLedgerState(gameId: number, roundFilter: 'all'|'general
     ),
   ]);
   return {
-    entries: entries.rows.map((r: any) => ({ ...r, id: Number(r.id), amount: Number(r.amount), attributed_round_id: r.attributed_round_id ? Number(r.attributed_round_id) : null, prediction_id: r.prediction_id ? Number(r.prediction_id) : null, roulette_game_id: r.roulette_game_id ? Number(r.roulette_game_id) : null, round_group_id: r.round_group_id ? Number(r.round_group_id) : null, round_block_id: r.round_block_id ? Number(r.round_block_id) : null })),
+    entries: entries.rows.map((r: any) => ({ ...r, id: Number(r.id), amount: Number(r.amount), attributed_round_id: r.attributed_round_id ? Number(r.attributed_round_id) : null, prediction_id: r.prediction_id ? Number(r.prediction_id) : null, roulette_game_id: r.roulette_game_id ? Number(r.roulette_game_id) : null, round_group_id: r.round_group_id ? Number(r.round_group_id) : null, quiz_question_id: r.quiz_question_id ? Number(r.quiz_question_id) : null })),
     summary: summary.rows.map((r: any) => ({ ...r, id: Number(r.id), earned: Number(r.earned), lost: Number(r.lost), net: Number(r.net) })),
   };
 }
