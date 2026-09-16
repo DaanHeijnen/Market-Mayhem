@@ -85,11 +85,13 @@ describe.skipIf(!available)('the round lifecycle, against a migrated database', 
 
     it('refuses to leave a roulette round with money on the table, and cancels a draft', async () => {
       const round = await addRound(db, gameId, 'ROULETTE');
-      await db.query("INSERT INTO roulette_games(game_night_id,round_id,status) VALUES($1,$2,'OPEN')", [gameId, round]);
+      await db.query("INSERT INTO roulette_games(game_night_id,round_id,status,run_number) VALUES($1,$2,'OPEN',1)", [gameId, round]);
       await expect(assertRoundMayBeLeft(client(), gameId, round, 'ROULETTE')).rejects.toThrow(/still OPEN/);
 
+      // Run 1 settles, and the round opens a second run — which is the point of runs:
+      // the round carries on, and each spin is its own table.
       await db.query("UPDATE roulette_games SET status='SETTLED' WHERE round_id=$1", [round]);
-      await db.query("INSERT INTO roulette_games(game_night_id,round_id,status) VALUES($1,$2,'DRAFT')", [gameId, round]);
+      await db.query("INSERT INTO roulette_games(game_night_id,round_id,status,run_number) VALUES($1,$2,'DRAFT',2)", [gameId, round]);
       await assertRoundMayBeLeft(client(), gameId, round, 'ROULETTE');
       const outcome = await leaveRound(client(), gameId, round, 'ROULETTE', 'admin', 'round completed');
       expect(outcome.rouletteDraftsCancelled).toBe(1);
@@ -187,7 +189,7 @@ describe.skipIf(!available)('the round lifecycle, against a migrated database', 
   // ---------------------------------------------------------------------
   // 9 / 10 · starting a round changes progression, never presentation
   // ---------------------------------------------------------------------
-  describe('starting a round leaves the projector alone', () => {
+  describe('entering a round prepares its runtime and nothing else', () => {
     it('sets the round cursor and writes nothing to screen_state', async () => {
       const round = await addRound(db, gameId, 'LIVE_QUIZ');
       const q = await db.query(

@@ -6,7 +6,7 @@
 // it holds the CHECK constraint — and this file is what the host reads, so the two are
 // kept deliberately in step.
 
-export type RoundType = 'LIVE_QUIZ' | 'PRESENTATIE' | 'ROULETTE' | 'SLOTMACHINE' | 'PAK_EEN_ZES' | 'FOTORONDE';
+export type RoundType = 'LIVE_QUIZ' | 'PRESENTATIE' | 'PUBQUIZ' | 'ROULETTE' | 'SLOTMACHINE' | 'PAK_EEN_ZES' | 'FOTORONDE';
 
 export type RoundMeta = {
   label: string;
@@ -30,6 +30,11 @@ export const ROUND_META: Record<RoundType, RoundMeta> = {
     label: 'Presentatie',
     description: 'Ordered slides for the big screen — info, an image, a song, a question asked out loud. No phones, no scoring.',
     accent: 'cyan', stepped: true, itemNoun: 'slide', interactive: false,
+  },
+  PUBQUIZ: {
+    label: 'Pubquiz',
+    description: 'Ordered questions shown large on the big screen, one page at a time. Phones answer; the right answer earns the points you set.',
+    accent: 'orange', stepped: true, itemNoun: 'question', interactive: true,
   },
   ROULETTE: {
     label: 'Roulette',
@@ -67,6 +72,7 @@ export function roundContentCount(round: any): number {
   if (!round) return 0;
   if (round.type === 'LIVE_QUIZ') return (round.questions || []).length;
   if (round.type === 'PRESENTATIE') return (round.slides || []).length;
+  if (round.type === 'PUBQUIZ') return (round.pubquizQuestions || []).length;
   if (round.type === 'FOTORONDE') return (round.subjects || []).length;
   return 0;
 }
@@ -76,6 +82,7 @@ export function roundItems(round: any): any[] {
   if (!round) return [];
   if (round.type === 'LIVE_QUIZ') return round.questions || [];
   if (round.type === 'PRESENTATIE') return round.slides || [];
+  if (round.type === 'PUBQUIZ') return round.pubquizQuestions || [];
   return [];
 }
 

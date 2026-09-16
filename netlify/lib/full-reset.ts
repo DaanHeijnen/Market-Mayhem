@@ -25,6 +25,8 @@ import { resetPlayersToDefaults } from './default-players';
 export const RUNTIME_TABLES = [
   // Live quiz answers. The questions and their options are authored content and stay.
   'quiz_answers',
+  // Pubquiz answers, for the same reason: what the room answered is what playing produced.
+  'pubquiz_answers',
   // Fotoronde: the photos and their judgements. The subject list is authored content in
   // fotoronde_subjects, which is untouched.
   'photo_submissions',
@@ -65,6 +67,9 @@ export const PRESERVED_TABLES = [
   'live_quiz_questions',       // authored questions, points and media
   'live_quiz_question_options',// the answer options and which are correct
   'live_quiz_question_state',  // 1:1 with a question; reset in place, never deleted
+  'pubquiz_questions',         // authored questions, points, media and visibility
+  'pubquiz_question_options',  // the answers and which one is correct
+  'pubquiz_question_state',    // 1:1 with a question; reset in place, never deleted
   'presentation_slides',       // authored slides
   'presentation_slide_state',  // 1:1 with a slide; reset in place
   'fotoronde_subjects',        // the subject list and its points
@@ -101,6 +106,7 @@ export type FullResetSummary = {
   playersRemoved: number;
   roundsReset: number;
   questionsReset: number;
+  pubquizQuestionsReset: number;
   slidesReset: number;
   predictionsReset: number;
   startingBalanceEntries: number;
@@ -178,6 +184,15 @@ export async function performFullReset(client: PoolClient, gameId: number, actor
     [gameId],
   );
 
+  // Same rule the quiz state follows: authored content is untouched and only the runtime
+  // row beside it goes back to what a freshly created question has.
+  const pubquizQuestions = await client.query(
+    `UPDATE pubquiz_question_state
+     SET status='READY',opened_at=NULL,closed_at=NULL,revealed_at=NULL,revision=0,updated_at=NOW()
+     WHERE game_night_id=$1 RETURNING question_id`,
+    [gameId],
+  );
+
   const slides = await client.query(
     `UPDATE presentation_slide_state
      SET revealed_at=NULL,revision=0,updated_at=NOW()
@@ -191,6 +206,7 @@ export async function performFullReset(client: PoolClient, gameId: number, actor
     `UPDATE round_runtime rt SET
        current_quiz_question_id=(SELECT id FROM live_quiz_questions WHERE round_id=rt.round_id ORDER BY sort_order,id LIMIT 1),
        current_slide_id=(SELECT id FROM presentation_slides WHERE round_id=rt.round_id AND hidden=FALSE ORDER BY sort_order,id LIMIT 1),
+       current_pubquiz_question_id=(SELECT id FROM pubquiz_questions WHERE round_id=rt.round_id AND hidden=FALSE ORDER BY sort_order,id LIMIT 1),
        revision=0,updated_at=NOW()
      WHERE game_night_id=$1`,
     [gameId],
@@ -221,11 +237,11 @@ export async function performFullReset(client: PoolClient, gameId: number, actor
     `INSERT INTO screen_state(game_night_id,mode,round_id,prediction_id,payload,updated_by)
      VALUES($1,'DASHBOARD',NULL,NULL,'{}'::jsonb,$2)
      ON CONFLICT(game_night_id) DO UPDATE
-       SET mode='DASHBOARD',round_id=NULL,prediction_id=NULL,quiz_question_id=NULL,slide_id=NULL,payload='{}'::jsonb,
+       SET mode='DASHBOARD',round_id=NULL,prediction_id=NULL,quiz_question_id=NULL,slide_id=NULL,pubquiz_question_id=NULL,payload='{}'::jsonb,
            staged_mode=NULL,staged_round_id=NULL,staged_prediction_id=NULL,
            staged_quiz_question_id=NULL,staged_slide_id=NULL,staged_payload='{}'::jsonb,
            previous_mode=NULL,previous_round_id=NULL,previous_prediction_id=NULL,
-           previous_quiz_question_id=NULL,previous_slide_id=NULL,previous_payload='{}'::jsonb,
+           previous_quiz_question_id=NULL,previous_slide_id=NULL,previous_pubquiz_question_id=NULL,previous_payload='{}'::jsonb,
            updated_at=NOW(),updated_by=$2`,
     [gameId, actor],
   );
@@ -242,6 +258,7 @@ export async function performFullReset(client: PoolClient, gameId: number, actor
     playersRemoved: roster.removed,
     roundsReset: rounds.rowCount ?? 0,
     questionsReset: questions.rowCount ?? 0,
+    pubquizQuestionsReset: pubquizQuestions.rowCount ?? 0,
     slidesReset: slides.rowCount ?? 0,
     predictionsReset: predictions.rowCount ?? 0,
     startingBalanceEntries: roster.startingBalanceEntries,

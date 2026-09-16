@@ -245,3 +245,55 @@ export async function loadSlotTurn(db: Queryable, gameId: number, roundId: numbe
   const turn = resolveSlotTurn(rows, spinningRow ? Number(spinningRow.player_id) : null);
   return { ...turn, spinningSpinId: spinningRow ? Number(spinningRow.id) : null };
 }
+
+/**
+ * Whether every player this slotmachine round was waiting for has finished their run.
+ *
+ * "Eligible" is the round's allowlist when it has one, and every active player when it
+ * does not — the same rule `playerMayPlaySlot` enforces on the way in, so the set that may
+ * play and the set the round waits for are the same set.
+ *
+ * "Finished" means a series with no spins left. A cancelled series does not count as
+ * having played, because it was refunded rather than used.
+ *
+ * A player who never locks a series keeps the round open. That is deliberate: ending the
+ * round the moment the others are done would cut off someone who was still deciding, and
+ * the host can always complete the round by hand. The automatic path is for the ordinary
+ * case where everybody plays.
+ */
+export async function slotRoundIsFinished(db: Queryable, gameId: number, roundId: number) {
+  const { rows } = await db.query(
+    `WITH eligible AS (
+       SELECT p.id
+       FROM players p
+       WHERE p.game_night_id=$1 AND p.active=TRUE
+         AND (
+           NOT EXISTS (SELECT 1 FROM slotmachine_round_participants sp WHERE sp.round_id=$2)
+           OR EXISTS (SELECT 1 FROM slotmachine_round_participants sp WHERE sp.round_id=$2 AND sp.player_id=p.id)
+         )
+     ),
+     played AS (
+       SELECT DISTINCT sr.player_id
+       FROM slot_series sr
+       WHERE sr.game_night_id=$1 AND sr.round_id=$2 AND sr.status<>'CANCELLED' AND sr.spins_remaining=0
+     )
+     SELECT
+       (SELECT COUNT(*)::int FROM eligible) AS eligible_count,
+       (SELECT COUNT(*)::int FROM eligible e JOIN played pl ON pl.player_id=e.id) AS finished_count,
+       EXISTS(SELECT 1 FROM slot_series sr WHERE sr.game_night_id=$1 AND sr.round_id=$2 AND sr.status='ACTIVE' AND sr.spins_remaining>0) AS spins_left,
+       EXISTS(SELECT 1 FROM slot_spins ss WHERE ss.game_night_id=$1 AND ss.round_id=$2 AND ss.status='SPINNING') AS spinning`,
+    [gameId, roundId],
+  );
+  const row = rows[0];
+  const eligibleCount = Number(row?.eligible_count ?? 0);
+  const finishedCount = Number(row?.finished_count ?? 0);
+  return {
+    eligibleCount,
+    finishedCount,
+    // Never on an empty round: a slotmachine nobody was eligible for has not "finished".
+    finished: eligibleCount > 0
+      && finishedCount >= eligibleCount
+      && !row?.spins_left
+      && !row?.spinning,
+  };
+}

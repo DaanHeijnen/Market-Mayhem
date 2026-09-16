@@ -1,9 +1,9 @@
 import { requireAdmin, audit } from '../lib/auth';
 import { withTransaction } from '../lib/db';
 import { body, ok, intValue, HttpError } from '../lib/http';
-import { incrementGameVersion, setScreen } from '../lib/game-state';
+import { incrementGameVersion } from '../lib/game-state';
 import { lockRound } from '../lib/rounds';
-import { assertRoundMayBeLeft, leaveRound } from '../lib/round-lifecycle';
+import { completeRound } from '../lib/round-lifecycle';
 import { wrap } from './_wrap';
 
 /**
@@ -41,18 +41,8 @@ export default wrap(async request => {
       throw new HttpError(409, `Prediction #${livePrediction.rows[0].display_number} is still ${livePrediction.rows[0].status}`);
     }
 
-    await assertRoundMayBeLeft(client, gameId, roundId, round.type);
-    const outcome = await leaveRound(client, gameId, roundId, round.type, admin.username, 'round completed');
-
-    await client.query(
-      "UPDATE rounds SET status='COMPLETED',completed_at=NOW(),updated_at=NOW() WHERE id=$1 AND status='ACTIVE'",
-      [roundId],
-    );
-    await client.query('UPDATE game_nights SET current_round_id=NULL,updated_at=NOW() WHERE id=$1', [gameId]);
-
-    // The one place completing a round touches the projector, and only because what it
-    // was showing belongs to a round nobody is playing any more.
-    await setScreen(client, gameId, { kind: 'dashboard' }, admin.username);
+    const { completed, outcome } = await completeRound(client, gameId, roundId, round.type, admin.username, 'round completed');
+    if (!completed) return { duplicate: true };
 
     await audit(client, gameId, admin.username, `completed round ${round.sortOrder} (${round.type})`, 'round', roundId, outcome);
     return { ...outcome, version: await incrementGameVersion(client, gameId) };

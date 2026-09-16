@@ -70,6 +70,62 @@ describe('mobile views', () => {
     expect(html).not.toContain('AVAILABLE WALLET');
   });
 
+  /**
+   * The pubquiz question takes over the phone the same way a live question does, and shows
+   * the same things — plus the one difference that matters here: its image is part of the
+   * question and is on screen from the start.
+   */
+  it('lets a pubquiz question take over the phone', () => {
+    const state = playerState({
+      pubquizQuestion: {
+        id: 44, roundId: 4, question: 'Hoofdstad van Peru?', body: 'Denk goed na.',
+        points: 25, mediaKey: 'pic-44', status: 'OPEN', timeLimitSeconds: null,
+        myOptionId: null, myAnswerCorrect: null,
+        options: [
+          { id: 1, sortOrder: 0, text: 'Lima' },
+          { id: 2, sortOrder: 1, text: 'La Paz' },
+        ],
+      },
+    });
+    const html = render(createElement(MobileViews, { state, gameId: 1, view: 'home', predictionId: null, busy: false, act: noop, go: noop }));
+    expect(html).toContain('PUBQUIZ · 25 POINTS');
+    expect(html).toContain('Hoofdstad van Peru?');
+    expect(html).toContain('Denk goed na.');
+    expect(html).toContain('pubquiz-phone-image');
+    expect(html).not.toContain('AVAILABLE WALLET');
+  });
+
+  it('never shows a pubquiz answer key before the reveal', () => {
+    const state = playerState({
+      pubquizQuestion: {
+        id: 44, roundId: 4, question: 'Hoofdstad van Peru?', body: '', points: 25,
+        mediaKey: null, status: 'OPEN', timeLimitSeconds: null, myOptionId: 1, myAnswerCorrect: null,
+        // The server sends no isCorrect before the reveal, so there is none to render.
+        options: [{ id: 1, sortOrder: 0, text: 'Lima' }, { id: 2, sortOrder: 1, text: 'La Paz' }],
+      },
+    });
+    const html = render(createElement(MobileViews, { state, gameId: 1, view: 'home', predictionId: null, busy: false, act: noop, go: noop }));
+    expect(html).not.toContain('JUISTE ANTWOORD');
+    expect(html).toContain('ANSWER LOCKED');
+  });
+
+  it('tells a pubquiz player what they won once it is revealed', () => {
+    const state = playerState({
+      pubquizQuestion: {
+        id: 44, roundId: 4, question: 'Hoofdstad van Peru?', body: '', points: 25,
+        mediaKey: null, status: 'REVEALED', timeLimitSeconds: null,
+        myOptionId: 1, myAnswerCorrect: true, myPoints: 25,
+        options: [
+          { id: 1, sortOrder: 0, text: 'Lima', isCorrect: true },
+          { id: 2, sortOrder: 1, text: 'La Paz', isCorrect: false },
+        ],
+      },
+    });
+    const html = render(createElement(MobileViews, { state, gameId: 1, view: 'home', predictionId: null, busy: false, act: noop, go: noop }));
+    expect(html).toContain('JUISTE ANTWOORD');
+    expect(html).toContain('+25 coins credited automatically.');
+  });
+
   it('disables submit controls while busy', () => {
     const state = playerState();
     const html = render(createElement(MobileViews, { state, gameId: 1, view: 'prediction', predictionId: 1, busy: true, act: noop, go: noop }));

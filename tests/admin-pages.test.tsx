@@ -119,12 +119,12 @@ describe('admin round vocabulary', () => {
   // Mirrors rounds_type_check. If this list and that constraint diverge, the picker
   // offers a type the insert rejects.
   it('only offers round types the database accepts', () => {
-    expect(ROUND_TYPES).toEqual(['LIVE_QUIZ', 'PRESENTATIE', 'ROULETTE', 'SLOTMACHINE', 'PAK_EEN_ZES', 'FOTORONDE']);
+    expect(ROUND_TYPES).toEqual(['LIVE_QUIZ', 'PRESENTATIE', 'PUBQUIZ', 'ROULETTE', 'SLOTMACHINE', 'PAK_EEN_ZES', 'FOTORONDE']);
   });
 
   it('marks only the types with a phone-side flow as interactive', () => {
     expect(ROUND_TYPES.filter(type => roundMeta(type).interactive))
-      .toEqual(['LIVE_QUIZ', 'ROULETTE', 'SLOTMACHINE', 'PAK_EEN_ZES', 'FOTORONDE']);
+      .toEqual(['LIVE_QUIZ', 'PUBQUIZ', 'ROULETTE', 'SLOTMACHINE', 'PAK_EEN_ZES', 'FOTORONDE']);
   });
 
   it('gives every type a distinct accent so rounds stay tellable apart', () => {
@@ -184,46 +184,62 @@ describe('admin pages render', () => {
     expect(html).not.toContain('round-content-copy');
   });
 
-  // The presenter pair is the point of the redesign: live is the real projector output,
-  // staged is what GO LIVE will promote, and the two must be visibly distinct.
-  it('shows the live projector output beside the staged step', () => {
-    const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
-    expect(html).toContain('LIVE — ON THE PROJECTOR NOW');
-    expect(html).toContain('PREVIEW — STAGED, NOT LIVE YET');
-    expect(html).toContain(`src="/screen/1"`); // live side is the real screen, not a mock
-    expect(html).toContain('staged-card');
-    expect(html).toContain('GO LIVE →');
-  });
+  /**
+   * The presenter pair, after Preview → Go Live was removed.
+   *
+   * LIVE is the real projector, in an iframe. VOLGENDE is the projector's own renderer fed
+   * the next state from the server. Neither is an Admin-authored description of the state,
+   * which is what the staged card used to be and why it could be wrong.
+   */
+  describe('the presenter pair', () => {
+    it('shows the live projector beside a preview of what VOLGENDE will show', () => {
+      const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
+      expect(html).toContain('LIVE — OP DE PROJECTOR');
+      expect(html).toContain('VOLGENDE — WAT VOLGENDE OP HET SCHERM ZET');
+      // the live side is the real screen, not a mock of it
+      expect(html).toContain(`src="/screen/1"`);
+    });
 
-  it('renders the staged step in its own accent and marks it pending', () => {
-    const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
-    // staged is question 32, so the card takes the quiz accent and names the question
-    expect(html).toContain('staged-card accent-violet is-pending');
-    expect(html).toContain('Grootste oceaan?');
-  });
+    // The whole point of the change: there is no intermediate state the host has chosen
+    // but the room cannot see.
+    it('has no staging step left anywhere', () => {
+      const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
+      expect(html).not.toContain('GO LIVE');
+      expect(html).not.toContain('staged-card');
+      expect(html).not.toContain('is-staged');
+      expect(html).not.toContain('NOT LIVE YET');
+    });
 
-  it('disables GO LIVE and drops the pending edge once staged matches live', () => {
-    const state = adminState();
-    state.screen.staged = slot('QUIZ_QUESTION', { roundId: 3, questionId: 31 });
-    const html = render(createElement(ControlPage, { state, gameId: 1, run }));
-    expect(html).toContain('ALREADY LIVE');
-    expect(html).toContain('PREVIEW — ALREADY LIVE');
-    expect(html).not.toContain('is-pending');
-  });
+    it('offers VORIGE and VOLGENDE for a round that steps', () => {
+      const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
+      expect(html).toContain('← VORIGE');
+      expect(html).toContain('VOLGENDE →');
+      expect(html).not.toMatch(/<button [^>]*disabled[^>]*>VOLGENDE →<\/button>/);
+    });
 
-  it('marks the on-air step live in the run of show, and the staged one staged', () => {
-    const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
-    expect(html).toContain('is-live');
-    expect(html).toContain('is-staged');
-  });
+    // Backwards navigation is not forced onto state machines where stepping back would
+    // mean unspinning a wheel that has already paid out.
+    it('disables both for a round that is one scene', () => {
+      const state = adminState();
+      state.activeRound = { ...state.activeRound, type: 'ROULETTE' };
+      state.rounds = state.rounds.map((r: any) => (r.id === state.activeRound.id ? state.activeRound : r));
+      const html = render(createElement(ControlPage, { state, gameId: 1, run }));
+      expect(html).toMatch(/<button [^>]*disabled[^>]*>VOLGENDE →<\/button>/);
+      expect(html).toMatch(/<button [^>]*disabled[^>]*>← VORIGE<\/button>/);
+    });
 
-  it('offers the dashboard as a step but marks nothing live once it is showing', () => {
-    const html = render(createElement(ControlPage, {
-      state: adminState({ screen: { ...slot('DASHBOARD'), staged: slot('QUIZ_QUESTION', { roundId: 3, questionId: 33 }), previous: slot('QUIZ_QUESTION', { roundId: 3, questionId: 31 }) } }),
-      gameId: 1, run,
-    }));
-    expect(html).not.toContain('is-live');
-    expect(html).toContain('is-staged');
+    it('marks the on-air step live in the run of show', () => {
+      const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
+      expect(html).toContain('is-live');
+    });
+
+    it('marks nothing live once the dashboard is showing', () => {
+      const html = render(createElement(ControlPage, {
+        state: adminState({ screen: { ...slot('DASHBOARD'), previous: slot('QUIZ_QUESTION', { roundId: 3, questionId: 31 }) } }),
+        gameId: 1, run,
+      }));
+      expect(html).not.toContain('is-live');
+    });
   });
 
   it('surfaces pending player requests above everything, with a mandatory deny reason', () => {
@@ -411,6 +427,83 @@ describe('admin pages render', () => {
       const html = editor(state);
       expect(html).toContain('Start the round to put a page on the big screen');
       expect(html).toMatch(/<button [^>]*disabled[^>]*>SHOW ON SCREEN<\/button>/);
+    });
+  });
+
+  /**
+   * The Pubquiz editor. A presentation-style list of pages that happen to be questions,
+   * so it has to show both halves: the run and its order, and the answer key with points.
+   */
+  describe('the pubquiz editor', () => {
+    const pubQuestion = (id: number, sortOrder: number, text: string, extra: Record<string, unknown> = {}) => ({
+      id, roundId: 9, sortOrder, question: text, body: '', points: 25,
+      mediaKey: null, mediaName: null, timeLimitSeconds: null, hidden: false,
+      status: 'READY', openedAt: null, closedAt: null, revealedAt: null, revision: 0,
+      results: { tally: [], answered: 0, correct: 0, participation: { answered: 0, eligible: 2, remaining: 2, percentage: 0 } },
+      options: [
+        { id: id * 10 + 1, sortOrder: 0, text: 'Lima', isCorrect: true },
+        { id: id * 10 + 2, sortOrder: 1, text: 'La Paz', isCorrect: false },
+      ],
+      ...extra,
+    });
+
+    const pubquizState = (overrides: Record<string, unknown> = {}) => adminState({
+      rounds: [{
+        ...QUIZ_ROUND, id: 9, type: 'PUBQUIZ', title: 'Pubquiz', status: 'ACTIVE', questions: undefined,
+        pubquizQuestions: [
+          pubQuestion(1, 0, 'Hoofdstad van Peru?'),
+          pubQuestion(2, 1, 'Reserve', { hidden: true }),
+        ],
+      }],
+      ...overrides,
+    });
+
+    const editor = (state: any) => render(createElement(RoundsPage, { state, gameId: 1, roundId: 9, run }));
+
+    it('opens its own editor, not the quiz or slide one', () => {
+      const html = editor(pubquizState());
+      expect(html).toContain('ADD A QUESTION');
+      expect(html).toContain('ANSWERS — PICK THE CORRECT ONE');
+      expect(html).not.toContain('THE SECRET — WHAT STAYS OFF THE PROJECTOR UNTIL YOU REVEAL');
+    });
+
+    it('lists the questions in order, with their points and answers', () => {
+      const html = editor(pubquizState());
+      expect(html).toContain('Hoofdstad van Peru?');
+      expect(html).toContain('01 · QUESTION · 25P');
+      expect(html).toContain('Lima');
+      expect(html).toContain('La Paz');
+    });
+
+    it('says which questions are in the run and which are held back', () => {
+      const html = editor(pubquizState());
+      expect(html.match(/>VISIBLE</g)).toHaveLength(1);
+      expect(html.match(/>HIDDEN</g)).toHaveLength(1);
+      expect(html).toContain('1 question in the run, 1 held back');
+      expect(html.match(/>MAKE VISIBLE</g)).toHaveLength(1);
+    });
+
+    // A held-back question gets no SHOW ON SCREEN, because the server would refuse it.
+    it('offers SHOW ON SCREEN only for questions that can be shown', () => {
+      const html = editor(pubquizState());
+      expect(html.match(/>SHOW ON SCREEN</g)).toHaveLength(1);
+    });
+
+    it('marks the question the projector is pointed at', () => {
+      const html = editor(pubquizState({ screen: slot('PUBQUIZ_QUESTION', { roundId: 9 }) as any }));
+      // the fixture's slot helper carries no pubquiz pointer, so add it directly
+      const withPointer = pubquizState();
+      (withPointer as any).screen = { ...slot('PUBQUIZ_QUESTION', { roundId: 9 }), pubquizQuestionId: 1 };
+      const marked = editor(withPointer);
+      expect(marked).toContain('ON SCREEN');
+      expect(marked).toContain('is-live-card');
+      expect(html).toBeTruthy();
+    });
+
+    // The answer key belongs to the host and to nobody else, but it must be right here.
+    it('marks the correct answer for the host', () => {
+      const html = editor(pubquizState());
+      expect(html).toContain('quiz-answer is-correct');
     });
   });
 

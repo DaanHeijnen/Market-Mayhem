@@ -7,8 +7,8 @@ import { ROUND_META, roundMeta, ROUND_TYPES as UI_ROUND_TYPES } from '../src/com
 import { neighbours } from '../netlify/lib/rounds';
 
 describe('the round type vocabulary', () => {
-  it('is the six types the evening is built from', () => {
-    expect(ROUND_TYPES).toEqual(['LIVE_QUIZ', 'PRESENTATIE', 'ROULETTE', 'SLOTMACHINE', 'PAK_EEN_ZES', 'FOTORONDE']);
+  it('is the seven types the evening is built from', () => {
+    expect(ROUND_TYPES).toEqual(['LIVE_QUIZ', 'PRESENTATIE', 'PUBQUIZ', 'ROULETTE', 'SLOTMACHINE', 'PAK_EEN_ZES', 'FOTORONDE']);
   });
 
   it('refuses anything that is not one of them', () => {

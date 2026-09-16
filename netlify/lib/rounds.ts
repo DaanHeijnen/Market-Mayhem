@@ -110,13 +110,14 @@ export function roundTypeValue(value: unknown): RoundType {
 /** The per-round execution cursor. Never confuse it with what is on the projector. */
 export async function loadRoundRuntime(db: Queryable, roundId: number) {
   const { rows } = await db.query(
-    'SELECT round_id,current_quiz_question_id,current_slide_id,revision FROM round_runtime WHERE round_id=$1',
+    'SELECT round_id,current_quiz_question_id,current_slide_id,current_pubquiz_question_id,revision FROM round_runtime WHERE round_id=$1',
     [roundId],
   );
   const row = rows[0];
   return {
     currentQuizQuestionId: row?.current_quiz_question_id ? Number(row.current_quiz_question_id) : null,
     currentSlideId: row?.current_slide_id ? Number(row.current_slide_id) : null,
+    currentPubquizQuestionId: row?.current_pubquiz_question_id ? Number(row.current_pubquiz_question_id) : null,
     revision: Number(row?.revision ?? 0),
   };
 }
@@ -185,6 +186,7 @@ export function neighbours<T extends { id: number }>(items: T[], currentId: numb
 const ORDERABLE_TABLES = {
   live_quiz_questions: 'live_quiz_questions',
   presentation_slides: 'presentation_slides',
+  pubquiz_questions: 'pubquiz_questions',
   fotoronde_subjects: 'fotoronde_subjects',
 } as const;
 
@@ -226,7 +228,7 @@ export async function reorderRoundContent(
  * are, grouped in memory.
  */
 export async function loadAllRoundContent(db: Queryable, gameId: number) {
-  const [questions, options, slides, subjects, slotConfigs, slotParticipants] = await Promise.all([
+  const [questions, options, slides, subjects, slotConfigs, slotParticipants, pubQuestions, pubOptions, pubAnswers] = await Promise.all([
     db.query(
       `SELECT q.id,q.round_id,q.sort_order,q.prompt,q.body,q.points,q.time_limit_seconds,q.context_media_key,
               st.status,st.opened_at,st.closed_at,st.revealed_at,st.settled_at,st.context_photo_shown,st.revision,
@@ -262,6 +264,33 @@ export async function loadAllRoundContent(db: Queryable, gameId: number) {
     ),
     db.query('SELECT round_id,max_spins FROM slotmachine_rounds WHERE game_night_id=$1', [gameId]),
     db.query('SELECT round_id,player_id FROM slotmachine_round_participants WHERE game_night_id=$1 ORDER BY player_id', [gameId]),
+    db.query(
+      `SELECT q.id,q.round_id,q.sort_order,q.question,q.body,q.points,q.media_key,q.media_name,
+              q.time_limit_seconds,q.hidden,
+              st.status,st.opened_at,st.closed_at,st.revealed_at,st.revision,
+              COUNT(ap.id)::int AS answer_count
+       FROM pubquiz_questions q
+       LEFT JOIN pubquiz_question_state st ON st.question_id=q.id
+       LEFT JOIN pubquiz_answers a ON a.question_id=q.id
+       LEFT JOIN players ap ON ap.id=a.player_id AND ap.active=TRUE
+       WHERE q.game_night_id=$1
+       GROUP BY q.id,st.status,st.opened_at,st.closed_at,st.revealed_at,st.revision
+       ORDER BY q.round_id,q.sort_order,q.id`,
+      [gameId],
+    ),
+    db.query(
+      `SELECT id,question_id,sort_order,text,is_correct FROM pubquiz_question_options
+       WHERE game_night_id=$1 ORDER BY question_id,sort_order,id`,
+      [gameId],
+    ),
+    // Which option each active player picked, for the Admin's distribution. Never reaches
+    // a public surface: the projector builds its own tally, and only after the reveal.
+    db.query(
+      `SELECT a.question_id,a.option_id FROM pubquiz_answers a
+       JOIN players pl ON pl.id=a.player_id AND pl.active=TRUE
+       WHERE a.game_night_id=$1`,
+      [gameId],
+    ),
   ]);
 
   const group = <T,>(rows: T[], key: (row: T) => number) => {
@@ -275,12 +304,22 @@ export async function loadAllRoundContent(db: Queryable, gameId: number) {
   };
 
   const optionsByQuestion = group(options.rows, (o: any) => Number(o.question_id));
+  const pubOptionsByQuestion = group(pubOptions.rows, (o: any) => Number(o.question_id));
+  const pubAnswersByQuestion = group(pubAnswers.rows, (a: any) => Number(a.question_id));
   return {
     questionsByRound: group(
       questions.rows.map((row: any) => ({ row, options: optionsByQuestion.get(Number(row.id)) || [] })),
       entry => Number(entry.row.round_id),
     ),
     slidesByRound: group(slides.rows, (s: any) => Number(s.round_id)),
+    pubquizByRound: group(
+      pubQuestions.rows.map((row: any) => ({
+        row,
+        options: pubOptionsByQuestion.get(Number(row.id)) || [],
+        answers: (pubAnswersByQuestion.get(Number(row.id)) || []).map((a: any) => ({ optionId: Number(a.option_id) })),
+      })),
+      entry => Number(entry.row.round_id),
+    ),
     subjectsByRound: group(subjects.rows, (s: any) => Number(s.round_id)),
     slotByRound: new Map<number, { maxSpins: number; allowedPlayerIds: number[] }>(
       slotConfigs.rows.map((row: any) => [

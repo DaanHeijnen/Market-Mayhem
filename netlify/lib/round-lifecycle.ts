@@ -4,6 +4,7 @@ import { closeSlotSeriesForRound } from './slot-state';
 import { closePakEenZesForRound } from './pak-een-zes-state';
 import { closePhotoRoundForRound } from './photo-round-state';
 import type { RoundType } from './round-types';
+import { setScreen } from './game-state';
 
 /**
  * What has to happen when the host leaves a round.
@@ -189,8 +190,12 @@ export async function enterRound(client: PoolClient, gameId: number, roundId: nu
     // One draft game per roulette round, created on entry so the host has something to
     // open. Guarded rather than blind, so re-starting a round cannot create a second.
     await client.query(
-      `INSERT INTO roulette_games(game_night_id,round_id,status)
-       SELECT $1,$2,'DRAFT'
+      // Run 1 of the round, or the next number if earlier runs have already settled —
+      // re-entering a round whose wheel has been spun starts a fresh run rather than
+      // reopening a finished one. The NOT EXISTS guard is what stops a second live table
+      // appearing beside one that is still going.
+      `INSERT INTO roulette_games(game_night_id,round_id,status,run_number)
+       SELECT $1,$2,'DRAFT',(SELECT COALESCE(MAX(run_number),0)+1 FROM roulette_games WHERE round_id=$2)
        WHERE NOT EXISTS (
          SELECT 1 FROM roulette_games
          WHERE game_night_id=$1 AND round_id=$2 AND status IN ('DRAFT','OPEN','LOCKED','SPINNING','RESULT')
@@ -198,4 +203,41 @@ export async function enterRound(client: PoolClient, gameId: number, roundId: nu
       [gameId, roundId],
     );
   }
+}
+
+/**
+ * End the active round, whoever asked.
+ *
+ * Extracted so that completing a round by hand, running off the end of a presentation and
+ * the last slotmachine player finishing their spins are all literally the same code. They
+ * used to be one route and two things that did not exist; adding them as separate writes
+ * would have meant three subtly different ideas of what "completed" means.
+ *
+ * Idempotent and race-free through the guard on the UPDATE: two callers arriving together
+ * both run, one moves the row out of ACTIVE and the other gets no rows back and reports
+ * that it did nothing. The caller must already hold the game row.
+ */
+export async function completeRound(
+  client: PoolClient,
+  gameId: number,
+  roundId: number,
+  type: RoundType,
+  actor: string,
+  reason: LeaveReason,
+): Promise<{ completed: boolean; outcome: LeaveOutcome | null }> {
+  await assertRoundMayBeLeft(client, gameId, roundId, type);
+  const outcome = await leaveRound(client, gameId, roundId, type, actor, reason);
+
+  const moved = await client.query(
+    "UPDATE rounds SET status='COMPLETED',completed_at=NOW(),updated_at=NOW() WHERE id=$1 AND status='ACTIVE' RETURNING id",
+    [roundId],
+  );
+  if (!moved.rows[0]) return { completed: false, outcome: null };
+
+  await client.query('UPDATE game_nights SET current_round_id=NULL,updated_at=NOW() WHERE id=$1 AND current_round_id=$2', [gameId, roundId]);
+
+  // The one place ending a round touches the projector, and only because what it was
+  // showing belongs to a round nobody is playing any more.
+  await setScreen(client, gameId, { kind: 'dashboard' }, actor);
+  return { completed: true, outcome };
 }

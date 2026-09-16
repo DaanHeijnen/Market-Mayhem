@@ -5,6 +5,7 @@ import { CoinIcon } from '../shared/CoinIcon';
 import { PlayerValueGraph } from '../shared/PlayerValueGraph';
 import { SlotReels } from '../shared/SlotReels';
 import { CardDeck, PlayingCard } from '../shared/PlayingCard';
+import { useHeldReveal } from '../shared/useHeldReveal';
 
 const QUESTION_EMOJIS = ['🍆', '🌽', '🍑', '😳'] as const;
 const money = (n: number) => new Intl.NumberFormat().format(n);
@@ -12,11 +13,19 @@ const money = (n: number) => new Intl.NumberFormat().format(n);
 // SPINNING to RESULT after that window, and the reels must have landed by then.
 const SLOT_SPIN_MS = 3200;
 
-export function BigScreen({ gameId }: { gameId: number }) {
-  const { data: s, error } = useGamePolling<any>(gameId, 'screen', `/api/screen-state?gameId=${gameId}`);
+/**
+ * One projector snapshot, drawn.
+ *
+ * Exported because the Admin's LIVE and NEXT panes render with this exact component, fed
+ * the exact same public DTO — the live one polled from `/api/screen-state`, the next one
+ * from `/api/next-screen-state`. There is no second rendering of a scene anywhere, so the
+ * Admin cannot show the host something the room will not see.
+ */
+export function ScreenRender({ s, error = '' }: { s: any; error?: string }) {
   if (!s) return <div className="screen-loading">{error ? 'LIVE CONNECTION INTERRUPTED' : 'MARKET MAYHEM'}</div>;
   if (s.mode === 'QUIZ_QUESTION' && s.quizQuestion) return <QuizScene question={s.quizQuestion} round={s.round} />;
   if (s.mode === 'SLIDE' && s.slide) return <SlideScene slide={s.slide} round={s.round} />;
+  if (s.mode === 'PUBQUIZ_QUESTION' && s.pubquizQuestion) return <PubquizScene question={s.pubquizQuestion} round={s.round} />;
   if (s.mode === 'PREDICTIONS_OPEN' && s.prediction) return <PredictionScene p={s.prediction} phase="OPEN" />;
   if (s.mode === 'PREDICTION_LOCKED' && s.prediction) return <PredictionScene p={s.prediction} phase="LOCKED" />;
   if (s.mode === 'PREDICTION_RESULT' && s.prediction) return <PredictionScene p={s.prediction} phase="RESULT" />;
@@ -25,6 +34,11 @@ export function BigScreen({ gameId }: { gameId: number }) {
   if (s.mode === 'PAK_EEN_ZES') return <PakEenZesScene game={s.pakEenZes} round={s.round} />;
   if (s.mode === 'FOTORONDE') return <PhotoRoundScene photo={s.photoRound} round={s.round} />;
   return <Dashboard s={s} error={error} />;
+}
+
+export function BigScreen({ gameId }: { gameId: number }) {
+  const { data: s, error } = useGamePolling<any>(gameId, 'screen', `/api/screen-state?gameId=${gameId}`);
+  return <ScreenRender s={s} error={error} />;
 }
 
 function Dashboard({ s, error }: { s: any; error: string }) {
@@ -120,6 +134,60 @@ function SlideScene({ slide, round }: { slide: any; round: any }) {
  * flag below were wrong. Same for the context photo: its key is absent until the host
  * asks for it, so an early render has no file to name.
  */
+/**
+ * One pubquiz question, on the projector.
+ *
+ * A presentation page that happens to be a question: the question is the headline, its
+ * image sits with it from the start, and the answers are the page's body.
+ *
+ * Nothing here decides what may be shown. Before the reveal the options simply have no
+ * `isCorrect` and no `count` — the server never put them on the wire — so this renders
+ * whatever it was given and cannot leak an answer by getting a condition wrong.
+ */
+function PubquizScene({ question, round }: { question: any; round: any }) {
+  const revealed = question.status === 'REVEALED';
+  const correct = question.options.find((o: any) => o.isCorrect) || null;
+  const part = question.participation;
+  const topline = round ? `ROUND ${String(round.sortOrder).padStart(2, '0')} · ${round.title}` : 'PUBQUIZ';
+  // The widest bar is the scale, so a unanimous room and a split one both read clearly.
+  const most = revealed ? Math.max(1, ...question.options.map((o: any) => Number(o.count) || 0)) : 1;
+
+  return <div className="duo-screen pubquiz-screen">
+    <div className="duo-topline">
+      <span>{topline}</span>
+      <span className="pill">{question.status} · {part ? `${part.answered}/${part.eligible}` : 0} ANSWERS</span>
+    </div>
+    <h1>{question.question}</h1>
+    {question.body && <p className="duo-support">{question.body}</p>}
+    {question.mediaKey && <img className="pubquiz-image" src={mediaUrl(question.mediaKey)} alt="" />}
+
+    <div className="duo-answer-grid">{question.options.map((option: any, index: number) => <div
+      className={`duo-answer-card ${revealed && option.isCorrect ? 'correct' : revealed ? 'dimmed' : ''}`}
+      key={option.id}
+    >
+      <span className="duo-emoji">{QUESTION_EMOJIS[index]}</span>
+      <b>{option.text}</b>
+      {/* Counts and correctness arrive together, at the reveal, or not at all — a tally
+          before the answer is the answer. */}
+      {revealed && <span className="pubquiz-tally">
+        <span className="pubquiz-bar" style={{ width: `${Math.round((Number(option.count) || 0) / most * 100)}%` }} />
+        <small>{option.count} {Number(option.count) === 1 ? 'speler' : 'spelers'}{option.isCorrect ? ' ✓' : ''}</small>
+      </span>}
+    </div>)}</div>
+
+    {revealed && correct && <div className="duo-reveal-banner">
+      <span>JUISTE ANTWOORD</span>
+      <b>🟢 {correct.text}</b>
+    </div>}
+    <div className="duo-footer">{
+      question.status === 'OPEN' ? 'ANSWER NOW ON YOUR PHONE'
+        : question.status === 'CLOSED' ? 'ANSWERS LOCKED'
+          : revealed ? `${question.correctCount} / ${part?.eligible ?? 0} CORRECT${question.points > 0 ? ` · +${question.points} POINTS` : ''}`
+            : 'GET READY'
+    }</div>
+  </div>;
+}
+
 function QuizScene({ question, round }: { question: any; round: any }) {
   const revealed = ['REVEALED', 'SETTLED'].includes(question.status);
   const correct = question.options.filter((o: any) => o.isCorrect);
@@ -171,11 +239,63 @@ function PredictionScene({ p, phase }: { p: any; phase: 'OPEN' | 'LOCKED' | 'RES
   return <div className={`prediction-screen prediction-${phase.toLowerCase()}`}><div className="scene-eyebrow">PREDICTION #{p.number}</div><h1>{phase === 'OPEN' ? 'PREDICTION OPEN' : 'MARKET LOCKED'}</h1><p>{p.question}</p><div className="big-odds"><div className="yes"><span>YES</span><b>@ {p.yesOdds.toFixed(2)}x</b></div><div className="no"><span>NO</span><b>@ {p.noOdds.toFixed(2)}x</b></div></div><div className="scene-footer">{phase === 'OPEN' ? 'PLACE YOUR BET ON YOUR PHONE' : 'NO MORE BETS · WAITING FOR RESULT'}</div></div>;
 }
 
+const RED_NUMBERS = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
+const pocketColour = (n: number) => (n === 0 ? 'GROEN' : RED_NUMBERS.has(n) ? 'ROOD' : 'ZWART');
+
+// Must match ROULETTE_SPIN_MS in netlify/lib/roulette.ts.
+const ROULETTE_SPIN_MS = 5500;
+
 function RouletteScene({ roulette: r, round }: { roulette: any; round: any }) {
   const markers: RouletteMarker[] = (r?.publicBets || []).map((b: any) => ({ id: b.id, betType: b.betType, selection: String(b.selection), stake: Number(b.stake), displayName: b.displayName, color: b.color }));
+  const runLabel = r?.runNumber ? `SPIN ${r.runNumber}` : 'ROULETTE';
+  // The wheel gets the same guarantee the reels do: a run that settles between two polls
+  // still spins before the room is shown what it cost them.
+  const held = useHeldReveal(r?.spunAt ?? null, ROULETTE_SPIN_MS, Boolean(r?.spunAt));
+  const spinning = r?.status === 'SPINNING' || held;
   return <div className="roulette-screen">
-    <div className="roulette-screen-header"><div><div className="label muted">{round ? `ROUND ${String(round.sortOrder).padStart(2, '0')} · ${round.title}` : 'MARKET MAYHEM'}</div><h1 className="display">{round?.title || 'ROULETTE'}</h1></div><div className="roulette-status"><span>{r?.status || 'READY'}</span><b>{markers.length} chips</b></div></div>
-    {!r ? <div className="screen-center-message">ROULETTE READY</div> : r.status === 'CANCELLED' ? <div className="screen-center-message">ROULETTE CANCELLED<small>Active stakes refunded</small></div> : <div className="roulette-screen-grid"><RouletteWheel status={r.status} resultNumber={r.resultNumber} /><div className="roulette-board-wrap"><RouletteTable markers={markers} disabled compact={false} /><div className="roulette-board-caption">{r.status === 'OPEN' ? 'BETTING OPEN · CHIPS UPDATE LIVE' : r.status === 'LOCKED' ? 'BETS LOCKED' : r.status === 'SPINNING' ? 'SPINNING…' : r.resultNumber != null ? `RESULT · ${r.resultNumber}` : 'ROULETTE'}</div></div></div>}
+    <div className="roulette-screen-header"><div><div className="label muted">{round ? `ROUND ${String(round.sortOrder).padStart(2, '0')} · ${round.title}` : 'MARKET MAYHEM'}</div><h1 className="display">{round?.title || 'ROULETTE'}</h1></div><div className="roulette-status"><span>{r?.status || 'READY'}</span><b>{runLabel}</b></div></div>
+    {!r ? <div className="screen-center-message">ROULETTE READY</div>
+      : r.status === 'CANCELLED' ? <div className="screen-center-message">ROULETTE CANCELLED<small>Active stakes refunded</small></div>
+        : <div className="roulette-screen-grid">
+          <RouletteWheel status={spinning ? 'SPINNING' : r.status} resultNumber={r.resultNumber} />
+          <div className="roulette-board-wrap">
+            {/* Once the run has paid out, the board gives way to what it cost the room.
+                The numbers come from the settled run on the server — nothing here adds
+                anything up. */}
+            {r.settlement && !spinning
+              ? <RouletteSettlement r={r} />
+              : <><RouletteTable markers={markers} disabled compact={false} />
+                <div className="roulette-board-caption">{r.status === 'OPEN' ? 'BETTING OPEN · CHIPS UPDATE LIVE' : r.status === 'LOCKED' ? 'BETS LOCKED' : spinning ? 'SPINNING…' : r.resultNumber != null ? `RESULT · ${r.resultNumber}` : 'ROULETTE'}</div></>}
+          </div>
+        </div>}
+  </div>;
+}
+
+/**
+ * What one spin did to the room's coins.
+ *
+ * Three numbers that are easy to confuse, so each is labelled for what it is: everything
+ * staked, everything paid back (gross — the returned stake is in there too), and the
+ * difference. `net` arrives already subtracted, so this cannot render it the wrong way up.
+ */
+function RouletteSettlement({ r }: { r: any }) {
+  const { staked, payout, net, participants, eligiblePlayers, participationPercentage } = r.settlement;
+  return <div className="roulette-settlement">
+    <div className="roulette-settlement-result">
+      <span className="label muted">UITSLAG</span>
+      <b className="display">{r.resultNumber} {pocketColour(Number(r.resultNumber))}</b>
+    </div>
+    <div className="roulette-settlement-grid">
+      <Stat label="TOTALE INZET" value={money(staked)} coin />
+      <Stat label="UITBETAALD" value={money(payout)} coin />
+      <div className={`screen-stat ${net >= 0 ? 'pos' : 'neg'}`}>
+        <div className="label muted">NETTO RESULTAAT SPELERS</div>
+        <div className="display"><CoinIcon size={24} />{net > 0 ? '+' : ''}{money(net)}</div>
+      </div>
+    </div>
+    <div className="roulette-settlement-foot">
+      {participants} van {eligiblePlayers} spelers deden mee · {participationPercentage}%
+    </div>
   </div>;
 }
 
@@ -192,7 +312,15 @@ function SlotScene({ slot, round }: { slot: any; round: any }) {
   // While the reels are still turning the numbers below them would give the result
   // away — so the scene withholds them until the animation has landed, exactly as the
   // roulette wheel withholds its winning number.
-  const spinning = Boolean(spin?.spinning);
+  //
+  // Two sources, and the animation needs both. `spin.spinning` is the server's window,
+  // which is the right answer while the projector is polling often enough to see it. But
+  // the big screen polls every five seconds and the window is 3.2, so a poll can arrive
+  // after the server has already revealed — and a spin whose reels never turned is
+  // exactly what the hard requirement forbids. `held` is this surface deciding, on first
+  // sight of a new spin, to play the animation out regardless.
+  const held = useHeldReveal(spin?.id ?? null, SLOT_SPIN_MS, Boolean(spin));
+  const spinning = Boolean(spin?.spinning) || held;
   const revealed = Boolean(spin) && !spinning;
   const field = spin && Array.isArray(spin.grid) && spin.grid.length === 3 ? spin.grid : null;
   const turn = slot?.turn || null;

@@ -5,6 +5,7 @@ import { Card, Empty, Status } from '../ui';
 import { ROUND_TYPES, describeContent, roundMeta } from '../roundMeta';
 import { QuizEditor } from './QuizEditor';
 import { PresentationEditor } from './PresentationEditor';
+import { PubquizEditor } from './PubquizEditor';
 import { FotorondeEditor } from './FotorondeEditor';
 import { SlotmachineEditor } from './SlotmachineEditor';
 import { RoundGroups } from './RoundGroups';
@@ -118,7 +119,7 @@ function CreateRound({ gameId, run, onDone }: { gameId: number; run: RunMutation
 
       <div className="form-grid compact">
         <label>
-          {form.type === 'LIVE_QUIZ' ? 'Default points per question'
+          {form.type === 'LIVE_QUIZ' || form.type === 'PUBQUIZ' ? 'Default points per question'
             : form.type === 'FOTORONDE' ? 'Default credits per subject'
               : form.type === 'PAK_EEN_ZES' ? 'Points per correct prediction'
                 : 'Default points'}
@@ -130,6 +131,7 @@ function CreateRound({ gameId, run, onDone }: { gameId: number; run: RunMutation
       </div>
       <p className="muted type-note">
         {form.type === 'LIVE_QUIZ' && 'New questions start at this value; every question can override it.'}
+        {form.type === 'PUBQUIZ' && 'New questions start at this value; every question can override it. A right answer pays it, a wrong one pays nothing.'}
         {form.type === 'FOTORONDE' && 'New subjects start at this value; every subject can override it, and you can still award any amount while judging.'}
         {form.type === 'PAK_EEN_ZES' && 'Every correct prediction is worth this much. The rate is snapshotted when the game finishes, so changing it later never rewrites history.'}
         {form.type === 'PRESENTATIE' && 'A presentation round does not score, so this value is unused.'}
@@ -200,6 +202,7 @@ function RoundDetail({ state: s, round, gameId, run, back }: { state: any; round
 
     {round.type === 'LIVE_QUIZ' && <QuizEditor round={round} gameId={gameId} run={run} readOnly={readOnly} />}
     {round.type === 'PRESENTATIE' && <PresentationEditor state={s} round={round} gameId={gameId} run={run} readOnly={readOnly} />}
+    {round.type === 'PUBQUIZ' && <PubquizEditor state={s} round={round} gameId={gameId} run={run} readOnly={readOnly} />}
     {round.type === 'FOTORONDE' && <FotorondeEditor round={round} gameId={gameId} run={run} readOnly={readOnly} />}
     {round.type === 'SLOTMACHINE' && <SlotmachineEditor state={s} round={round} gameId={gameId} run={run} readOnly={readOnly} />}
     {round.type === 'ROULETTE' && <Card>

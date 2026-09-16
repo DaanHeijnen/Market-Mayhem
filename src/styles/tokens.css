@@ -388,6 +388,15 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
    than a background, so it reads as "this one" without also reading as "disabled" — the
    neighbouring state a held-back page uses. */
 .is-live-card { border-color: var(--blue); box-shadow: inset 0 0 0 1px var(--blue); }
+/* A pubquiz question's image belongs to the question, so it sits between the text and the
+   answers rather than replacing the page the way the quiz's context photo does. */
+.pubquiz-image { max-height: 34vh; width: auto; margin: 0 auto; border-radius: 16px; object-fit: contain; }
+/* The distribution, drawn only after the reveal — the server sends no counts before it. */
+.pubquiz-admin-tally { display: inline-block; margin-right: 10px; }
+.pubquiz-admin-tally.is-correct { color: var(--green); font-weight: 800; }
+.pubquiz-phone-image { width: 100%; max-height: 32vh; border-radius: 14px; object-fit: contain; background: var(--surface-soft); }
+.pubquiz-tally { display: grid; gap: 4px; margin-top: 8px; }
+.pubquiz-bar { display: block; height: 6px; min-width: 2px; border-radius: 999px; background: currentColor; opacity: .55; }
 /* A page can be on screen, held back and revealed all at once, so its pills stack
    instead of competing for one slot. */
 .block-status-stack { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: 0 0 auto; }
@@ -604,8 +613,6 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
    in this file, so an unscoped rule here lost its round shape and ink ring to it. */
 .chip-picker .chip { min-width: 50px; height: 50px; padding: 0; border: 3px solid var(--ink); border-radius: 50%; background: var(--white); color: var(--ink); font-family: var(--display); font-size: 16px; font-weight: 700; text-transform: none; }
 .chip-picker .chip.selected { border-color: var(--ink); background: var(--lime); }
-.custom-chip { display: grid; grid-template-columns: auto 68px; align-items: center; gap: 6px; min-width: 136px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 14px; background: var(--white); color: var(--muted); font-size: 10px; }
-.custom-chip input { width: 68px; min-width: 0; border: 0; border-radius: 8px; padding: 7px; background: var(--paper); color: var(--ink); }
 .roulette-table { display: grid; gap: 7px; width: 100%; }
 .roulette-number-grid { display: grid; grid-template-columns: 42px minmax(0,1fr); gap: 5px; }
 .roulette-zero { display: flex; }
@@ -1094,37 +1101,8 @@ button.chip-blue:hover { background: var(--violet); }
 .presenter-col { min-width: 0; display: grid; gap: 14px; align-content: start; }
 .presenter-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
-/* The live side shows the real projector output, scaled. The staged side cannot —
-   it is not on screen yet — so it renders the step's identity in its accent colour. */
-.staged-card {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  aspect-ratio: 16/9;
-  padding: 26px;
-  border: 3px solid transparent;
-  border-radius: 12px 44px 12px 44px;
-  background: var(--block-accent, var(--muted));
-  color: var(--block-accent-ink, #fff);
-}
-/* Dashed lime edge means "staged but not showing" — the whole point of the pane. */
-.staged-card.is-pending { border-color: var(--lime); border-style: dashed; }
-.staged-eyebrow { font-size: 11px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; opacity: .7; }
-.staged-title { margin-top: 10px; font-family: var(--display); font-size: 22px; font-weight: 700; line-height: 1.2; }
-.staged-sub { margin: 8px 0 0; font-size: 12px; line-height: 1.45; opacity: .8; }
-.staged-badge {
-  padding: 8px 16px;
-  border-radius: 999px;
-  background: rgba(255,255,255,.22);
-  color: inherit;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-.staged-card.accent-orange .staged-badge, .staged-card.accent-cyan .staged-badge,
-.staged-card.accent-lime .staged-badge { background: rgba(20,18,15,.16); }
+/* Both panes now show a real projector rendering, so the staged card that used to
+   stand in for the not-yet-live side is gone along with the flow it belonged to. */
 .presenter-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 
 /* Live-question participation. Spans the whole action row rather than sitting inline
@@ -1144,6 +1122,20 @@ button.chip-blue:hover { background: var(--violet); }
 .question-participation-pct { font: 700 26px var(--display); line-height: 1; }
 .question-participation-sub { font-size: 12px; }
 .go-live-btn { width: 100%; min-height: 56px; font-size: 14px; }
+/* VORIGE and VOLGENDE sit side by side under the next-state preview, with VOLGENDE given
+   the weight because it is the one the host presses all evening. */
+.presenter-step-actions { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: stretch; }
+.presenter-step-actions .btn { min-height: 56px; }
+/* The next-state preview renders a real projector scene, so it needs the same fixed stage
+   the live iframe gets before being scaled into the column. */
+.screen-preview-stage { transform-origin: top left; overflow: hidden; }
+.next-preview-empty { display: grid; align-content: center; justify-items: center; gap: 8px; padding: 24px; text-align: center; background: var(--surface-soft); }
+/* The settled-run summary on the projector. */
+.roulette-settlement { display: grid; gap: 22px; justify-items: center; text-align: center; }
+.roulette-settlement-result .display { font-size: clamp(40px, 6vw, 88px); }
+.roulette-settlement-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; width: 100%; }
+.roulette-settlement-foot { color: var(--dark-secondary); font-weight: 800; letter-spacing: .04em; }
+@media (max-width: 720px) { .roulette-settlement-grid { grid-template-columns: 1fr; } }
 
 @media (max-width: 1100px) {
   .presenter-grid { grid-template-columns: 1fr; }
@@ -1163,7 +1155,6 @@ button.chip-blue:hover { background: var(--violet); }
 .btn-secondary.on-colour:hover:not(:disabled) { background: #fff; color: var(--ink); }
 
 /* Staged step in the run of show: lime edge, matching the staged preview card. */
-.run-step.is-staged { border-color: var(--lime); }
 .live-meta { align-self: center; font-size: 12px; }
 
 /* Header presentation toggle */

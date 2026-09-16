@@ -31,7 +31,7 @@ export function screenModeValue(value: unknown): ScreenMode {
  *
  * Lives here rather than in one of the two endpoints that need it, because a Netlify
  * function is an entry point: importing one from another is a bundling accident waiting
- * to happen. Both `show-on-screen` and `stage-item` read the same shapes on purpose —
+ * to happen. `show-on-screen` and the NEXT/PREVIOUS step read the same shapes on purpose —
  * staging something the host could not then go live with would be a trap.
  */
 export function screenTargetFromRequest(p: any): ScreenTarget {
@@ -52,8 +52,15 @@ export function screenTargetFromRequest(p: any): ScreenTarget {
       slideId: intValue(p.slideId, 'slideId', { min: 1 }),
     };
   }
+  if (kind === 'pubquizQuestion') {
+    return {
+      kind: 'pubquizQuestion',
+      roundId: intValue(p.roundId, 'roundId', { min: 1 }),
+      questionId: intValue(p.questionId, 'questionId', { min: 1 }),
+    };
+  }
   if (kind === 'round') return { kind: 'roundGame', roundId: intValue(p.roundId, 'roundId', { min: 1 }) };
-  throw new HttpError(400, 'kind must be dashboard, round, quizQuestion, slide or prediction');
+  throw new HttpError(400, 'kind must be dashboard, round, quizQuestion, slide, pubquizQuestion or prediction');
 }
 
 export async function incrementGameVersion(client: PoolClient, gameId: number) {
@@ -70,6 +77,7 @@ export type ScreenTarget =
   | { kind: 'dashboard' }
   | { kind: 'quizQuestion'; roundId: number; questionId: number }
   | { kind: 'slide'; roundId: number; slideId: number }
+  | { kind: 'pubquizQuestion'; roundId: number; questionId: number }
   | { kind: 'roundGame'; roundId: number }
   | { kind: 'prediction'; predictionId: number };
 
@@ -79,6 +87,7 @@ type ResolvedTarget = {
   predictionId: number | null;
   quizQuestionId: number | null;
   slideId: number | null;
+  pubquizQuestionId: number | null;
 };
 
 /**
@@ -93,7 +102,7 @@ async function resolveTarget(
   target: ScreenTarget,
   options: { requireActiveRound: boolean },
 ): Promise<ResolvedTarget> {
-  const blank: ResolvedTarget = { mode: 'DASHBOARD', roundId: null, predictionId: null, quizQuestionId: null, slideId: null };
+  const blank: ResolvedTarget = { mode: 'DASHBOARD', roundId: null, predictionId: null, quizQuestionId: null, slideId: null, pubquizQuestionId: null };
 
   if (target.kind === 'dashboard') return blank;
 
@@ -153,12 +162,39 @@ async function resolveTarget(
     return { ...blank, mode: scene, roundId: target.roundId, slideId: target.slideId };
   }
 
+  if (target.kind === 'pubquizQuestion') {
+    if (type !== 'PUBQUIZ') throw new HttpError(409, `A ${type} round has no pubquiz questions to show`);
+    const question = await client.query(
+      'SELECT id,hidden FROM pubquiz_questions WHERE id=$1 AND round_id=$2',
+      [target.questionId, target.roundId],
+    );
+    if (!question.rows[0]) throw new HttpError(404, 'Question not found in this round');
+    // Same rule a held-back presentation page gets, enforced in the same one place: a
+    // question the host has taken out of the run cannot reach the projector by any route,
+    // including a command issued before it was held back.
+    if (question.rows[0].hidden) {
+      throw new HttpError(409, 'That question is hidden — make it visible before putting it on the big screen');
+    }
+    return { ...blank, mode: scene, roundId: target.roundId, pubquizQuestionId: target.questionId };
+  }
+
   // A game round is shown whole: there is no sub-item to point at, the scene reads the
   // round's own runtime tables.
-  if (type === 'LIVE_QUIZ' || type === 'PRESENTATIE') {
+  if (type === 'LIVE_QUIZ' || type === 'PRESENTATIE' || type === 'PUBQUIZ') {
     throw new HttpError(409, `A ${type} round is shown one item at a time — name the question or slide`);
   }
   return { ...blank, mode: scene, roundId: target.roundId };
+}
+
+/**
+ * What a target resolves to, without applying it.
+ *
+ * Exported so the Admin's next-state preview can be built from exactly the resolution the
+ * real step would perform — same type checks, same hidden-page refusal — rather than from
+ * a second reading of the same rules.
+ */
+export async function resolveScreenTarget(client: PoolClient, gameId: number, target: ScreenTarget) {
+  return resolveTarget(client, gameId, target, { requireActiveRound: false });
 }
 
 /**
@@ -183,7 +219,8 @@ export async function setScreen(
     await client.query(
       `UPDATE screen_state
        SET previous_mode=mode,previous_round_id=round_id,previous_prediction_id=prediction_id,
-           previous_quiz_question_id=quiz_question_id,previous_slide_id=slide_id,previous_payload=payload
+           previous_quiz_question_id=quiz_question_id,previous_slide_id=slide_id,
+           previous_pubquiz_question_id=pubquiz_question_id,previous_payload=payload
        WHERE game_night_id=$1`,
       [gameId],
     );
@@ -192,17 +229,37 @@ export async function setScreen(
   const resolved = await resolveTarget(client, gameId, target, { requireActiveRound: true });
 
   await client.query(
-    `INSERT INTO screen_state(game_night_id,mode,round_id,prediction_id,quiz_question_id,slide_id,payload,updated_by)
-     VALUES($1,$2,$3,$4,$5,$6,'{}'::jsonb,$7)
+    `INSERT INTO screen_state(game_night_id,mode,round_id,prediction_id,quiz_question_id,slide_id,pubquiz_question_id,payload,updated_by)
+     VALUES($1,$2,$3,$4,$5,$6,$7,'{}'::jsonb,$8)
      ON CONFLICT(game_night_id) DO UPDATE SET
        mode=EXCLUDED.mode,round_id=EXCLUDED.round_id,prediction_id=EXCLUDED.prediction_id,
        quiz_question_id=EXCLUDED.quiz_question_id,slide_id=EXCLUDED.slide_id,
+       pubquiz_question_id=EXCLUDED.pubquiz_question_id,
        -- The payload is presentational extras only (which Fotoronde photo is enlarged),
        -- and they belong to the scene that set them, so a new scene starts without them.
        payload='{}'::jsonb,updated_at=NOW(),updated_by=EXCLUDED.updated_by`,
-    [gameId, resolved.mode, resolved.roundId, resolved.predictionId, resolved.quizQuestionId, resolved.slideId, actor],
+    [gameId, resolved.mode, resolved.roundId, resolved.predictionId, resolved.quizQuestionId, resolved.slideId, resolved.pubquizQuestionId, actor],
   );
   await client.query('UPDATE game_nights SET current_screen_mode=$2,updated_at=NOW() WHERE id=$1', [gameId, resolved.mode]);
+
+  // The round's cursor follows what the room is looking at.
+  //
+  // Progression and presentation stay two different concepts — the cursor is still per
+  // round, still survives the round being taken off screen, and a dashboard detour does
+  // not move it. But there is exactly one way to disagree about "which question are we
+  // on", and it is having two places that answer it. Whenever the projector is pointed at
+  // an item inside a round, that item is where the round is.
+  if (resolved.roundId && (resolved.quizQuestionId || resolved.slideId || resolved.pubquizQuestionId)) {
+    await client.query(
+      `UPDATE round_runtime SET
+         current_quiz_question_id=COALESCE($2::bigint,current_quiz_question_id),
+         current_slide_id=COALESCE($3::bigint,current_slide_id),
+         current_pubquiz_question_id=COALESCE($4::bigint,current_pubquiz_question_id),
+         revision=revision+1,updated_at=NOW()
+       WHERE round_id=$1`,
+      [resolved.roundId, resolved.quizQuestionId, resolved.slideId, resolved.pubquizQuestionId],
+    );
+  }
   return resolved;
 }
 
@@ -237,12 +294,13 @@ export async function stageScreen(client: PoolClient, gameId: number, target: Sc
   return resolved;
 }
 
-function targetFromRow(mode: string | null, roundId: unknown, predictionId: unknown, questionId: unknown, slideId: unknown): ScreenTarget | null {
+function targetFromRow(mode: string | null, roundId: unknown, predictionId: unknown, questionId: unknown, slideId: unknown, pubquizQuestionId: unknown = null): ScreenTarget | null {
   if (!mode) return null;
   if (mode === 'DASHBOARD') return { kind: 'dashboard' };
   const round = Number(roundId || 0) || null;
   if (questionId && round) return { kind: 'quizQuestion', roundId: round, questionId: Number(questionId) };
   if (slideId && round) return { kind: 'slide', roundId: round, slideId: Number(slideId) };
+  if (pubquizQuestionId && round) return { kind: 'pubquizQuestion', roundId: round, questionId: Number(pubquizQuestionId) };
   if (predictionId) return { kind: 'prediction', predictionId: Number(predictionId) };
   if (round) return { kind: 'roundGame', roundId: round };
   return null;
@@ -266,20 +324,20 @@ export async function promoteStaged(client: PoolClient, gameId: number, actor: s
 /** Return to the presentation saved by the last `remember` detour to the dashboard. */
 export async function restorePreviousScreen(client: PoolClient, gameId: number, actor: string) {
   const state = await client.query(
-    `SELECT previous_mode,previous_round_id,previous_prediction_id,previous_quiz_question_id,previous_slide_id
+    `SELECT previous_mode,previous_round_id,previous_prediction_id,previous_quiz_question_id,previous_slide_id,previous_pubquiz_question_id
      FROM screen_state WHERE game_night_id=$1 FOR UPDATE`,
     [gameId],
   );
   const row = state.rows[0];
   if (!row?.previous_mode) throw new HttpError(409, 'There is no previous screen to return to');
 
-  const target = targetFromRow(row.previous_mode, row.previous_round_id, row.previous_prediction_id, row.previous_quiz_question_id, row.previous_slide_id);
+  const target = targetFromRow(row.previous_mode, row.previous_round_id, row.previous_prediction_id, row.previous_quiz_question_id, row.previous_slide_id, row.previous_pubquiz_question_id);
   if (!target) throw new HttpError(409, 'The previous screen can no longer be restored');
 
   await setScreen(client, gameId, target, actor);
   await client.query(
     `UPDATE screen_state SET previous_mode=NULL,previous_round_id=NULL,previous_prediction_id=NULL,
-       previous_quiz_question_id=NULL,previous_slide_id=NULL,previous_payload='{}'::jsonb
+       previous_quiz_question_id=NULL,previous_slide_id=NULL,previous_pubquiz_question_id=NULL,previous_payload='{}'::jsonb
      WHERE game_night_id=$1`,
     [gameId],
   );
@@ -295,10 +353,10 @@ export async function clearScreenIfReferences(
   client: PoolClient,
   gameId: number,
   actor: string,
-  refs: { roundId?: number; questionId?: number; slideId?: number; predictionId?: number },
+  refs: { roundId?: number; questionId?: number; slideId?: number; pubquizQuestionId?: number; predictionId?: number },
 ) {
   const state = await client.query(
-    'SELECT mode,round_id,prediction_id,quiz_question_id,slide_id FROM screen_state WHERE game_night_id=$1',
+    'SELECT mode,round_id,prediction_id,quiz_question_id,slide_id,pubquiz_question_id FROM screen_state WHERE game_night_id=$1',
     [gameId],
   );
   const row = state.rows[0];
@@ -306,6 +364,7 @@ export async function clearScreenIfReferences(
   const matches = (refs.roundId && Number(row.round_id) === refs.roundId)
     || (refs.predictionId && Number(row.prediction_id) === refs.predictionId)
     || (refs.questionId && Number(row.quiz_question_id) === refs.questionId)
-    || (refs.slideId && Number(row.slide_id) === refs.slideId);
+    || (refs.slideId && Number(row.slide_id) === refs.slideId)
+    || (refs.pubquizQuestionId && Number(row.pubquiz_question_id) === refs.pubquizQuestionId);
   if (matches) await setScreen(client, gameId, { kind: 'dashboard' }, actor);
 }

@@ -280,6 +280,65 @@ Migration 0006 adds market-owned:
 
 `admin_audit_log` is operational history rather than wallet history. Game reset deliberately preserves this table and inserts a final `GAME_RESET` event before cleanup. Full Reset preserves it for the same reason and writes a `FULL_RESET` event carrying the per-table delete counts — after the reset that entry is the only record the played evening ever happened.
 
+## PUBQUIZ
+
+A pubquiz is a presentation whose pages are questions: the projector shows one large, the room answers on their phones, the host reveals, and stepping forward opens the next one. It combines what `PRESENTATIE` does for presentation and navigation with what `LIVE_QUIZ` does for answers and points.
+
+**Four tables, sharing none with LIVE_QUIZ:**
+
+| Table | Holds |
+|---|---|
+| `pubquiz_questions` | authored: question, body, points, image, timer, `hidden`, order |
+| `pubquiz_question_options` | the answers and which one is correct |
+| `pubquiz_question_state` | runtime: `READY → OPEN → CLOSED → REVEALED`, plus `revision` |
+| `pubquiz_answers` | which option each player picked, unique by `(question_id, player_id)` |
+
+The duplication with LIVE_QUIZ is real and deliberate, for three reasons. `assert_round_type` binds each content table to exactly one round type, so sharing `live_quiz_questions` would mean weakening the trigger that makes "one type per round" a database fact. Media means something different: a quiz question's `context_media_key` is evidence shown *after* the reveal, a pubquiz image is part of the question and is up from the start — one column cannot be both. And a pubquiz question can be held back from the run, as a presentation page can; a quiz question cannot.
+
+What *is* shared is rules, not tables: `netlify/lib/pubquiz.ts` imports `questionParticipation` rather than restating the arithmetic, and the navigation goes through the same `planStep`/`advanceScreen` every stepped round uses.
+
+**Four phases, not five.** LIVE_QUIZ has `SETTLED` after `REVEALED` because revealing and paying are two host actions there. A pubquiz pays at the reveal, in the same transaction, so `REVEALED` is terminal — reopening it would mean paying twice or leaving the first payout standing against a question being asked again. `CLOSED → OPEN` is allowed, because closing too early is the mistake that actually happens.
+
+**Exactly one correct answer**, enforced by `pubquiz_one_correct_option_per_question` (a partial unique index) as well as by the endpoint. A pub quiz announces *the* answer; two of them would make both the projector's reveal and the player's "you were right" ambiguous. This is the one place PUBQUIZ deliberately differs from LIVE_QUIZ, which allows several.
+
+**Auto-open.** Stepping onto a question, or starting the round, opens it — guarded on `status='READY'`, so stepping *back* onto a closed or revealed question never reopens scoring the room has watched settle.
+
+**Rewards** are coins like every other payout: a `PUBQUIZ_REWARD` ledger row and a wallet move in one transaction, pinned by `ledger_unique_pubquiz_reward` on `(pubquiz_question_id, player_id, transaction_type)`. One reward per player per question, however many times a reveal is clicked.
+
+**One answer per player, final.** Deliberately the same rule LIVE_QUIZ has — two quiz types in one evening that disagree about whether you may change your mind is a rule players would have to learn twice. Enforced by the unique constraint, because two taps arriving together would both pass any application check.
+
+**Three DTOs.** `adminPubquizQuestion` has the answer key and the live distribution — deciding when to close is what the distribution is for. `screenPubquizQuestion` and `playerPubquizQuestion` have neither `isCorrect` nor any per-option count before the reveal: a tally is the answer key in disguise, so counts and correctness appear together or not at all. The player DTO adds only what is theirs — which option they picked, and after the reveal whether it was right and what it paid.
+
+## Roulette: a round holds many runs
+
+A row in `roulette_games` is one **run** of the wheel inside a `ROULETTE` round, numbered by `run_number` and unique per round. The round stays `ACTIVE` across as many runs as the host wants; `OPEN_AGAIN` adds a run, and every finished one keeps its own bets, ledger entries and totals. Bets hang off `roulette_game_id`, so they cannot leak between runs.
+
+```
+OPEN → chips → CLOSE → SPIN → (result final: server settles) → OPEN_AGAIN → …
+```
+
+**Settlement is not an Admin action.** `syncTimedState` moves a run out of `SPINNING` once `ROULETTE_SPIN_MS` has elapsed, and the same transaction calls `settleRouletteRun`. The `WHERE status='SPINNING'` guard is the concurrency story: two pollers arriving together, one wins the row and pays, the other gets no rows and does nothing. Per bet, the business key `roulette:payout:bet:<id>` plus `ledger_unique_roulette_bet_action` means one bet can be paid exactly once however often settlement runs. There is no `SETTLE` action any more — a payout that waits for a button is a payout that can be forgotten.
+
+`total_staked`, `total_payout` and `participant_count` are frozen on the run when it settles. Derivable from the bets, and stored anyway: the projector reads them on its hottest path, and a run's result is history the moment it settles — a later refund must not change what the room was told. `total_payout` is **gross** (returned stake plus winnings, exactly what the ledger moved); the net figure is the subtraction and is deliberately not stored so the two cannot disagree. `participant_count` counts distinct players, so five chips is one participant.
+
+Stakes are a closed set: `ROULETTE_CHIPS` in `netlify/lib/economy.ts`. The free-amount field is gone from the phone and `isRouletteChip` rejects anything else server-side.
+
+## Stepping the projector
+
+`netlify/lib/screen-flow.ts` is the only place that answers "what comes next". `planStep` computes it without writing; `advanceScreen` takes it. The Admin's NEXT preview calls the first through `/api/next-screen-state` and renders the answer with `getScreenState`, the projector's own snapshot builder — so the preview is the step, drawn early, rather than a second reading of the same rules.
+
+`navigationCapabilities` says which types step at all: `PRESENTATIE` and `LIVE_QUIZ` both ways, the four game rounds neither. Backwards is not forced onto a state machine where stepping back would mean unspinning a settled wheel.
+
+Stepping past the last item completes the round, through the same `completeRound` in `round-lifecycle.ts` that the Admin's own button uses. For a presentation that means the last *visible* page: it is shown normally, and the step **after** it ends the round.
+
+**Preview → Go Live is gone.** There is no staged slot; `screen_state.staged_*` is cleared by `0019` and unread. `setScreen` also moves the round's cursor whenever the projector is pointed at an item inside a round, so there is one answer to "where is this round".
+
+**Starting a round claims the big screen**, for every type, via `initialScreenTarget`. This reverses the earlier rule that starting changed nothing the room sees. Progression and presentation are still separate concepts; starting is simply *defined* as including the presentation decision, made in one place instead of by each frontend.
+
+**Automatic completion.** A `SLOTMACHINE` round ends itself when every eligible player has used their run — eligible being the round's allowlist, or every active player when it has none. Checked in `syncTimedState` after a spin's animation window elapses, because a spin is not over until then. A player who never locks a series keeps the round open on purpose, and the host can still complete it by hand.
+
+**Animation is guaranteed by the surface, not the poll.** The big screen polls every 5 s and the slot window is 3.2 s, so a poll can land after the server already revealed. `planReveal`/`useHeldReveal` make the projector play the full animation the first time it sees a spin, whatever the server says. Safe because it is presentation only: the outcome and the coins were committed in the transaction that created the spin, and nothing financial waits on that timer.
+
 ## Presentation pages on the projector
 
 A `PRESENTATIE` round is an ordered list of pages in `presentation_slides`, with one runtime row each in `presentation_slide_state`. Three separate things decide what the room sees, and they are easy to confuse:
@@ -355,5 +414,7 @@ Unrelated legacy schema (`teams`, `players.team_id`, avatar/admin-note fields, c
 - `0016_round_is_the_content.sql`: rounds become the primary content type. Adds `rounds.type`, `instructions` and `default_points`, renames `round_number` to `sort_order`, and creates the per-type content tables plus the runtime tables beside them (`round_runtime`, `live_quiz_question_state`, `presentation_slide_state`). Converts every block: `DUOLINGO_QUESTION` becomes a question with option rows; `TEXT`/`QUESTION`/`PICTURE`/`MUSIC`/`BUZZER`/`WAGER` become presentation slides, keeping their reveal semantics as `reveal_text` and `hide_title_until_reveal`; `FOTORONDE` payload subjects become rows; `SLOTMACHINE` payload settings become `slotmachine_rounds` plus an allowlist. Repoints every runtime table from `round_block_id` to `round_id`, replaces the screen payload's `blockId` with typed pointers, then drops `round_blocks` and `game_nights.current_round_block_id`.
 - `0017_default_players.sql`: adds `players.seed_key` with a partial unique index per game night, and `game_nights.default_players_initialized_at` as the initialization latch. Adopts players already present under a standard name (case-insensitively, so a player recorded as "Raul" is deliberately *not* taken to be "Raúl"), closes the latch on every night that already has players without adding anyone to it, and seeds the ten with 100 coins into nights that have none — which on a fresh database is the game night `0003` creates. Every decision it makes per night is written to `migration_notes`.
 - `0018_presentation_page_visibility.sql`: adds `presentation_slides.hidden`, so a presentation page can be held back from the run while staying fully authored and editable. Every existing page stays visible; the per-round decision is written to `migration_notes`. The round/page ordering index carries the flag so navigation does not go back to the heap for it.
+- `0019_roulette_runs.sql`: adds `roulette_games.run_number` (unique per round) plus the frozen settlement snapshot `total_staked`/`total_payout`/`participant_count`, backfilled for runs that already settled. Creates `one_live_roulette_run_per_round` conditionally — a database that already held two live runs for one round gets a `migration_notes` entry instead of a failed migration. Clears `screen_state.staged_*`, which Preview → Go Live used; the columns are kept but unread.
+- `0020_pubquiz.sql`: adds the `PUBQUIZ` round type and its four tables, the `PUBQUIZ_QUESTION` screen mode with its `screen_state`/`round_runtime` pointers, `ledger_entries.pubquiz_question_id` with a one-reward-per-player-per-question index, a partial unique index enforcing exactly one correct option, and an `assert_round_type('PUBQUIZ')` trigger. Changes no existing round.
 
   **A round that mixed content types becomes several rounds.** A round cannot hold a roulette block and a quiz block at once and still have one type, so the migration splits it: the first segment keeps the original round row — and therefore its id, its ledger attribution and its groups — and each further segment becomes a new round placed directly after it, starting as `UPCOMING` because only one round may be `ACTIVE`. Nothing is deleted: `round_blocks_archive` holds every block and payload verbatim, and `migration_notes` records each split, each re-attributed ledger row and each allowlist entry naming a player who no longer exists.

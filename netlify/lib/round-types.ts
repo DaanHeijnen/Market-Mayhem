@@ -13,6 +13,7 @@
 export const ROUND_TYPES = [
   'LIVE_QUIZ',
   'PRESENTATIE',
+  'PUBQUIZ',
   'ROULETTE',
   'SLOTMACHINE',
   'PAK_EEN_ZES',
@@ -38,6 +39,7 @@ export const SCREEN_MODES = [
   'DASHBOARD',
   'QUIZ_QUESTION',
   'SLIDE',
+  'PUBQUIZ_QUESTION',
   'PREDICTIONS_OPEN',
   'PREDICTION_LOCKED',
   'PREDICTION_RESULT',
@@ -59,6 +61,7 @@ export type ScreenMode = typeof SCREEN_MODES[number];
 export const SCENE_FOR_ROUND_TYPE: Record<RoundType, ScreenMode> = {
   LIVE_QUIZ: 'QUIZ_QUESTION',
   PRESENTATIE: 'SLIDE',
+  PUBQUIZ: 'PUBQUIZ_QUESTION',
   ROULETTE: 'ROULETTE',
   SLOTMACHINE: 'SLOTMACHINE',
   PAK_EEN_ZES: 'PAK_EEN_ZES',
@@ -66,7 +69,7 @@ export const SCENE_FOR_ROUND_TYPE: Record<RoundType, ScreenMode> = {
 };
 
 /** Round types whose content is an ordered list the host steps through. */
-export const STEPPED_ROUND_TYPES: RoundType[] = ['LIVE_QUIZ', 'PRESENTATIE'];
+export const STEPPED_ROUND_TYPES: RoundType[] = ['LIVE_QUIZ', 'PRESENTATIE', 'PUBQUIZ'];
 
 export function isSteppedRound(type: RoundType) {
   return STEPPED_ROUND_TYPES.includes(type);
@@ -76,3 +79,10 @@ export const MAX_QUIZ_OPTIONS = 6;
 export const MIN_QUIZ_OPTIONS = 2;
 export const MAX_QUIZ_QUESTIONS = 50;
 export const MAX_PRESENTATION_SLIDES = 50;
+
+/**
+ * A pubquiz question is a presentation page that happens to be a question, so it is bounded
+ * like a presentation rather than like a quiz. The option bounds are the quiz's, because
+ * that is what a phone can render as buttons.
+ */
+export const MAX_PUBQUIZ_QUESTIONS = 50;
