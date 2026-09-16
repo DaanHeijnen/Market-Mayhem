@@ -73,6 +73,8 @@ export type SlideRow = {
   media_name: string | null;
   reveal_text: string | null;
   hide_title_until_reveal: boolean;
+  // Absent on the projector's own query, which never needs it — see screenSlide.
+  hidden?: boolean;
   revealed_at?: unknown;
   revision?: number | string;
 };
@@ -242,6 +244,7 @@ export function adminSlide(row: SlideRow) {
     mediaName: row.media_name ?? null,
     revealText: row.reveal_text ?? null,
     hideTitleUntilReveal: Boolean(row.hide_title_until_reveal),
+    hidden: Boolean(row.hidden),
     revealedAt: row.revealed_at ?? null,
     revision: num(row.revision),
   };
@@ -253,6 +256,11 @@ export function adminSlide(row: SlideRow) {
  * The title is omitted entirely while it is the answer, and the reveal line is absent
  * until the host reveals — neither is sent as null-with-a-flag, because a value that is
  * not on the wire cannot be read off the wire.
+ */
+/*
+ * `hidden` is deliberately absent below. The projector is only ever pointed at a visible
+ * page, so the flag would always read the same — and which pages a host is holding back
+ * is planning, not something the room is entitled to.
  */
 export function screenSlide(row: SlideRow) {
   const revealed = slideIsRevealed(row.revealed_at);

@@ -71,7 +71,7 @@ The old game-level prediction duration/minimum/maximum columns were introduced b
 
 ## Players, wallets and ledger
 
-`players.active=false` is used for deactivation so financial history remains intact. `players.starting_balance_snapshot` stores the immutable configured starting balance that applied when that player was created; it is not reconstructed from later Settings changes and remains exact even when the starting balance was zero. `wallets.current_balance` is **available** balance. Unresolved prediction/roulette stakes are tracked by active bet rows and are added back when calculating total player value.
+`players.active=false` is used for deactivation so financial history remains intact. `players.starting_balance_snapshot` stores the immutable configured starting balance that applied when that player was created; it is not reconstructed from later Settings changes and remains exact even when the starting balance was zero. `players.seed_key` marks one of the ten standard players and is `NULL` for anyone the Admin added by hand; it is unique per game night through a partial index, which is what makes initialization idempotent — see **The standard players** below. `wallets.current_balance` is **available** balance. Unresolved prediction/roulette stakes are tracked by active bet rows and are added back when calculating total player value.
 
 `ledger_entries` is immutable. Relevant attribution columns include:
 
@@ -280,12 +280,56 @@ Migration 0006 adds market-owned:
 
 `admin_audit_log` is operational history rather than wallet history. Game reset deliberately preserves this table and inserts a final `GAME_RESET` event before cleanup. Full Reset preserves it for the same reason and writes a `FULL_RESET` event carrying the per-table delete counts — after the reset that entry is the only record the played evening ever happened.
 
+## Presentation pages on the projector
+
+A `PRESENTATIE` round is an ordered list of pages in `presentation_slides`, with one runtime row each in `presentation_slide_state`. Three separate things decide what the room sees, and they are easy to confuse:
+
+| | Where | What it decides |
+|---|---|---|
+| `hidden` | `presentation_slides` (authored) | whether the page takes part in the evening at all |
+| `hide_title_until_reveal` | `presentation_slides` (authored) | whether the title is withheld *on* a page being shown |
+| `revealed_at` | `presentation_slide_state` (runtime) | whether the secret on that page has been shown yet |
+
+Only the first survives a Full Reset, which is the point of it being on the authored row: "is this page part of the night" is a decision the host made while building, and "has the answer been shown yet" is not.
+
+**Skipping.** `visibleNeighbours` in `netlify/lib/presentation.ts` is the whole rule. It is positional rather than an index into the filtered list, because the cursor can legitimately be standing on a hidden page — the host holds back the page currently up — and stepping from there still has to mean the nearest visible page in that direction. Nothing is renumbered: making a page visible again restores `1 → 2 → 3` because skipping is decided when the host steps.
+
+**Pointing.** The projector target is `screen_state.mode='SLIDE'` plus `round_id` and `slide_id`. There is no generic block pointer anywhere in the schema; `game_nights.current_round_block_id` was dropped by `0016` and is not coming back.
+
+**The one guard.** Every route that can move the projector — `show-on-screen`, `stage-item`, `go-live`, `restore-screen` — resolves its target through `resolveTarget` in `netlify/lib/game-state.ts`, which refuses a hidden page. That is what makes "a held-back page never reaches the big screen" structural rather than a check each route remembers to make, and it is also what turns a stale command into a refusal: a page staged while visible and held back before GO LIVE fails at promotion instead of overwriting the screen.
+
+**Concurrency.** Relative commands carry the state they were issued against: `slide-navigate` is guarded by `round_runtime.revision` and `reveal-slide` by `presentation_slide_state.revision`, so a step from a stale tab is refused rather than applied. `set-slide-visibility` is guarded on the value it read (`WHERE hidden=$expected`) and answers a repeat of the same command with `duplicate`, so a double click is harmless and two tabs racing in opposite directions resolve to one winner. Absolute commands — "show page 7" — are not version-guarded, because a host who names a page means that page whatever the screen was showing; what protects them is the hidden check above.
+
+**What reaches the projector.** `screenSlide` in `netlify/lib/dto.ts` builds the page explicitly and the snapshot carries only the single page being shown — never the round's other pages, and never `hidden`, `hideTitleUntilReveal`, `mediaName` or the revision. A withheld title and an unrevealed answer are absent from the payload rather than sent as null with a flag.
+
+## The standard players
+
+Every game night is played by the same ten people — Jordi, Wouter, Bas, Boyen, David, Dries, Moise, Raúl, Tijs and Twan — each starting on 100 coins. They are domain configuration, not something a host retypes.
+
+The list lives in `netlify/lib/default-players.ts` as `DEFAULT_PLAYERS` and `DEFAULT_PLAYER_COINS`. Migration `0017` repeats it once so a freshly migrated database already has its players before any request arrives; `tests/default-players.test.ts` reads both and fails if they drift apart. The frontend never holds the list — it renders whatever the server's player rows say, like any other state.
+
+Identity is `players.seed_key` (`default:jordi`, …), not the display name. The name is editable and carries spelling that matters (Raúl has an accent), so a renamed player has to stay the same player rather than become a second one. `players_unique_seed_key` is a partial unique index on `(game_night_id, seed_key)`, so "there is exactly one standard Jordi" is a database invariant.
+
+Two operations, deliberately different:
+
+- **`initializeDefaultPlayers(client, gameId, actor)`** — ensure initial setup. `game_nights.default_players_initialized_at` is the latch: once set, this is a no-op. Without it this would be a rule that all ten always exist, and a player the host deliberately removed would reappear on the next request. There is no background process checking the roster.
+- **`resetPlayersToDefaults(client, gameId, actor)`** — reset to defaults. Removes every player with a `NULL` seed key, restores the ten (a deactivated or renamed one is put back **as the same row**, so their join link and session survive), sets every wallet to 100 and writes one opening `STARTING_BALANCE` entry each.
+
+Both destructive actions end in that state: Full Reset calls the reset, and Delete Game Save calls it after wiping the night, so the Admin is never left with an empty player list and no way to get the roster back.
+
+Idempotency is carried by database constraints rather than by application checks: the player upsert is arbitrated by the seed-key index, the wallet upsert by its primary key, and the opening ledger entry by `ledger_unique_idempotency` under the business key `default-player:starting-balance:<seed_key>`. Both reset routes already hold `game_nights` `FOR UPDATE`, so concurrent or double-clicked resets serialise and the second finds nothing left to do.
+
+The reset **deletes** the night's ledger and writes one fresh opening entry rather than posting correcting transactions. That is the decision Full Reset already made for wallets and the reason is unchanged: a reset is meant to leave no trace of the run before it, and a compensating entry would leave that run visible in every player's history as though it had really happened. What remains is one entry per player, which is also what keeps wallet and ledger in step.
+
+Coins are adjusted afterwards through `adjust-coins`, which accepts either `amount` (a movement) or `targetBalance` (a destination). A destination is resolved server-side under the wallet's row lock, so "make it 250" cannot be computed against a balance the Admin screen has already polled away from. The 100 is only ever applied at initialization and at reset.
+
 ## Runtime vs configuration
 
 Full Reset splits every table in this schema into two groups, listed explicitly as `RUNTIME_TABLES` and `PRESERVED_TABLES` in `netlify/lib/full-reset.ts`:
 
 - **Runtime** — what playing the evening produced: `ledger_entries`, `bets`, `roulette_games`/`roulette_bets`, `slot_series`/`slot_spins`, the four `pak_een_zes_*` tables, `photo_rounds`/`photo_submissions`, `quiz_answers`, `prediction_requests`, and the legacy `player_timers`/`player_codewords`. Deleted, children before parents.
 - **Configuration** — what the Admin prepared: `rounds`, the six per-type content tables (`live_quiz_questions`, `live_quiz_question_options`, `presentation_slides`, `fotoronde_subjects`, `slotmachine_rounds`, `slotmachine_round_participants`), `round_groups`/`round_group_members`, `predictions`, `slot_configs`/`slot_reel_symbols`/`slot_outcome_types`, `players`, `wallets`, `player_join_tokens`, `player_sessions`, `game_nights`, `screen_state`, `admin_sessions`, `admin_audit_log`, and the two archives `round_blocks_archive`/`migration_notes`. Kept, with any runtime columns reset in place.
+- **Players are preserved but reconciled** — `players` and `wallets` stay in the configuration list because the standard ten keep their rows, and with them their join links and sessions. A reset does delete the players added by hand during the run, and sets every surviving wallet back to 100. See **The standard players** above.
 - **Runtime that lives beside configuration** — `live_quiz_question_state`, `presentation_slide_state` and `round_runtime` are listed as preserved because their rows are 1:1 with authored content and must not disappear; their *columns* are reset in place instead.
 
 **A new table must be added to one of those two lists.** `tests/full-reset.test.ts` reads the live table set out of the migrations in this directory and fails when a table appears in neither — an unclassified table is one whose test data would silently survive a reset, or whose configuration would silently be wiped by one.
@@ -309,5 +353,7 @@ Four tables have no `game_night_id` of their own and are scoped through their pa
 
 Unrelated legacy schema (`teams`, `players.team_id`, avatar/admin-note fields, codewords/timers, session `last_seen_at`, correction link) remains for upgrade safety even though current production UI does not use it.
 - `0016_round_is_the_content.sql`: rounds become the primary content type. Adds `rounds.type`, `instructions` and `default_points`, renames `round_number` to `sort_order`, and creates the per-type content tables plus the runtime tables beside them (`round_runtime`, `live_quiz_question_state`, `presentation_slide_state`). Converts every block: `DUOLINGO_QUESTION` becomes a question with option rows; `TEXT`/`QUESTION`/`PICTURE`/`MUSIC`/`BUZZER`/`WAGER` become presentation slides, keeping their reveal semantics as `reveal_text` and `hide_title_until_reveal`; `FOTORONDE` payload subjects become rows; `SLOTMACHINE` payload settings become `slotmachine_rounds` plus an allowlist. Repoints every runtime table from `round_block_id` to `round_id`, replaces the screen payload's `blockId` with typed pointers, then drops `round_blocks` and `game_nights.current_round_block_id`.
+- `0017_default_players.sql`: adds `players.seed_key` with a partial unique index per game night, and `game_nights.default_players_initialized_at` as the initialization latch. Adopts players already present under a standard name (case-insensitively, so a player recorded as "Raul" is deliberately *not* taken to be "Raúl"), closes the latch on every night that already has players without adding anyone to it, and seeds the ten with 100 coins into nights that have none — which on a fresh database is the game night `0003` creates. Every decision it makes per night is written to `migration_notes`.
+- `0018_presentation_page_visibility.sql`: adds `presentation_slides.hidden`, so a presentation page can be held back from the run while staying fully authored and editable. Every existing page stays visible; the per-round decision is written to `migration_notes`. The round/page ordering index carries the flag so navigation does not go back to the heap for it.
 
   **A round that mixed content types becomes several rounds.** A round cannot hold a roulette block and a quiz block at once and still have one type, so the migration splits it: the first segment keeps the original round row — and therefore its id, its ledger attribution and its groups — and each further segment becomes a new round placed directly after it, starting as `UPCOMING` because only one round may be `ACTIVE`. Nothing is deleted: `round_blocks_archive` holds every block and payload verbatim, and `migration_notes` records each split, each re-attributed ledger row and each allowlist entry naming a player who no longer exists.

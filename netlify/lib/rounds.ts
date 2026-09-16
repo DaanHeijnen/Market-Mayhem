@@ -249,7 +249,7 @@ export async function loadAllRoundContent(db: Queryable, gameId: number) {
     ),
     db.query(
       `SELECT s.id,s.round_id,s.sort_order,s.title,s.body,s.media_key,s.media_kind,s.media_name,
-              s.reveal_text,s.hide_title_until_reveal,st.revealed_at,st.revision
+              s.reveal_text,s.hide_title_until_reveal,s.hidden,st.revealed_at,st.revision
        FROM presentation_slides s
        LEFT JOIN presentation_slide_state st ON st.slide_id=s.id
        WHERE s.game_night_id=$1 ORDER BY s.round_id,s.sort_order,s.id`,

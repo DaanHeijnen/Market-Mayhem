@@ -141,8 +141,15 @@ async function resolveTarget(
 
   if (target.kind === 'slide') {
     if (type !== 'PRESENTATIE') throw new HttpError(409, `A ${type} round has no slides to show`);
-    const slide = await client.query('SELECT id FROM presentation_slides WHERE id=$1 AND round_id=$2', [target.slideId, target.roundId]);
+    const slide = await client.query('SELECT id,hidden FROM presentation_slides WHERE id=$1 AND round_id=$2', [target.slideId, target.roundId]);
     if (!slide.rows[0]) throw new HttpError(404, 'Slide not found in this round');
+    // The one place this is enforced, which is why it holds everywhere. Showing, staging,
+    // going live and returning from the standings all resolve their target here, so a
+    // hidden page cannot reach the projector by any route — including a command issued
+    // before it was hidden, which now fails instead of overwriting the screen with it.
+    if (slide.rows[0].hidden) {
+      throw new HttpError(409, 'That page is hidden — make it visible before putting it on the big screen');
+    }
     return { ...blank, mode: scene, roundId: target.roundId, slideId: target.slideId };
   }
 

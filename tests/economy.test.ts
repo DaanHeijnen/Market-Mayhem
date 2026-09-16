@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   canTransition,
+  isSameManualAdjustment,
   ledgerBalance,
   maxPredictionStake,
   payoutForStake,
@@ -53,5 +54,41 @@ describe('prediction economy', () => {
     expect(canTransition('RESULT', 'SETTLED')).toBe(true);
     expect(canTransition('RESULT', 'CANCELLED')).toBe(false);
     expect(canTransition('SETTLED', 'OPEN')).toBe(false);
+  });
+});
+
+describe('replaying a manual coin adjustment', () => {
+  const existing = {
+    transaction_type: 'MANUAL_ADJUSTMENT',
+    player_id: '7',
+    amount: '150',
+    description: 'Bonus for the quiz',
+    attributed_round_id: '3',
+  };
+  const intent = { playerId: 7, requestedAmount: 150, reason: 'Bonus for the quiz', roundId: 3 };
+
+  it('recognises the same movement sent twice', () => {
+    expect(isSameManualAdjustment(existing, intent)).toBe(true);
+  });
+
+  it('refuses a key reused for a different player, reason, round or amount', () => {
+    expect(isSameManualAdjustment(existing, { ...intent, playerId: 8 })).toBe(false);
+    expect(isSameManualAdjustment(existing, { ...intent, reason: 'Something else' })).toBe(false);
+    expect(isSameManualAdjustment(existing, { ...intent, roundId: null })).toBe(false);
+    expect(isSameManualAdjustment(existing, { ...intent, requestedAmount: 149 })).toBe(false);
+  });
+
+  it('refuses an entry that is not a manual adjustment at all', () => {
+    expect(isSameManualAdjustment({ ...existing, transaction_type: 'BET_PAYOUT' }, intent)).toBe(false);
+  });
+
+  // The case the two modes exist for: "set it to 250" moved 150 the first time and would
+  // move 0 the second, so the amount cannot be what identifies the request.
+  it('recognises a replayed destination whatever movement it worked out to', () => {
+    expect(isSameManualAdjustment(existing, { ...intent, requestedAmount: null })).toBe(true);
+  });
+
+  it('still compares everything else when the caller named a destination', () => {
+    expect(isSameManualAdjustment(existing, { ...intent, requestedAmount: null, reason: 'Other' })).toBe(false);
   });
 });

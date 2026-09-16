@@ -175,7 +175,7 @@ export async function getAdminState(gameId: number) {
          SELECT p.id,DENSE_RANK() OVER (ORDER BY w.current_balance DESC) AS rank
          FROM players p JOIN wallets w ON w.player_id=p.id WHERE p.game_night_id=$1 AND p.active=TRUE
        )
-       SELECT p.id,p.display_name,p.public_color,p.active,p.created_at,w.current_balance,r.rank,
+       SELECT p.id,p.display_name,p.public_color,p.active,p.created_at,p.seed_key,w.current_balance,r.rank,
               EXISTS(SELECT 1 FROM player_sessions s WHERE s.player_id=p.id AND s.revoked_at IS NULL AND s.expires_at>NOW()) AS joined,
               COALESCE((SELECT SUM(b.stake) FROM bets b JOIN predictions pr ON pr.id=b.prediction_id WHERE b.player_id=p.id AND b.status='ACTIVE' AND pr.status IN ('OPEN','LOCKED','RESULT')),0)::int AS locked_prediction
        FROM players p JOIN wallets w ON w.player_id=p.id LEFT JOIN ranked r ON r.id=p.id
@@ -333,7 +333,10 @@ export async function getAdminState(gameId: number) {
     // The round's own execution cursor. Separate from `screen` above, and deliberately
     // so: one is where the game is, the other is what the audience is looking at.
     roundRuntime: runtime,
-    players: players.rows.map((p: any) => ({ ...p, id: Number(p.id), current_balance: Number(p.current_balance), locked_prediction: Number(p.locked_prediction), rank: p.rank ? Number(p.rank) : null, active: Boolean(p.active), joined: Boolean(p.joined) })),
+    // `is_default` rather than the seed key itself: the Admin screen only needs to know
+    // whether this is one of the standard ten — they are the players a reset puts back,
+    // and the others are the ones it removes.
+    players: players.rows.map((p: any) => ({ ...p, id: Number(p.id), current_balance: Number(p.current_balance), locked_prediction: Number(p.locked_prediction), rank: p.rank ? Number(p.rank) : null, active: Boolean(p.active), joined: Boolean(p.joined), is_default: p.seed_key != null })),
     predictions: normalizedPredictions,
     activePredictions: normalizedPredictions.filter((p: any) => ['OPEN','LOCKED','RESULT'].includes(p.status)),
     recentTransactions: recent.rows.map((r: any) => ({ ...r, id: Number(r.id), amount: Number(r.amount) })),
