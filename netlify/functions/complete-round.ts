@@ -2,6 +2,9 @@ import { requireAdmin, audit } from '../lib/auth';
 import { withTransaction } from '../lib/db';
 import { body, ok, intValue, HttpError } from '../lib/http';
 import { incrementGameVersion, setScreenMode } from '../lib/game-state';
+import { closeSlotSeriesForBlock } from '../lib/slot-state';
+import { closePakEenZesForBlock } from '../lib/pak-een-zes-state';
+import { closePhotoRoundForBlock } from '../lib/photo-round-state';
 import { wrap } from './_wrap';
 
 export default wrap(async request => {
@@ -39,6 +42,41 @@ export default wrap(async request => {
       [roundId],
     );
     if (liveRoulette.rows[0]) throw new HttpError(409, `Roulette #${liveRoulette.rows[0].id} is still ${liveRoulette.rows[0].status}`);
+
+    // Slotmachine series are closed out rather than blocking completion, and unspun
+    // spins are refunded. Same reasoning as changing content block: the host must be
+    // able to end the round even if a player locked twenty spins and wandered off, and
+    // no coins are lost by doing so.
+    const slotBlocks = await client.query(
+      "SELECT id FROM round_blocks WHERE round_id=$1 AND type='SLOTMACHINE' ORDER BY sort_order,id",
+      [roundId],
+    );
+    for (const slotBlock of slotBlocks.rows) {
+      await closeSlotSeriesForBlock(client, gameId, Number(slotBlock.id), admin.username, 'round completed');
+    }
+
+    // A Pak een Zes in progress is closed rather than blocking completion. Nothing
+    // financial is at stake, and its draws and predictions are preserved so a later
+    // scoring pass still has the full record.
+    const pakBlocks = await client.query(
+      "SELECT id FROM round_blocks WHERE round_id=$1 AND type='PAK_EEN_ZES' ORDER BY sort_order,id",
+      [roundId],
+    );
+    for (const pakBlock of pakBlocks.rows) {
+      await closePakEenZesForBlock(client, gameId, Number(pakBlock.id));
+    }
+
+    // A Fotoronde still taking photos is closed, not cancelled: the submissions and any
+    // credits already awarded are kept, and unjudged photos stay judgeable afterwards.
+    // Completing a round therefore never leaves scoring half-finished — it leaves it
+    // clearly unstarted, which the Admin panel reports.
+    const photoBlocks = await client.query(
+      "SELECT id FROM round_blocks WHERE round_id=$1 AND type='FOTORONDE' ORDER BY sort_order,id",
+      [roundId],
+    );
+    for (const photoBlock of photoBlocks.rows) {
+      await closePhotoRoundForBlock(client, gameId, Number(photoBlock.id));
+    }
 
     // Draft roulette games have no money attached and should not survive a
     // completed round as stray operational state.

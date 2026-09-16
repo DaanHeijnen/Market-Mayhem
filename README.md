@@ -15,7 +15,7 @@ Market Mayhem is a private game-night economy with player wallets, prediction de
 ## Routes
 
 - `/admin/:gameId` — Control Center
-- `/admin/:gameId/settings` — game settings and reset
+- `/admin/:gameId/settings` — game settings, Full Reset and Delete Game Save
 - `/admin/:gameId/players` — players, join links and per-player adjustments
 - `/admin/:gameId/rounds` — round list
 - `/admin/:gameId/rounds/:roundId` — content, round groups and group scoring
@@ -29,12 +29,12 @@ Market Mayhem is a private game-night economy with player wallets, prediction de
 
 A reset/fresh game has no players, rounds, predictions or transactions.
 
-1. **Settings** — set game name, starting coins and optional maximum wallet percentage per prediction.
+1. **Settings** — set game name, starting coins, optional maximum wallet percentage per prediction, and the slotmachine's reel symbols and outcome odds.
 2. **Players** — create players and generate their single-use join links.
 3. **Rounds** — create rounds in any numbering scheme; execution does not assume `current + 1`.
-4. **Round Content** — add ordered blocks: `TEXT`, `QUESTION`, `DUOLINGO_QUESTION`, `ROULETTE`, `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`.
+4. **Round Content** — add ordered blocks: `TEXT`, `QUESTION`, `DUOLINGO_QUESTION`, `ROULETTE`, `PICTURE`, `MUSIC`, `BUZZER`, `WAGER`, `SLOTMACHINE`, `PAK_EEN_ZES`, `FOTORONDE`.
 5. **Predictions** — set probability, market-specific duration and min/max deposit, then optionally schedule to a round.
-6. **Control Center** — run the round, move through content, operate live questions/roulette, adjust coins and control the projector.
+6. **Control Center** — run the round, move through content, operate live questions/roulette, watch slotmachine series, adjust coins and control the projector.
 
 ## Predictions
 
@@ -80,6 +80,164 @@ State is:
 
 The server selects and stores the winning number before the animation starts. The Big Screen wheel animates toward that stored value; the frontend never chooses the financial result. Public-safe player chips (name, color, position, stake) are shown on the projector. Cancellation is available before the spin starts and refunds active stakes; once the server-selected spin begins, the result must be settled.
 
+## Slotmachine
+
+A `SLOTMACHINE` round block. Not a page and not a permanent dashboard feature: it is content inside a round, added in the Round Content Builder, reorderable among other blocks, and live only while the Admin has that block active.
+
+Where each part lives:
+
+| Surface | Role |
+| --- | --- |
+| Round block | decides *when* the slotmachine is active |
+| Player Mobile | input and control only — **no reels** |
+| Backend | rules, randomiser, money and outcome |
+| Big Screen | the visual machine |
+
+### Settings (game-wide)
+
+One machine serves the whole night, so its symbols and odds are configured once in **Settings**:
+
+- **Symbols** — 12 PNGs, uploaded once and shared by all three reels. Each can be uploaded, replaced, removed and previewed, labelled by position 1–12 (shown as A–L). All twelve are required, because the machine draws freely from the whole set.
+- **Kansen** — a chance and a payout multiplier for each of five fixed outcome types. Percentage is shown automatically as `chance ÷ total × 100`.
+
+The chances belong to **patterns, not to pictures**. There is no table of specific symbol combinations: `AAA` is not "three copies of one particular image", it is "three alike", whichever symbol fills it.
+
+| Uitkomsttype | Pattern | Chance | Payout |
+| --- | --- | --- | --- |
+| Geen winst | `A B C` | set by Admin | always 0x |
+| 2 dezelfde gesplitst | `C D C` | set by Admin | set by Admin |
+| 2 dezelfde naast elkaar | `C C D` or `D C C` | set by Admin | set by Admin |
+| 3 dezelfde op lijn | `A A A` on a payline | set by Admin | set by Admin |
+| 3 dezelfde ergens zichtbaar | three alike, off the paylines | set by Admin | set by Admin |
+
+Two alike side by side is a separate category from two alike split, so `C C D` can pay more than `C D C`. `Geen winst` is pinned at 0x in the UI and by a database constraint.
+
+The visible field is **3 rows × 3 reels**. The paylines are the three rows and the two diagonals — columns are not paylines, since a column is a single reel. The middle row is the *hoofdrij*: it is the row that decides the two-alike categories.
+
+The configuration is **valid** only when the chances sum to exactly the total and all twelve symbols have artwork. An incomplete distribution still saves — you can nudge the numbers into place — but the block refuses to run until it is valid, and Settings, the block editor and the Control Center all say why. A fresh game is seeded with `60 / 20 / 10 / 7 / 3` at `0 / 1.4 / 1.8 / 3 / 5x`, so it starts valid and playable.
+
+### Per-block settings
+
+On the block itself: title, instruction text for phones, **maximum spins per series**, and optionally which players take part (leave all unchecked for everyone).
+
+### Playing — one player at a time
+
+Player Mobile becomes the controller automatically while the block is live:
+
+1. choose **inzet per spin**
+2. choose **aantal spins** — at most **10**, and also capped by their wallet
+3. see **totale inzet** = stake per spin × spins
+4. **INZET VASTZETTEN** — commits the run; stake and spin count are now frozen
+5. wait for your turn, then **SPIN** once per remaining spin
+
+**A player plays their whole bought run before the next player starts.** With Daan on 6, Bas on 4 and Twan on 8, the order is Daan's six spins, then Bas's four, then Twan's eight. Turn order is the order the runs were locked in. Everyone not up sees who is, and how far through their run they are.
+
+There is **no topping up**: once a run is locked the stake and count cannot change, and once it is used that player is finished for this block. The pickers disappear rather than offering a purchase the server would refuse.
+
+**A new spin cannot start until the previous one has a final outcome.** Tapping SPIN disables the button immediately, and the backend refuses a second spin while one is still resolving — so three quick taps cannot buy three spins. When the last spin of a run lands, the projector shows `DAAN IS KLAAR / VOLGENDE SPELER: BAS` and the next player's phone gets the button.
+
+The whole total is debited at lock, like a prediction deposit, so committed coins cannot be spent elsewhere between spins. Unused spins are refunded if the run is cancelled.
+
+On each spin the server works in **two steps**:
+
+1. **Which kind of outcome falls** — one of the five categories, drawn weighted-random from the configured chances.
+2. **What that looks like** — a 3×3 field built to match that category, with the symbols and positions chosen at random.
+
+It then re-classifies the finished field and refuses to pay anything that does not match the category it drew. So a spin drawn as "two alike side by side" can never turn out to also show three alike, and the configured percentages are the percentages players actually see. The payout comes from the category, never from which symbols happened to fill it.
+
+The Big Screen shows whose turn it is for their whole run — bought, remaining and stake per spin, with only the remaining count changing between spins — plus the full 3×3 field, highlights the cells that form the winning pattern, and names the category (`2 DEZELFDE NAAST ELKAAR`, `3 DEZELFDE OP LIJN`, …) alongside the current player, stake per spin, current spin, spins remaining, payout multiplier, amount won and spin status. Phones show the category name only — never the field.
+
+### Ending safely
+
+Moving to the next content block, or completing the round, closes every live series and refunds spins nobody used — so no slotmachine session keeps running behind the Admin's back. Nothing is lost: spins already taken keep their outcome and payout.
+
+## Fotoronde
+
+A `FOTORONDE` round block. Every team gets the same list of photo subjects; players upload one photo per subject **on behalf of their team**, and the Admin then awards credits per photo.
+
+"Team" means a **round group** — the round-scoped teams the Admin creates. You can build them straight from the Fotoronde panel in the Control Center (or on the round page, which also has group scoring); either way they are the same objects and the same endpoints. A player belongs to at most one group per round, so the app derives their team from their session: there is no team picker, and uploading for another team is not something a phone can ask for.
+
+A team that has earned photo credits cannot be deleted — the existing group guard keeps it for the ledger.
+
+### Subjects
+
+The block starts with the standard six — *Iets kunstigs, Iets lelijks, Iets moois, Iets opwindends, Iets wat met het geloof heeft te maken, Iets kinderlijks* — and the list is editable in the Round Content Builder. Each subject keeps a stable key, so renaming one never detaches the photos already filed under it.
+
+### Phases
+
+`DRAFT → OPEN → CLOSED → COMPLETED`, forwards only.
+
+- **DRAFT** — the block exists, nobody can upload yet.
+- **OPEN** — teams upload and may replace their photo.
+- **CLOSED** — uploads stop; the Admin judges. There is no way back to OPEN, so a team cannot swap a photo the Admin has already looked at.
+- **COMPLETED** — a marker. Awarding stays possible, so marking it done is not a trap.
+
+### One photo per team per subject
+
+A second upload from *any* team-mate replaces the team's photo rather than adding a second one — enforced by a unique index on `(round, subject, team)`. Team-mates see it is already sent, by whom, with a small preview.
+
+### Credits
+
+The Admin awards credits per photo. They go to the team and are **split across its active members** by one consistent rule: everyone gets `floor(credits / members)`, and the remainder is handed out one credit at a time down the member order. So 25 credits across 4 players pays **7 + 6 + 6 + 6** — the total is always exactly what was awarded, and the Admin panel shows the split *before* confirming it.
+
+Credits are real coins, landing in wallets through the existing ledger as `PHOTO_ROUND_REWARD`. The same photo can never be rewarded twice: `credits_awarded IS NULL` is the gate under a row lock, and behind it a unique index on `(photo, player)` refuses a second credit. An already-judged photo shows what it earned instead of an input.
+
+### Big Screen
+
+While submissions are open the projector shows progress per subject (`4 / 6 teams`). While judging, the Admin can put any single photo up full-screen with its team's name, and the standings appear as credits land.
+
+## Pak een Zes
+
+A `PAK_EEN_ZES` round block. Everyone predicts who will draw a six, then players take turns pulling cards from a real 52-card deck until all four sixes are out.
+
+### Scoring
+
+**Settings → Pak een Zes** holds one game-wide number: **punten per juiste voorspelling**. Not per player, per six or per prediction slot — every correct prediction is worth the same, and the players' phones show that exact value *before* they pick, so they know what a correct guess is worth.
+
+Correctness is a **multiset match**: each pick is matched against one six that player actually drew, and a six can only satisfy one pick.
+
+| | |
+| --- | --- |
+| predicted | Bas, Twan, Bas, Emma |
+| drew a six | Bas, Jorrit, Bas, Emma |
+| correct | **3** → 3 × 25 = **75 points** |
+
+Bas is named twice and drew two sixes, so both picks count. Naming Bas twice when he drew only one six counts once — you cannot be paid twice for a six that happened once.
+
+Points are credited through the existing wallet and ledger as `PAK_EEN_ZES_REWARD`, in the same transaction that draws the fourth six. There is no separate Admin step, and a partial unique index on `(game, player)` makes paying twice impossible. The rate is snapshotted onto the game when it pays, so changing Settings afterwards never rewrites a finished game. An incomplete prediction never scores.
+
+Afterwards the phone shows the player their own result (`3 voorspellingen goed / +75 punten`), and the Big Screen and Control Center list who predicted well.
+
+### The host's flow
+
+From the Control Center, while the block is live:
+
+1. **OPEN VOORSPELLINGEN** — phones switch to the prediction form.
+2. Players fill in four names. The panel shows how many are in and **names who is still missing**.
+3. **SLUIT VOORSPELLINGEN** — the window closes. Waiting for everyone is *not* required, which is exactly why the missing names are listed.
+4. **START HET SPEL** — this freezes the turn order from the players active at that moment, so someone joining later cannot reshuffle whose turn it is.
+
+State is `READY → PREDICTING → LOCKED → DRAWING → FINISHED`, and it only runs forwards.
+
+### Predicting
+
+Four ordered picks per player. **The same person may be named more than once, and picking yourself is allowed** — so `Daan, Twan, Daan, Bas` is a valid prediction and is stored as four picks, not three names. Re-submitting replaces the whole prediction while the window is open.
+
+### Drawing
+
+Whoever is up gets one big **KAART PAKKEN** button; everyone else sees whose turn it is. The server decides both the card and the turn — a phone can only ask. The remaining deck is derived from the rows already drawn rather than a shuffled list held in memory, and a unique constraint on `(game, rank, suit)` makes "no repeats" a database guarantee. A double tap cannot take two cards: the game row is locked, and a replayed request is answered with the card it already produced.
+
+A six is a moment: the projector calls it out by name. The game ends the instant the fourth six is out, whatever is left in the deck, and the Big Screen then lists all four with who drew them. A player can draw more than one six.
+
+### What is stored
+
+- every prediction, per slot, duplicates intact
+- every card drawn, in order, with who drew it
+- `is_six` on each draw, constrained so it can never disagree with the rank
+- the rate each finished game paid, and one reward ledger row per scoring player
+
+Which player drew a six, which suit, on which draw, and how often the same player did it are all one query away.
+
 ## Live Duolingo questions
 
 `DUOLINGO_QUESTION` is separate from a static `QUESTION` block. Admin configures question text, four answer texts, one correct answer and a reward. The four player controls always use:
@@ -92,6 +250,10 @@ State is:
 
 When the block is current, player phones automatically switch to four large emoji controls. Player APIs never expose answer text or the correct index before reveal. Each player may submit once. Reveal credits correct players transactionally with immutable `QUESTION_REWARD` ledger entries attributed to the round and block.
 
+**Live participation.** While a question is open or closed, the Control Center shows how far along the room is — `8 / 11 GEANTWOORD`, `73%`, and a progress bar — refreshed by the ordinary 3-second Admin poll as answers arrive. The denominator is the active players who may answer, and the numerator counts only their answers, so deactivating someone mid-question can never push the bar past 100%. The figures are computed once on the server (`questionParticipation`) so the Admin, the projector and the round list cannot disagree. Which answer anyone picked is never shown — only how many have finished. **The host always decides when to close**; the question never closes itself, however many have answered.
+
+**Context photo.** A question may carry one optional photo, uploaded in the block editor through the same Netlify Blobs path as picture and music rounds — only the key is stored in the payload. It is the beat *after* the reveal: `TOON CONTEXTFOTO` appears in the Control Center only once the answer is revealed and only when a photo exists, and the projector then makes the photo the slide with the question and the answer reduced to one line each. The key itself is stripped from every non-Admin snapshot until `REVEALED`, so the photo cannot be shown early even by a client that asks for it. A question without a photo simply skips the step. Full Reset clears the answers but keeps the question and its photo.
+
 ## Round groups
 
 Groups are scoped to a round, not global teams. Admin may create/rename/delete groups and assign each player to at most one group in that round. A signed group adjustment applies the same amount to every member in one server transaction, with one immutable ledger row per player carrying the round, group and mandatory reason. Group adjustments become available once the round has started and remain available retroactively after the round is completed.
@@ -101,7 +263,7 @@ Group scoring may be applied retroactively after a round is completed. It change
 ## Wallet and ledger rules
 
 - Available wallet balance never goes below zero.
-- Locked prediction/roulette stakes are unavailable for spending but remain part of total player value until resolved.
+- Locked prediction/roulette stakes, and a slotmachine series' unspun spins, are unavailable for spending but remain part of total player value until resolved.
 - Every money movement is ledger-backed in the same PostgreSQL transaction.
 - Old ledger rows are never edited; corrections are compensating entries.
 - Manual and group adjustments require a reason.
@@ -119,9 +281,9 @@ The default projector is an exchange-style dashboard based on real data only:
 - current round, markets open and total coins in play
 - real public-safe transaction ticker
 
-`total coins in play = available wallets + unresolved prediction deposits + unresolved roulette stakes`.
+`total coins in play = available wallets + unresolved prediction deposits + unresolved roulette stakes + unspun slotmachine spins`.
 
-The projector can also present round blocks, an explicitly featured prediction, and roulette. Control Center contains the exact `/screen/:gameId` preview plus a persistent **SHOW MAIN DASHBOARD** action.
+The projector can also present round blocks, an explicitly featured prediction, roulette, the slotmachine, and Pak een Zes. Control Center contains the exact `/screen/:gameId` preview plus a persistent **SHOW MAIN DASHBOARD** action.
 
 ## Design system
 
@@ -177,14 +339,24 @@ Notes that save time:
 2. Import it into Netlify.
 3. Enable Netlify Database.
 4. Generate a hash with `npm run admin:hash`, then configure `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH` and `SESSION_SECRET`.
-5. Apply/deploy migrations through `0009_prediction_requests.sql`.
+5. Apply/deploy migrations through `0015_photo_round.sql`.
 6. Deploy.
 
 Previously deployed migrations are historical and are not rewritten.
 
+## Full Reset
+
+Settings → **RESET AVOND** requires exactly `RESET AVOND` in both UI and backend. It throws away the played evening and keeps the prepared one, so a night can be tested end to end and then run for real without rebuilding anything.
+
+Reset: the whole ledger, every wallet back to its player's `starting_balance_snapshot`, prediction deposits and results, roulette games/bets, slotmachine series and spins, Pak een Zes games/predictions/draws, Fotoronde uploads and judgements, live-question answers, player-proposed markets, every round back to `UPCOMING`, every block's interactive state back to what authoring gives a new block, no active round or step, and the Big Screen back to the dashboard with nothing staged or remembered.
+
+Kept: rounds with their order and titles, every block with its type, order, title and payload, predictions with their probability, odds, timing and stake limits, slotmachine symbols/chances/payouts, teams and membership, all players with their join links and sessions, and the settings on the Settings page.
+
+Wallets are set back rather than corrected: the old ledger rows are deleted and one fresh `STARTING_BALANCE` entry is written per player, so the wallet equals the snapshot equals the sum of the ledger and the test run leaves no trace in the history. `game_state_version` is bumped so Admin, phones and the projector all refresh within one poll. `netlify/lib/full-reset.ts` holds the runtime/configuration classification as two explicit lists, and a test fails if a migration adds a table that appears in neither.
+
 ## Delete Game Save
 
-Settings → Danger Zone → **DELETE GAME SAVE** requires exactly `yes delete` in both UI and backend. The transaction is scoped to the requested game ID and removes player/game economy, round content/groups/questions, predictions, roulette and screen state while preserving Admin sessions and the audit table. A final `GAME_RESET` audit record is written first.
+Unlike Full Reset, this also removes the evening you prepared. Settings → Danger Zone → **DELETE GAME SAVE** requires exactly `yes delete` in both UI and backend. The transaction is scoped to the requested game ID and removes player/game economy, round content/groups/questions, predictions, roulette and screen state while preserving Admin sessions and the audit table. A final `GAME_RESET` audit record is written first.
 
 ## Live updates
 

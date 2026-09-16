@@ -26,7 +26,7 @@ export default wrap(async request => {
        SET current_round_id=NULL,current_round_block_id=NULL,current_screen_mode='DASHBOARD',
            name='Market Mayhem',date=CURRENT_DATE,status='ACTIVE',starting_balance=100,
            prediction_duration_seconds=90,minimum_prediction_stake=5,maximum_prediction_stake=500,
-           maximum_wallet_percentage=NULL,updated_at=NOW()
+           maximum_wallet_percentage=NULL,pak_een_zes_points_per_correct=25,updated_at=NOW()
        WHERE id=$1`,
       [gameId],
     );
@@ -35,6 +35,17 @@ export default wrap(async request => {
     await client.query('DELETE FROM round_question_answers WHERE game_night_id=$1', [gameId]);
     await client.query('DELETE FROM prediction_requests WHERE game_night_id=$1', [gameId]);
     await client.query('DELETE FROM round_group_members WHERE game_night_id=$1', [gameId]);
+    await client.query('DELETE FROM photo_submissions WHERE game_night_id=$1', [gameId]);
+    await client.query('DELETE FROM photo_rounds WHERE game_night_id=$1', [gameId]);
+    await client.query('DELETE FROM pak_een_zes_draws WHERE game_night_id=$1', [gameId]);
+    await client.query('DELETE FROM pak_een_zes_predictions WHERE pak_een_zes_game_id IN (SELECT id FROM pak_een_zes_games WHERE game_night_id=$1)', [gameId]);
+    await client.query('DELETE FROM pak_een_zes_participants WHERE pak_een_zes_game_id IN (SELECT id FROM pak_een_zes_games WHERE game_night_id=$1)', [gameId]);
+    await client.query('DELETE FROM pak_een_zes_games WHERE game_night_id=$1', [gameId]);
+    await client.query('DELETE FROM slot_spins WHERE game_night_id=$1', [gameId]);
+    await client.query('DELETE FROM slot_series WHERE game_night_id=$1', [gameId]);
+    await client.query('DELETE FROM slot_outcome_types WHERE game_night_id=$1', [gameId]);
+    await client.query('DELETE FROM slot_reel_symbols WHERE game_night_id=$1', [gameId]);
+    await client.query('UPDATE slot_configs SET total_weight=100,updated_at=NOW(),updated_by=$2 WHERE game_night_id=$1', [gameId, admin.username]);
     await client.query('DELETE FROM roulette_bets WHERE roulette_game_id IN (SELECT id FROM roulette_games WHERE game_night_id=$1)', [gameId]);
     await client.query('DELETE FROM bets WHERE prediction_id IN (SELECT id FROM predictions WHERE game_night_id=$1)', [gameId]);
     await client.query('DELETE FROM roulette_games WHERE game_night_id=$1', [gameId]);

@@ -24,6 +24,7 @@ function adminState(overrides: Record<string, unknown> = {}) {
     { id: 32, round_id: 3, type: 'QUESTION', title: 'Hoeveel hoofdsteden ken jij?', sort_order: 2, payload: {}, answer_count: 0 },
     { id: 33, round_id: 3, type: 'DUOLINGO_QUESTION', title: 'Hoofdstad van Frankrijk?', sort_order: 3, interactive_status: 'OPEN', payload: { rewardCoins: 10, answers: ['a', 'b', 'c', 'd'], correctAnswerIndex: 0 }, answer_count: 2 },
     { id: 34, round_id: 3, type: 'ROULETTE', title: 'Bonusronde Roulette', sort_order: 4, interactive_status: 'DRAFT', payload: {}, answer_count: 0 },
+    { id: 35, round_id: 3, type: 'SLOTMACHINE', title: 'Gokkast', sort_order: 5, payload: { maxSpins: 20, allowedPlayerIds: [] }, answer_count: 0 },
   ];
   const predictions = [
     { id: 1, display_number: 1, question: 'Wint Team Blauw de bonusronde?', round_id: 3, round_number: 3, status: 'OPEN', probability_yes: 0.55, yes_odds: 1.8, no_odds: 2.2, participation_count: 2, minimum_stake: 5, maximum_stake: 100, prediction_time_seconds: 90, closes_at: new Date(Date.now() + 60_000).toISOString(), result: null },
@@ -57,6 +58,22 @@ function adminState(overrides: Record<string, unknown> = {}) {
     activePredictions: [] as unknown[],
     recentTransactions: [{ id: 1, amount: -20, description: 'Prediction deposit #1', transaction_type: 'BET', created_at: new Date().toISOString(), display_name: 'Daan', round_number: 3, prediction_number: 1, roulette_game_id: null, group_name: null }],
     activeRoulette: null,
+    // A fully configured machine: 100 chances allocated across two outcomes, both with
+    // artwork, which is what makes the block usable.
+    slotConfig: {
+      totalWeight: 100,
+      symbols: Array.from({ length: 12 }, (_, i) => ({ position: i + 1, letter: String.fromCharCode(65 + i), mediaKey: `1/image/pos${i + 1}.png` })),
+      symbolByPosition: {},
+      outcomeTypes: [
+        { type: 'NO_WIN', weight: 60, payoutMultiplier: 0, label: 'Geen winst', percentage: 60 },
+        { type: 'TWO_SPLIT', weight: 20, payoutMultiplier: 1.4, label: '2 dezelfde gesplitst', percentage: 20 },
+        { type: 'TWO_ADJACENT', weight: 10, payoutMultiplier: 1.8, label: '2 dezelfde naast elkaar', percentage: 10 },
+        { type: 'THREE_LINE', weight: 7, payoutMultiplier: 3, label: '3 dezelfde op lijn', percentage: 7 },
+        { type: 'THREE_ANYWHERE', weight: 3, payoutMultiplier: 5, label: '3 dezelfde ergens zichtbaar', percentage: 3 },
+      ],
+      status: { valid: true, totalWeight: 100, allocatedWeight: 100, remainingWeight: 0, symbolCount: 12, reason: 'Configuration is valid.' },
+    },
+    activeSlot: null,
     ...overrides,
   };
 }
@@ -64,15 +81,15 @@ function adminState(overrides: Record<string, unknown> = {}) {
 const render = (node: any) => renderToStaticMarkup(createElement(MemoryRouter, null, node));
 
 describe('admin block vocabulary', () => {
-  // Mirrors round_blocks_type_check. Migration 0007 widened it to all eight; if this
+  // Mirrors round_blocks_type_check. Migration 0015 widened it to all eleven; if this
   // list and that constraint ever diverge, the picker offers a type the insert rejects.
   it('only offers block types the database accepts', () => {
-    expect(AUTHORABLE_BLOCK_TYPES).toEqual(['TEXT', 'QUESTION', 'DUOLINGO_QUESTION', 'ROULETTE', 'PICTURE', 'MUSIC', 'BUZZER', 'WAGER']);
+    expect(AUTHORABLE_BLOCK_TYPES).toEqual(['TEXT', 'QUESTION', 'DUOLINGO_QUESTION', 'ROULETTE', 'PICTURE', 'MUSIC', 'BUZZER', 'WAGER', 'SLOTMACHINE', 'PAK_EEN_ZES', 'FOTORONDE']);
   });
 
   it('marks only the types with a phone-side flow as interactive', () => {
     const interactive = AUTHORABLE_BLOCK_TYPES.filter(type => blockMeta(type).interactive);
-    expect(interactive).toEqual(['DUOLINGO_QUESTION', 'ROULETTE']);
+    expect(interactive).toEqual(['DUOLINGO_QUESTION', 'ROULETTE', 'SLOTMACHINE', 'PAK_EEN_ZES', 'FOTORONDE']);
   });
 
   it('gives every type a distinct accent so run-of-show steps stay tellable apart', () => {
@@ -94,8 +111,8 @@ describe('admin pages render', () => {
   it('renders the Control Center with a run of show covering blocks and unsettled markets', () => {
     const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
     expect(html).toContain('RUN OF SHOW');
-    // four content blocks plus the one unsettled market attached to the active round
-    expect(html.match(/class="run-step accent-/g)?.length).toBe(5);
+    // five content blocks plus the one unsettled market attached to the active round
+    expect(html.match(/class="run-step accent-/g)?.length).toBe(6);
     expect(html).toContain('QUICK COIN ADJUSTMENT');
   });
 
@@ -297,13 +314,26 @@ describe('admin pages render', () => {
   });
 
   it('gates the game reset on the typed phrase and keeps the wallet cap setting', () => {
-    const html = render(createElement(SettingsPage, { state: adminState(), run, onReset: () => {} }));
+    const html = render(createElement(SettingsPage, { state: adminState(), gameId: 1, run, onReset: () => {} }));
     expect(html).toContain('DANGER ZONE');
     expect(html).not.toContain('modal-backdrop');
     expect(html).toContain('DELETE GAME SAVE');
     // the button is dead until "yes delete" is typed
     expect(html).toMatch(/<button [^>]*disabled[^>]*>DELETE GAME SAVE<\/button>/);
     expect(html).toContain('Max wallet % per prediction');
+  });
+
+  it('offers Full Reset separately from Delete Game Save, gated on its own phrase', () => {
+    const html = render(createElement(SettingsPage, { state: adminState(), gameId: 1, run, onReset: () => {} }));
+    expect(html).toContain('RESET AVOND');
+    expect(html).toContain('Full Reset');
+    // Dead until the exact phrase is typed, and it is not the delete phrase.
+    expect(html).toMatch(/<button [^>]*disabled[^>]*>RESET AVOND<\/button>/);
+    expect(html).toContain('placeholder="RESET AVOND"');
+    // Both destructive actions stay available and stay distinguishable.
+    expect(html).toContain('DELETE GAME SAVE');
+    // The gentler action reads first, so a host does not scroll past it to the harsher one.
+    expect(html.indexOf('Full Reset')).toBeLessThan(html.indexOf('Delete Game Save'));
   });
 
   it('renders the Ledger with the readable list first and the full table behind it', () => {
