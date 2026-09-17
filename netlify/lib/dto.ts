@@ -327,6 +327,7 @@ export type RouletteRow = {
   total_payout?: number | string;
   participant_count?: number | string;
   eligible_players?: number | string;
+  player_results?: unknown;
 };
 
 /**
@@ -380,6 +381,22 @@ export function screenRoulette(row: RouletteRow | null | undefined) {
         participants,
         eligiblePlayers: eligible,
         participationPercentage: eligible > 0 ? Math.round((participants / eligible) * 100) : 0,
+        /*
+         * One line per player who had money on this spin, built field by field.
+         *
+         * A name and a colour, because the room is meant to recognise whose row it is, and
+         * three numbers that are already the answer: `payout` is gross and `net` is
+         * `payout - stake`, computed in the database from the settled bets. No player id,
+         * no bet ids, no wallet balance — none of which the room has any use for, and all
+         * of which are a handle for anyone reading the snapshot.
+         */
+        players: (Array.isArray(row.player_results) ? row.player_results : []).map((entry: any) => ({
+          displayName: entry?.display_name ?? null,
+          color: entry?.public_color ?? null,
+          stake: num(entry?.stake),
+          payout: num(entry?.payout),
+          net: num(entry?.net),
+        })),
       },
     } : {}),
     publicBets: (Array.isArray(row.public_bets) ? row.public_bets : []).map((bet: any) => ({

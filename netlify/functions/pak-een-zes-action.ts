@@ -59,7 +59,10 @@ export default wrap(async request => {
          SELECT 1 FROM pak_een_zes_games
          WHERE game_night_id=$1 AND round_id=$2 AND status IN ('READY','PREDICTING','LOCKED','DRAWING')
        )`,
-      [gameId, roundId, roundId],
+      // Two placeholders, two parameters. The third used to be round_block_id and was
+      // left behind when 0016 dropped blocks — Postgres refuses the bind outright, which
+      // is not an HttpError, so every OPEN PREDICTIONS came back as a bare 500.
+      [gameId, roundId],
     );
 
     const existing = await client.query(

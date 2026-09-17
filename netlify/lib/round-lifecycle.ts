@@ -66,14 +66,17 @@ export async function assertRoundMayBeLeft(
       `SELECT q.id,q.sort_order,st.status
        FROM live_quiz_question_state st
        JOIN live_quiz_questions q ON q.id=st.question_id
-       WHERE st.round_id=$1 AND st.game_night_id=$2 AND st.status IN ('OPEN','CLOSED','REVEALED')
+       -- REVEALED is finished: revealing a question is also what pays for it, so a
+       -- revealed question owes nobody anything. Listing it here meant a quiz round could
+       -- never be completed once its questions had been answered.
+       WHERE st.round_id=$1 AND st.game_night_id=$2 AND st.status IN ('OPEN','CLOSED')
        ORDER BY q.sort_order,q.id LIMIT 1`,
       [roundId, gameId],
     );
     if (live.rows[0]) {
       throw new HttpError(
         409,
-        `Question ${Number(live.rows[0].sort_order) + 1} is still ${live.rows[0].status} — finish or settle it first`,
+        `Question ${Number(live.rows[0].sort_order) + 1} is still ${live.rows[0].status} — reveal it before moving on`,
       );
     }
   }

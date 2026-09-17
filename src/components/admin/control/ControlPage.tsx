@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import type { RunMutation } from '../types';
 import { Accordion, Card, Countdown, ProgressBar, Status } from '../ui';
 import { ScreenRender } from '../../broadcast/BigScreen';
+import { PhotoThumb } from './PhotoThumb';
 import { CoinIcon } from '../../shared/CoinIcon';
 import { QUIZ_OPTION_EMOJIS, roundContentCount, roundItems, roundMeta } from '../roundMeta';
 
@@ -62,7 +63,32 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
   // One endpoint for both directions, and the same one the VOLGENDE preview asked. The
   // screen revision travels with it, so a step from a tab that has fallen behind is
   // refused instead of pulling the room backwards.
-  const step = (direction: 'NEXT' | 'PREVIOUS') => run('/api/advance-screen', { direction, revision: s.screen?.revision });
+  /**
+   * The screen revision this page believes is current.
+   *
+   * Tracked locally rather than read straight off the poll, because the poll lags: pressing
+   * VOLGENDE twice in under three seconds used to send the *pre-first-press* revision the
+   * second time and be refused with "the big screen has moved on" — which was true of the
+   * number and false of the situation. Every step returns the revision it produced, so the
+   * next press uses it immediately. A poll only ever raises this, never lowers it.
+   */
+  const polled = Number(s.screen?.revision ?? 0);
+  const [knownRevision, setKnownRevision] = useState(polled);
+  const revision = Math.max(knownRevision, polled);
+
+  const step = async (direction: 'NEXT' | 'PREVIOUS') => {
+    const result = await run('/api/advance-screen', { direction, revision });
+    // A refused step has already pulled the fresh state in; taking the new number here
+    // means the next press works rather than failing the same way.
+    if (result && typeof result.revision === 'number') setKnownRevision(result.revision);
+    return result;
+  };
+
+  const resetScreen = async () => {
+    const result = await run('/api/reset-screen', {});
+    if (result) setKnownRevision(r => r + 1);
+    return result;
+  };
 
   const rouletteAction = (action: string) => activeRoulette && run('/api/roulette-action', { rouletteGameId: activeRoulette.id, action }, true);
   const quizAction = (action: string) => currentQuestion && run('/api/quiz-question-action', { questionId: currentQuestion.id, action, revision: currentQuestion.revision });
@@ -151,7 +177,6 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
           ? <button className="btn btn-secondary" onClick={() => questionPhoto(false)}>TERUG NAAR DE VRAAG</button>
           : <button className="btn btn-blue" onClick={() => questionPhoto(true)}>TOON CONTEXTFOTO</button>)}
 
-        {status === 'REVEALED' && <button className="btn btn-secondary" onClick={() => quizAction('SETTLE')}>MARK SETTLED</button>}
 
         {/* No previous/next here. Stepping the evening is the pair under the two previews
             and lives nowhere else — these are the actions that are not navigation. */}
@@ -386,9 +411,12 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
         onClick={() => step('NEXT')}
       >{steps.NEXT.step === 'completeRound' ? 'RONDE AFRONDEN →' : 'VOLGENDE →'}</button>
     </div>
-    {(steps.NEXT.reason || steps.PREVIOUS.reason) && <div className="muted presenter-step-note">
-      {steps.NEXT.reason || steps.PREVIOUS.reason}
-    </div>}
+    <div className="presenter-step-note">
+      {(steps.NEXT.reason || steps.PREVIOUS.reason) && <span className="muted">{steps.NEXT.reason || steps.PREVIOUS.reason}</span>}
+      {/* Always available, not only once something has broken: by the time the host
+          notices the screen is wrong they should not also have to find the control. */}
+      <button className="text-button" onClick={resetScreen}>RESET SCHERM</button>
+    </div>
 
     {/* Round-type actions that are not navigation: opening betting, closing answers,
         judging a photo. Navigation is the pair above and lives nowhere else. */}
@@ -689,9 +717,10 @@ function PhotoRoundPanel({ round, run, gameId, activeRound, players, nav }: {
             const validAmount = typed !== undefined && typed !== '' && Number.isInteger(amount) && amount >= 0;
             const judged = submission.creditsAwarded != null;
             return <div className={`photo-card ${judged ? 'is-judged' : ''}`} key={submission.id}>
-              <img className="photo-card-image" src={`/api/block-media?key=${encodeURIComponent(submission.mediaKey)}`} alt="" />
+              <PhotoThumb mediaKey={submission.mediaKey} alt={`${entry.subject.label} — ${submission.teamName}`} />
               <div className="photo-card-body">
                 <b>{submission.teamName}</b>
+                <span className="muted">{entry.subject.label}</span>
                 <span className="muted">Ingezonden door: {submission.uploaderName || 'onbekend'}</span>
 
                 {judged

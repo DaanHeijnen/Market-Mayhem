@@ -39,20 +39,36 @@ export function AdminApp({ gameId }: { gameId: number }) {
   const page = ((PAGES as string[]).includes(raw) ? raw : 'control') as Page;
   const roundId = page === 'rounds' && parts[3] ? Number(parts[3]) : null;
 
+  /**
+   * Send one admin action and pull the fresh state back.
+   *
+   * Refreshes whether the action succeeded or not. A rejected action is usually rejected
+   * *because* this page is out of date — a step against a screen that has moved on, a
+   * question somebody else already revealed — so the one thing the host needs next is the
+   * current state, not the stale one they were looking at when it failed.
+   *
+   * Returns the server's reply on success, so a caller that needs something from it (the
+   * new screen revision, say) can read it instead of polling for it. Falsy on failure, so
+   * every existing `if (await run(...))` keeps working.
+   */
   const run = async (path: string, body: Record<string, unknown>, idempotent = false, idempotencyKey?: string) => {
     setMsg('');
+    let result: any = null;
+    let failure = '';
     try {
-      await mutation(path, { gameId, ...body }, idempotent, idempotencyKey);
+      result = (await mutation<any>(path, { gameId, ...body }, idempotent, idempotencyKey)) ?? {};
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : 'Failed');
-      return false;
+      failure = e instanceof Error ? e.message : 'Failed';
     }
     try {
       await refresh();
     } catch (e) {
-      setMsg(`Change saved, but live refresh failed: ${e instanceof Error ? e.message : 'connection error'}`);
+      const trouble = `live refresh failed: ${e instanceof Error ? e.message : 'connection error'}`;
+      setMsg(failure ? `${failure} — and ${trouble}` : `Change saved, but ${trouble}`);
+      return failure ? false : result;
     }
-    return true;
+    if (failure) { setMsg(failure); return false; }
+    return result;
   };
 
   if (!s) {

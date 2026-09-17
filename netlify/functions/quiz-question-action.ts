@@ -12,7 +12,7 @@ import {
 import { revealQuizQuestion } from '../lib/question-reveal';
 import { wrap } from './_wrap';
 
-const ACTIONS: QuizAction[] = ['OPEN', 'CLOSE', 'REVEAL', 'SETTLE', 'REOPEN'];
+const ACTIONS: QuizAction[] = ['OPEN', 'CLOSE', 'REVEAL', 'REOPEN'];
 
 /**
  * Drive one quiz question through its phases.

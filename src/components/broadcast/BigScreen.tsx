@@ -144,6 +144,11 @@ function SlideScene({ slide, round }: { slide: any; round: any }) {
     return <Scene className="picture-scene">
       <div className="scene-eyebrow">{eyebrow}</div>
       <img className="picture-scene-image" src={mediaUrl(slide.mediaKey)} alt="" />
+      {/* The body belongs with the picture, not only on a text page. A theory question is
+          a photo plus its answer options, and dropping the body here lost the options on
+          exactly the questions that have an image. `white-space: pre-wrap` keeps
+          "A. …\nB. …\nC. …" on three lines. */}
+      {slide.body && <p className="scene-body picture-scene-body">{slide.body}</p>}
       {slide.title && <div className="scene-reveal">{slide.title}</div>}
       {slide.revealText && <div className="scene-reveal">{slide.revealText}</div>}
     </Scene>;
@@ -153,6 +158,7 @@ function SlideScene({ slide, round }: { slide: any; round: any }) {
     return <Scene className="music-scene">
       <div className="scene-eyebrow">{eyebrow}</div>
       <div className="scene-kicker">MUSIC</div>
+      {slide.body && <p className="scene-body">{slide.body}</p>}
       {/* Controls are shown rather than autoplaying: browsers block unprompted audio, so
           an autoplay attempt would silently do nothing on the projector. */}
       <audio className="music-scene-player" controls preload="auto" src={mediaUrl(slide.mediaKey)} />
@@ -323,7 +329,8 @@ function RouletteScene({ roulette: r, round }: { roulette: any; round: any }) {
  * difference. `net` arrives already subtracted, so this cannot render it the wrong way up.
  */
 function RouletteSettlement({ r }: { r: any }) {
-  const { staked, payout, net, participants, eligiblePlayers, participationPercentage } = r.settlement;
+  const { staked, payout, net, participants, eligiblePlayers, participationPercentage, players } = r.settlement;
+  const rows: any[] = players || [];
   return <div className="roulette-settlement">
     <div className="roulette-settlement-result">
       <span className="label muted">UITSLAG</span>
@@ -337,6 +344,27 @@ function RouletteSettlement({ r }: { r: any }) {
         <div className="display"><CoinIcon size={24} />{net > 0 ? '+' : ''}{money(net)}</div>
       </div>
     </div>
+
+    {/* Per player, biggest winner first. Every number here was settled on the server; the
+        projector only draws them. Tightens up as the list grows so a full table still
+        fits on one screen rather than scrolling somewhere nobody can scroll it. */}
+    {rows.length > 0 && <div className={`roulette-player-results ${rows.length > 6 ? 'is-dense' : ''}`}>
+      <div className="roulette-player-row is-head">
+        <span>SPELER</span><span>INZET</span><span>UITBETAALD</span><span>NETTO</span>
+      </div>
+      {rows.map((player: any, index: number) => <div className="roulette-player-row" key={`${player.displayName}-${index}`}>
+        <span className="roulette-player-name">
+          <span className="player-dot" style={{ background: player.color || '#888' }} />
+          {player.displayName}
+        </span>
+        <span>{money(player.stake)}</span>
+        <span>{money(player.payout)}</span>
+        <b className={player.net > 0 ? 'pos' : player.net < 0 ? 'neg' : ''}>
+          {player.net > 0 ? '+' : ''}{money(player.net)}
+        </b>
+      </div>)}
+    </div>}
+
     <div className="roulette-settlement-foot">
       {participants} van {eligiblePlayers} spelers deden mee · {participationPercentage}%
     </div>

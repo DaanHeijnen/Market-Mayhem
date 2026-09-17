@@ -15,14 +15,14 @@ export function SlotmachineEditor({ state: s, round, gameId, run, readOnly }: {
   state: any; round: any; gameId: number; run: RunMutation; readOnly: boolean;
 }) {
   const nav = useNavigate();
-  const config = round.slotmachine || { maxSpins: 10, allowedPlayerIds: [] as number[] };
+  const config = round.slotmachine || { maxSpins: 8, allowedPlayerIds: [] as number[] };
   const [maxSpins, setMaxSpins] = useState(String(config.maxSpins));
   const [allowed, setAllowed] = useState<number[]>(config.allowedPlayerIds);
   const status = s.slotConfig?.status;
 
   const save = () => run('/api/update-slotmachine-round', {
     roundId: round.id,
-    maxSpins: Number(maxSpins) || 10,
+    maxSpins: Number(maxSpins) || 8,
     allowedPlayerIds: allowed,
   });
 
@@ -39,7 +39,7 @@ export function SlotmachineEditor({ state: s, round, gameId, run, readOnly }: {
 
     <div className="form-grid compact">
       <label>Maximum spins per series
-        <input className="field" type="number" min="1" max="10" disabled={readOnly} value={maxSpins} onChange={e => setMaxSpins(e.target.value)} />
+        <input className="field" type="number" min="1" max="8" disabled={readOnly} value={maxSpins} onChange={e => setMaxSpins(e.target.value)} />
       </label>
     </div>
 

@@ -63,7 +63,8 @@ describe('the quiz phase machine', () => {
     expect(canTransitionQuestion('READY', 'OPEN')).toBe(true);
     expect(canTransitionQuestion('OPEN', 'CLOSED')).toBe(true);
     expect(canTransitionQuestion('CLOSED', 'REVEALED')).toBe(true);
-    expect(canTransitionQuestion('REVEALED', 'SETTLED')).toBe(true);
+    // Revealing is also paying, so a revealed question is finished and goes nowhere.
+    expect(canTransitionQuestion('REVEALED', 'SETTLED')).toBe(false);
   });
 
   // The point of the machine: a stale command from a second admin tab must not roll a
@@ -85,16 +86,17 @@ describe('the quiz phase machine', () => {
 
   it('maps every action to the phase it produces', () => {
     expect(QUIZ_ACTION_TARGET).toEqual({
-      OPEN: 'OPEN', CLOSE: 'CLOSED', REVEAL: 'REVEALED', SETTLE: 'SETTLED', REOPEN: 'OPEN',
+      OPEN: 'OPEN', CLOSE: 'CLOSED', REVEAL: 'REVEALED', REOPEN: 'OPEN',
     });
   });
 
   it('knows which phases still owe the host something', () => {
     expect(questionIsLive('OPEN')).toBe(true);
     expect(questionIsLive('CLOSED')).toBe(true);
-    expect(questionIsLive('REVEALED')).toBe(true);
     expect(questionIsLive('READY')).toBe(false);
     expect(questionIsLive('SETTLED')).toBe(false);
+    // Finished: its answer is up and its rewards are paid, both by the same transition.
+    expect(questionIsLive('REVEALED')).toBe(false);
   });
 });
 

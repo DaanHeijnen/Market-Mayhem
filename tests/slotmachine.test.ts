@@ -443,10 +443,18 @@ describe('who may play a slotmachine round', () => {
     expect(playerMayPlaySlot(restricted, 3)).toBe(false);
   });
 
-  // A player buys their whole run up front and then everyone waits through it, so ten
-  // is a product rule rather than a database limit.
-  it('caps a run at ten spins', () => {
-    expect(SLOT_MAX_SPINS_LIMIT).toBe(10);
+  // A player buys their whole run up front and then everyone waits through it, so eight
+  // is a product rule rather than a database limit. The same number is the ceiling on
+  // `slotmachine_rounds.max_spins`, so a round cannot be authored past it either.
+  it('caps a run at eight spins', () => {
+    expect(SLOT_MAX_SPINS_LIMIT).toBe(8);
+  });
+
+  it('never offers more than the cap, whatever the round or the wallet allows', () => {
+    // A rich player on a round authored for the maximum still cannot buy a ninth.
+    expect(maxLockableSpins(1, 1_000_000, SLOT_MAX_SPINS_LIMIT)).toBe(SLOT_MAX_SPINS_LIMIT);
+    // And the wallet still binds below it.
+    expect(maxLockableSpins(10, 35, SLOT_MAX_SPINS_LIMIT)).toBe(3);
   });
 });;
 

@@ -72,6 +72,14 @@ export async function seedGame(db: TestDb, gameId = 500) {
   return gameId;
 }
 
+/**
+ * Rounds are unique by (game night, sort order), and a random number collides sooner than
+ * feels plausible — a suite that adds a few hundred rounds hits it often enough to fail
+ * for reasons that have nothing to do with what is being tested. A counter cannot.
+ */
+let sortOrderCounter = 1000;
+const nextSortOrder = () => (sortOrderCounter += 1);
+
 export async function addRound(
   db: TestDb,
   gameId: number,
@@ -83,7 +91,7 @@ export async function addRound(
      VALUES($1,$2,$3,$4,$5,'',$6) RETURNING id`,
     [
       gameId,
-      overrides.sortOrder ?? Math.floor(Math.random() * 100000) + 100,
+      overrides.sortOrder ?? nextSortOrder(),
       overrides.title ?? `${type} round`,
       type,
       overrides.status ?? 'UPCOMING',

@@ -1,11 +1,25 @@
 export const LIVE_CONFIG = {
-  BIG_SCREEN_POLL_MS: 5000,
+  /*
+   * The live tiers are what the room feels.
+   *
+   * Every tick is a single cached `game-version` call, and the full snapshot is fetched
+   * only when that version actually moved — so shortening these buys responsiveness
+   * without multiplying the expensive request. The projector is the surface people watch
+   * while the host presses a button, so it is the fastest of the three; at five seconds a
+   * VOLGENDE could sit unseen for longer than it took to decide on it, and a slotmachine
+   * spin could finish its whole 3.2s animation window between two polls.
+   *
+   * The idle and dormant tiers below are untouched, and they are where the saving actually
+   * lives: most of an evening's wall clock is setup, breaks and discussion, and none of
+   * these numbers apply then.
+   */
+  BIG_SCREEN_POLL_MS: 1200,
   BIG_SCREEN_IDLE_POLL_MS: 15000,
   BIG_SCREEN_DORMANT_POLL_MS: 60000,
-  ADMIN_POLL_MS: 3000,
+  ADMIN_POLL_MS: 2000,
   ADMIN_IDLE_POLL_MS: 15000,
   MOBILE_IDLE_POLL_MS: 12000,
-  MOBILE_ACTIVE_POLL_MS: 2500,
+  MOBILE_ACTIVE_POLL_MS: 1200,
   ERROR_RETRY_MS: 10000,
   /** No interaction for this long, with the game idle, means nobody is really there. */
   AWAY_AFTER_MS: 10 * 60 * 1000,

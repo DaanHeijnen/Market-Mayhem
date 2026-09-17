@@ -85,7 +85,7 @@ export function RoundsPage({ state: s, gameId, roundId, run }: { state: any; gam
  * has nowhere to go under another, so changing it would mean quietly discarding work.
  */
 function CreateRound({ gameId, run, onDone }: { gameId: number; run: RunMutation; onDone: () => void }) {
-  const [form, setForm] = useState({ type: '', title: '', description: '', instructions: '', defaultPoints: '10', maxSpins: '10' });
+  const [form, setForm] = useState({ type: '', title: '', description: '', instructions: '', defaultPoints: '10', maxSpins: '8' });
   const meta = form.type ? roundMeta(form.type) : null;
 
   return <Card>
@@ -126,7 +126,7 @@ function CreateRound({ gameId, run, onDone }: { gameId: number; run: RunMutation
           <input className="field" type="number" min="0" value={form.defaultPoints} onChange={e => setForm({ ...form, defaultPoints: e.target.value })} />
         </label>
         {form.type === 'SLOTMACHINE' && <label>Maximum spins per series
-          <input className="field" type="number" min="1" max="10" value={form.maxSpins} onChange={e => setForm({ ...form, maxSpins: e.target.value })} />
+          <input className="field" type="number" min="1" max="8" value={form.maxSpins} onChange={e => setForm({ ...form, maxSpins: e.target.value })} />
         </label>}
       </div>
       <p className="muted type-note">
@@ -151,7 +151,7 @@ function CreateRound({ gameId, run, onDone }: { gameId: number; run: RunMutation
             description: form.description,
             instructions: form.instructions,
             defaultPoints: Number(form.defaultPoints) || 0,
-            ...(form.type === 'SLOTMACHINE' ? { maxSpins: Number(form.maxSpins) || 10 } : {}),
+            ...(form.type === 'SLOTMACHINE' ? { maxSpins: Number(form.maxSpins) || 8 } : {}),
           });
           if (ok) onDone();
         }}

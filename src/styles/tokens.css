@@ -1137,7 +1137,7 @@ button.chip-blue:hover { background: var(--violet); }
 .presenter-step-bar { display: grid; grid-template-columns: minmax(140px, 1fr) 2fr; gap: 12px; margin-top: 16px; }
 .btn-step { min-height: 72px; font-size: 16px; }
 .btn-step-primary { font-size: 18px; }
-.presenter-step-note { margin-top: 8px; text-align: center; font-size: 12px; }
+.presenter-step-note { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: center; margin-top: 8px; text-align: center; font-size: 12px; }
 .round-actions-card { margin-top: 16px; }
 @media (max-width: 720px) { .presenter-step-bar { grid-template-columns: 1fr; } }
 /* The next-state preview renders a real projector scene, so it needs the same fixed stage
@@ -1148,6 +1148,21 @@ button.chip-blue:hover { background: var(--violet); }
 .roulette-settlement { display: grid; gap: 22px; justify-items: center; text-align: center; }
 .roulette-settlement-result .display { font-size: clamp(40px, 6vw, 88px); }
 .roulette-settlement-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; width: 100%; }
+/* One row per player, four columns. Readable from the back of the room at six players,
+   and still legible at a full house by tightening rather than scrolling. */
+/* A judging grid you can actually judge from: click any photo for a full-screen look. */
+.picture-scene-body { max-width: 60vw; font-size: 1.6vw; text-align: left; }
+.photo-card-image.is-clickable { cursor: zoom-in; }
+.photo-missing-media { display: grid; place-items: center; padding: 18px; text-align: center; background: var(--surface-disabled); color: var(--muted); font-size: 12px; min-height: 120px; }
+.photo-lightbox { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; gap: 16px; padding: 24px; background: rgba(20,18,15,.92); cursor: zoom-out; }
+.photo-lightbox img { max-width: min(100%, 1400px); max-height: 80vh; object-fit: contain; border-radius: 16px; }
+.photo-lightbox-close { justify-self: center; }
+.roulette-player-results { width: min(100%, 900px); display: grid; gap: 6px; }
+.roulette-player-row { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 12px; align-items: center; padding: 8px 14px; border-radius: 12px; background: rgba(255,255,255,.06); font-size: clamp(14px, 1.5vw, 22px); text-align: right; }
+.roulette-player-row > :first-child { text-align: left; }
+.roulette-player-row.is-head { background: transparent; font-size: clamp(10px, .9vw, 13px); letter-spacing: .1em; opacity: .6; padding-bottom: 0; }
+.roulette-player-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.roulette-player-results.is-dense .roulette-player-row { padding: 5px 12px; font-size: clamp(12px, 1.1vw, 17px); }
 .roulette-settlement-foot { color: var(--dark-secondary); font-weight: 800; letter-spacing: .04em; }
 @media (max-width: 720px) { .roulette-settlement-grid { grid-template-columns: 1fr; } }
 

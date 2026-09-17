@@ -247,6 +247,13 @@ describe('admin pages render', () => {
       expect(html).toContain('ACTIES');
     });
 
+    // 3 · the recovery control is always there, not only once something has broken. By
+    // the time the host notices the screen is wrong they should not also have to find it.
+    it('always offers RESET SCHERM', () => {
+      const html = render(createElement(ControlPage, { state: adminState(), gameId: 1, run }));
+      expect(html).toContain('RESET SCHERM');
+    });
+
     // The server decides whether a step is possible, so before it has answered the
     // buttons are off rather than optimistically enabled.
     it('waits for the server before enabling either button', () => {

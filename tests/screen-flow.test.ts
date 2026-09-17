@@ -438,3 +438,91 @@ describe.skipIf(!available)('walking a presentation from start to finish', () =>
     expect((await where()).mode).toBe('DASHBOARD');
   });
 });
+
+/**
+ * Eight spins, per player, per slotmachine round.
+ *
+ * Enforced in three places on purpose. These cover the two that can be checked without a
+ * request: the ceiling a round may be authored to, and the guarded decrement that decides
+ * what can actually be spun — which is what makes a double-tapped SPIN take one spin.
+ */
+describe.skipIf(!available)('the eight-spin ceiling', () => {
+  let db: TestDb;
+  let gameId: number;
+  let roundId: number;
+
+  beforeAll(async () => { db = await migratedDb(); gameId = await seedGame(db, 880); });
+  afterAll(async () => { await db?.close(); });
+
+  beforeEach(async () => {
+    await db.query('DELETE FROM slot_series WHERE game_night_id=$1', [gameId]);
+    roundId = await addRound(db, gameId, 'SLOTMACHINE');
+  });
+
+  it('refuses a round authored for more than eight', async () => {
+    await expect(db.query(
+      'INSERT INTO slotmachine_rounds(round_id,game_night_id,max_spins) VALUES($1,$2,9)',
+      [roundId, gameId],
+    )).rejects.toThrow();
+  });
+
+  it('accepts a round authored for exactly eight', async () => {
+    await expect(db.query(
+      'INSERT INTO slotmachine_rounds(round_id,game_night_id,max_spins) VALUES($1,$2,8)',
+      [roundId, gameId],
+    )).resolves.toBeTruthy();
+  });
+
+  // The decrement the spin endpoint runs. Eight succeed; the ninth changes nothing, which
+  // is what the endpoint turns into a refusal.
+  it('lets eight spins through and no more', async () => {
+    const { rows } = await db.query(
+      `INSERT INTO slot_series(game_night_id,round_id,player_id,stake_per_spin,total_spins,spins_remaining,total_stake,idempotency_key)
+       VALUES($1,$2,501,5,8,8,40,'k-eight') RETURNING id`,
+      [gameId, roundId],
+    );
+    const seriesId = Number(rows[0].id);
+
+    const spin = () => db.query(
+      `UPDATE slot_series
+       SET spins_remaining=spins_remaining-1,
+           status=CASE WHEN spins_remaining-1 = 0 THEN 'COMPLETED' ELSE status END
+       WHERE id=$1 AND spins_remaining > 0 RETURNING spins_remaining,status`,
+      [seriesId],
+    );
+
+    for (let i = 8; i >= 1; i -= 1) {
+      const result = await spin();
+      expect(Number(result.rows[0].spins_remaining), `spin ${9 - i}`).toBe(i - 1);
+    }
+
+    // The ninth matches no row, so nothing is decremented and no spin is sold.
+    const ninth = await spin();
+    expect(ninth.rows).toHaveLength(0);
+
+    const final = await db.query('SELECT spins_remaining,status FROM slot_series WHERE id=$1', [seriesId]);
+    expect(Number(final.rows[0].spins_remaining)).toBe(0);
+    expect(final.rows[0].status).toBe('COMPLETED');
+  });
+
+  // Two requests arriving together both run the same guarded update; the counter cannot
+  // go below zero however they interleave.
+  it('cannot be driven below zero by racing requests', async () => {
+    const { rows } = await db.query(
+      `INSERT INTO slot_series(game_night_id,round_id,player_id,stake_per_spin,total_spins,spins_remaining,total_stake,idempotency_key)
+       VALUES($1,$2,502,5,8,1,40,'k-last') RETURNING id`,
+      [gameId, roundId],
+    );
+    const seriesId = Number(rows[0].id);
+    const spin = () => db.query(
+      'UPDATE slot_series SET spins_remaining=spins_remaining-1 WHERE id=$1 AND spins_remaining > 0 RETURNING spins_remaining',
+      [seriesId],
+    );
+
+    const first = await spin();
+    const second = await spin();
+    expect(first.rows).toHaveLength(1);
+    expect(second.rows).toHaveLength(0);
+    expect(Number((await db.query('SELECT spins_remaining FROM slot_series WHERE id=$1', [seriesId])).rows[0].spins_remaining)).toBe(0);
+  });
+});

@@ -32,14 +32,20 @@ export const SLOT_MAIN_ROW = 1;
 export const SLOT_SPIN_MS = 3200;
 
 /**
- * Hard ceiling on a series, and the default.
+ * The most spins one player may take in one slotmachine round, and the default.
  *
- * Ten is the product rule, not a safety valve: a player buys their whole run up front
- * and then plays it out while everyone else waits, so a long series is a long wait for
- * the room. There is no topping up afterwards.
+ * Eight is a product rule, not a safety valve: a player buys their whole run up front and
+ * then plays it out while everyone else waits, so a long series is a long wait for the
+ * room. There is no topping up afterwards.
+ *
+ * Enforced in three places on purpose, because each catches what the others cannot. This
+ * constant bounds the request; `slotmachine_rounds_max_spins_check` bounds what can be
+ * authored, so a row cannot be wrong even if the code is; and `spins_remaining > 0` on the
+ * guarded decrement bounds what can actually be spun, which is what makes a double-tapped
+ * SPIN take one spin rather than two.
  */
-export const SLOT_MAX_SPINS_LIMIT = 10;
-export const SLOT_DEFAULT_MAX_SPINS = 10;
+export const SLOT_MAX_SPINS_LIMIT = 8;
+export const SLOT_DEFAULT_MAX_SPINS = SLOT_MAX_SPINS_LIMIT;
 
 /** Fewest distinct symbols the generator needs: 9 cells, no symbol used more than twice. */
 export const SLOT_MINIMUM_SYMBOLS = 5;

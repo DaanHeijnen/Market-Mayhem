@@ -113,7 +113,7 @@ describe('what the projector receives about the roulette', () => {
       ...table('SETTLED'), total_staked: 1200, total_payout: 900,
       participant_count: 8, eligible_players: 10,
     })!;
-    expect(settled.settlement).toEqual({
+    expect(settled.settlement).toMatchObject({
       staked: 1200,
       payout: 900,
       // Players are 300 down over the run. Sent computed so the projector cannot render
@@ -123,6 +123,51 @@ describe('what the projector receives about the roulette', () => {
       eligiblePlayers: 10,
       participationPercentage: 80,
     });
+  });
+
+  /**
+   * The per-player breakdown.
+   *
+   * Aggregated on the server from the settled bets, so the room's row and the player's
+   * wallet cannot disagree. The projector renders these numbers and computes none of them.
+   */
+  it('sends one line per player, with net as payout minus stake', () => {
+    const settled = screenRoulette({
+      ...table('SETTLED'), total_staked: 300, total_payout: 230,
+      participant_count: 3, eligible_players: 10,
+      player_results: [
+        { display_name: 'Jordi', public_color: '#3D5AFE', stake: 100, payout: 180, net: 80 },
+        { display_name: 'David', public_color: '#2FAF5B', stake: 50, payout: 50, net: 0 },
+        { display_name: 'Twan', public_color: '#2A2820', stake: 150, payout: 0, net: -150 },
+      ],
+    })!;
+
+    expect(settled.settlement!.players).toEqual([
+      { displayName: 'Jordi', color: '#3D5AFE', stake: 100, payout: 180, net: 80 },
+      { displayName: 'David', color: '#2FAF5B', stake: 50, payout: 50, net: 0 },
+      { displayName: 'Twan', color: '#2A2820', stake: 150, payout: 0, net: -150 },
+    ]);
+    // A loss reads as a loss, not as a payout of zero with no context.
+    expect(settled.settlement!.players[2].net).toBeLessThan(0);
+    // The player rows add up to the totals beside them.
+    const players = settled.settlement!.players;
+    expect(players.reduce((sum, p) => sum + p.stake, 0)).toBe(settled.settlement!.staked);
+    expect(players.reduce((sum, p) => sum + p.payout, 0)).toBe(settled.settlement!.payout);
+  });
+
+  it('never sends a player id, a bet id or a wallet with those rows', () => {
+    const settled = screenRoulette({
+      ...table('SETTLED'), total_staked: 100, total_payout: 0,
+      participant_count: 1, eligible_players: 4,
+      player_results: [{ display_name: 'Twan', public_color: '#000', stake: 100, payout: 0, net: -100, player_id: 77 }],
+    })!;
+    const [row] = settled.settlement!.players;
+    expect(Object.keys(row).sort()).toEqual(['color', 'displayName', 'net', 'payout', 'stake']);
+  });
+
+  it('sends an empty list rather than nothing when a run had no bets', () => {
+    const settled = screenRoulette({ ...table('SETTLED'), total_staked: 0, total_payout: 0 })!;
+    expect(settled.settlement!.players).toEqual([]);
   });
 
   // The room is meant to see whose chips these are; it has no use for a player id.

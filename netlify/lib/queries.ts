@@ -7,11 +7,12 @@ import { loadSlotConfig, loadSlotTurn, slotRoundIsFinished } from './slot-state'
 import { loadPakEenZesGame } from './pak-een-zes-state';
 import { loadPhotoRound, playerTeamForRound } from './photo-round-state';
 import { countCorrectPredictions, playerAtTurn, predictionPoints } from './pak-een-zes';
-import { describeSlotConfig, maySpin, symbolLetter, SLOT_OUTCOME_LABELS, SLOT_SPIN_MS, type SlotOutcomeType } from './slotmachine';
+import { describeSlotConfig, maySpin, symbolLetter, SLOT_MAX_SPINS_LIMIT, SLOT_OUTCOME_LABELS, SLOT_SPIN_MS, type SlotOutcomeType } from './slotmachine';
 import { isRevealed, mayShowContextPhoto, questionParticipation } from './live-quiz';
 import { settleRouletteRun, ROULETTE_SPIN_MS } from './roulette';
 import { completeRound } from './round-lifecycle';
 import { loadAllRoundContent, loadRoundRuntime } from './rounds';
+import { isRenderable } from './screen-recovery';
 import {
   adminRound, adminQuizQuestion, adminPubquizQuestion, adminSlide, adminSubject,
   playerQuizQuestion, playerPubquizQuestion, publicRound, publicSubject,
@@ -127,7 +128,10 @@ export type GameVersion = { version: number; idle: boolean };
 // interval, so it is also what keeps the database compute from suspending. A very
 // short per-container cache collapses the bursts that happen when the Admin, the
 // projector and several phones all land inside the same moment.
-const VERSION_CACHE_MS = 500;
+// Short enough that it does not add meaningfully to a 1.2s poll interval, long enough
+// that the projector, the Admin and a room full of phones landing in the same moment still
+// collapse into one database read.
+const VERSION_CACHE_MS = 300;
 const versionCache = new Map<number, { value: GameVersion; at: number }>();
 
 export async function getGameVersion(gameId: number): Promise<GameVersion> {
@@ -297,7 +301,7 @@ export async function getAdminState(gameId: number) {
       return { ...base, subjects: (content.subjectsByRound.get(id) || []).map(adminSubject) };
     }
     if (round.type === 'SLOTMACHINE') {
-      return { ...base, slotmachine: content.slotByRound.get(id) || { maxSpins: 10, allowedPlayerIds: [] } };
+      return { ...base, slotmachine: content.slotByRound.get(id) || { maxSpins: SLOT_MAX_SPINS_LIMIT, allowedPlayerIds: [] } };
     }
     return base;
   });
@@ -569,8 +573,12 @@ export async function getPlayerState(gameId: number, playerId: number) {
               st.status,st.closed_at,a.option_id AS my_option_id
        FROM game_nights g
        JOIN rounds r ON r.id=g.current_round_id AND r.status='ACTIVE' AND r.type='LIVE_QUIZ'
-       JOIN round_runtime rt ON rt.round_id=r.id
-       JOIN live_quiz_questions q ON q.id=rt.current_quiz_question_id
+       -- Gated on the projector, not on the round's cursor. The cursor is set the moment
+       -- the round starts, but the round opens on its title card — and a phone showing
+       -- question one while the room is still reading the intro is the two surfaces a
+       -- question out of sync, which is exactly what this must not do.
+       JOIN screen_state ss ON ss.game_night_id=g.id AND ss.mode='QUIZ_QUESTION'
+       JOIN live_quiz_questions q ON q.id=ss.quiz_question_id AND q.round_id=r.id
        JOIN live_quiz_question_state st ON st.question_id=q.id
        LEFT JOIN quiz_answers a ON a.question_id=q.id AND a.player_id=$2
        WHERE g.id=$1`, [gameId, playerId],
@@ -682,8 +690,9 @@ export async function getPlayerState(gameId: number, playerId: number) {
               q.time_limit_seconds,st.status,st.closed_at,a.option_id AS my_option_id
        FROM game_nights g
        JOIN rounds r ON r.id=g.current_round_id AND r.status='ACTIVE' AND r.type='PUBQUIZ'
-       JOIN round_runtime rt ON rt.round_id=r.id
-       JOIN pubquiz_questions q ON q.id=rt.current_pubquiz_question_id AND q.hidden=FALSE
+       -- Same rule as the live quiz: the phone follows what the room is looking at.
+       JOIN screen_state ss ON ss.game_night_id=g.id AND ss.mode='PUBQUIZ_QUESTION'
+       JOIN pubquiz_questions q ON q.id=ss.pubquiz_question_id AND q.round_id=r.id AND q.hidden=FALSE
        JOIN pubquiz_question_state st ON st.question_id=q.id
        LEFT JOIN pubquiz_answers a ON a.question_id=q.id AND a.player_id=$2
        WHERE g.id=$1`, [gameId, playerId],
@@ -961,6 +970,8 @@ export type ScreenOverride = {
    * stamped — so the preview is the real scene, one step early.
    */
   previewReveal?: boolean;
+  /** Draw this as though the host had already brought the context photo up. */
+  previewContext?: boolean;
 };
 
 /**
@@ -1070,6 +1081,21 @@ export async function getScreenState(gameId: number, override?: ScreenOverride) 
         `SELECT rg.id,rg.round_id,rg.status,rg.result_number,rg.spun_at,rg.run_number,
                 rg.total_staked,rg.total_payout,rg.participant_count,
                 (SELECT COUNT(*)::int FROM players pl WHERE pl.game_night_id=$1 AND pl.active=TRUE) AS eligible_players,
+                -- What the run did to each player, aggregated in the database from the
+                -- settled bets themselves. The projector renders these; it never adds
+                -- anything up, so the room and the ledger cannot disagree.
+                COALESCE((
+                  SELECT json_agg(row_to_json(t) ORDER BY t.net DESC, t.display_name)
+                  FROM (
+                    SELECT p2.display_name, p2.public_color,
+                           SUM(b2.stake)::int AS stake,
+                           COALESCE(SUM(b2.potential_return) FILTER (WHERE b2.status='WON'),0)::int AS payout,
+                           COALESCE(SUM(b2.potential_return) FILTER (WHERE b2.status='WON'),0)::int - SUM(b2.stake)::int AS net
+                    FROM roulette_bets b2 JOIN players p2 ON p2.id=b2.player_id
+                    WHERE b2.roulette_game_id=rg.id AND b2.status IN ('WON','LOST')
+                    GROUP BY p2.id,p2.display_name,p2.public_color
+                  ) t
+                ),'[]') AS player_results,
                 COALESCE(json_agg(json_build_object('id',rb.id,'displayName',p.display_name,'color',p.public_color,'betType',rb.bet_type,'selection',rb.selection,'stake',rb.stake) ORDER BY rb.id)
                   FILTER (WHERE rb.id IS NOT NULL),'[]') AS public_bets
          FROM roulette_games rg LEFT JOIN roulette_bets rb ON rb.roulette_game_id=rg.id LEFT JOIN players p ON p.id=rb.player_id
@@ -1174,6 +1200,14 @@ export async function getScreenState(gameId: number, override?: ScreenOverride) 
     if (pubPreviewRow) pubPreviewRow = { ...pubPreviewRow, status: 'REVEALED' };
     if (quizPreviewRow) quizPreviewRow = { ...quizPreviewRow, status: 'REVEALED' };
   }
+  if (override?.previewContext && quizPreviewRow) {
+    // The photo scene is a revealed question with its photo up, so the preview is that
+    // same pair — drawn by the same DTO, one step early.
+    quizPreviewRow = { ...quizPreviewRow, status: 'REVEALED', context_photo_shown: true };
+  }
+  if (override && override.previewContext === false && quizPreviewRow) {
+    quizPreviewRow = { ...quizPreviewRow, context_photo_shown: false };
+  }
 
   type EconEvent = { playerId: number; delta: number; time: number; key: string };
   const events: EconEvent[] = [];
@@ -1216,7 +1250,7 @@ export async function getScreenState(gameId: number, override?: ScreenOverride) 
   const total = totals.rows[0];
   const pred = prediction.rows[0];
   const rouletteRow = roulette.rows[0];
-  return {
+  const snapshot = {
     version: Number(game.game_state_version),
     game: { id: Number(game.id), name: game.name }, mode: screenMode,
     round: publicRound(round.rows[0]),
@@ -1376,6 +1410,40 @@ export async function getScreenState(gameId: number, override?: ScreenOverride) 
     })() : null,
     recentPredictionResults: recentResults.rows.map((r: any) => ({ id: Number(r.id), number: Number(r.display_number), question: r.question, result: r.result, yesOdds: Number(r.yes_odds), noOdds: Number(r.no_odds), settledAt: r.settled_at })),
   };
+
+  /*
+   * A target that cannot be drawn is degraded here, in the response, rather than left for
+   * the projector to fail on.
+   *
+   * `screen_state`'s pointers are ON DELETE SET NULL, so a deleted page leaves
+   * `mode='SLIDE'` with no slide — a shape nothing can render and the host cannot always
+   * navigate out of, because the round it belonged to may be over. Falling back in the
+   * read means the big screen heals on its very next poll, with no write and therefore no
+   * possibility of a recovery loop.
+   *
+   * The fallback is the round's own title card while a round is being played, and the
+   * dashboard otherwise. `screenRecovered` tells the Admin it happened, so RESET SCHERM
+   * can offer to make it permanent instead of the projector quietly limping.
+   */
+  if (isRenderable(snapshot)) return snapshot;
+
+  const fallbackRound = round.rows[0];
+  if (fallbackRound && Number(fallbackRound.id) === Number(game.current_round_id || 0)) {
+    return {
+      ...snapshot,
+      mode: 'ROUND_INTRO',
+      screenRecovered: true,
+      roundIntro: {
+        type: fallbackRound.type,
+        sortOrder: Number(fallbackRound.sort_order),
+        title: fallbackRound.title,
+        description: fallbackRound.description ?? '',
+        instructions: fallbackRound.instructions ?? '',
+        itemCount: Number(fallbackRound.item_count ?? 0),
+      },
+    };
+  }
+  return { ...snapshot, mode: 'DASHBOARD', screenRecovered: true, roundIntro: null };
 }
 
 export async function getLedgerState(gameId: number, roundFilter: 'all'|'general'|number) {

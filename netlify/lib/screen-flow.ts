@@ -37,7 +37,14 @@ import { SCENE_FOR_ROUND_TYPE, type RoundType } from './round-types';
 
 export type ScreenStep =
   /** Put this on the projector. `reveal` additionally opens or reveals what it points at. */
-  | { kind: 'target'; target: ScreenTarget; label: string; reveal?: boolean }
+  /**
+   * Put this on the projector.
+   *
+   * `reveal` additionally asks or answers what it points at; `showContext` brings up the
+   * photo that belongs after the answer. Both are sub-states of the same question, which
+   * is why they travel with the target rather than being targets of their own.
+   */
+  | { kind: 'target'; target: ScreenTarget; label: string; reveal?: boolean; showContext?: boolean; hideContext?: boolean }
   /** There is nothing after this, and stepping forward ends the round. */
   | { kind: 'completeRound'; roundId: number; label: string }
   /** Nothing to step to in that direction, and why. */
@@ -193,13 +200,16 @@ async function planQuestions(
   const isPub = flavour === 'PUBQUIZ';
   const { rows } = isPub
     ? await client.query(
-      `SELECT q.id,q.hidden,q.question AS label,st.status FROM pubquiz_questions q
+      `SELECT q.id,q.hidden,q.question AS label,NULL::text AS context_media_key,FALSE AS context_shown,st.status
+       FROM pubquiz_questions q
        JOIN pubquiz_question_state st ON st.question_id=q.id
        WHERE q.round_id=$1 ORDER BY q.sort_order,q.id`,
       [round.id],
     )
     : await client.query(
-      `SELECT q.id,FALSE AS hidden,q.prompt AS label,st.status FROM live_quiz_questions q
+      `SELECT q.id,FALSE AS hidden,q.prompt AS label,q.context_media_key,
+              st.context_photo_shown AS context_shown,st.status
+       FROM live_quiz_questions q
        JOIN live_quiz_question_state st ON st.question_id=q.id
        WHERE q.round_id=$1 ORDER BY q.sort_order,q.id`,
       [round.id],
@@ -211,6 +221,11 @@ async function planQuestions(
     label: r.label as string,
     status: r.status as string,
     revealed: isPub ? pubquizIsRevealed(r.status) : quizIsRevealed(r.status),
+    // A LIVE_QUIZ question may hold a photo that is shown *after* the answer, as evidence.
+    // That is a third scene on the same question, and only when one was authored — there
+    // is no empty context step.
+    hasContext: Boolean(r.context_media_key),
+    contextShown: Boolean(r.context_shown),
   }));
 
   const currentId = isPub ? at.pubquizQuestionId : at.quizQuestionId;
@@ -232,6 +247,15 @@ async function planQuestions(
 
   if (direction === 'PREVIOUS') {
     if (currentId == null) return { kind: 'none', reason: 'This is the start of the round' };
+    const standing = around.at >= 0 ? questions[around.at] : null;
+
+    // Back out of the photo to the answer it belongs to. Presentation only: the question
+    // stays revealed, the rewards stay paid, the answers stay in. Going back is about what
+    // the room is looking at, never about undoing what the round has already done.
+    if (standing?.contextShown) {
+      return { kind: 'target', target: targetFor(standing.id), label: `${standing.label} — antwoord`, hideContext: true };
+    }
+
     const back = around.previous;
     if (back) return { kind: 'target', target: targetFor(back.id), label: back.label };
     return introStep(round);
@@ -246,6 +270,18 @@ async function planQuestions(
   // Asked but not answered yet: revealing is the next step, and it is what pays.
   if (!current.revealed) {
     return { kind: 'target', target: targetFor(current.id), label: `${current.label} — antwoord`, reveal: true };
+  }
+
+  // Answered, and this question has a photo the room has not been shown yet. The photo is
+  // its own scene on the same question, which is why it is a `showContext` step rather
+  // than a move.
+  if (current.hasContext && !current.contextShown) {
+    return {
+      kind: 'target',
+      target: targetFor(current.id),
+      label: `${current.label} — foto`,
+      showContext: true,
+    };
   }
 
   const next = around.next;
@@ -351,6 +387,22 @@ export async function advanceScreen(
   // Reveal before showing, so the projector never renders the unrevealed version of a
   // state the host has already stepped past.
   if (step.reveal) await applyReveal(client, gameId, step.target, actor);
+  if (step.showContext && step.target.kind === 'quizQuestion') {
+    await client.query(
+      `UPDATE live_quiz_question_state SET context_photo_shown=TRUE,revision=revision+1,updated_at=NOW()
+       WHERE question_id=$1 AND context_photo_shown=FALSE`,
+      [step.target.questionId],
+    );
+  }
+  // Stepping back off the photo. The only thing this changes is which scene of an already
+  // revealed question is up.
+  if (step.hideContext && step.target.kind === 'quizQuestion') {
+    await client.query(
+      `UPDATE live_quiz_question_state SET context_photo_shown=FALSE,revision=revision+1,updated_at=NOW()
+       WHERE question_id=$1 AND context_photo_shown=TRUE`,
+      [step.target.questionId],
+    );
+  }
 
   await setScreen(client, gameId, step.target, actor);
 

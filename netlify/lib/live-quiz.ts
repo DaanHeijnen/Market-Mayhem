@@ -10,6 +10,14 @@
  * what is allowed, and the endpoints do the writing under a lock.
  */
 
+/**
+ * `SETTLED` is kept only because rows already carry it.
+ *
+ * It used to be a real phase: revealing showed the answer and a second press paid for it.
+ * Revealing *is* paying now — one transition, one transaction — so `REVEALED` is where a
+ * question ends and nothing moves past it. The value stays legal so questions settled
+ * under the old flow still read correctly everywhere.
+ */
 export const QUIZ_QUESTION_STATUSES = ['READY', 'OPEN', 'CLOSED', 'REVEALED', 'SETTLED'] as const;
 export type QuizQuestionStatus = typeof QUIZ_QUESTION_STATUSES[number];
 
@@ -44,17 +52,16 @@ const QUIZ_TRANSITIONS: Record<QuizQuestionStatus, QuizQuestionStatus[]> = {
   READY: ['OPEN'],
   OPEN: ['CLOSED'],
   CLOSED: ['REVEALED', 'OPEN'],
-  REVEALED: ['SETTLED'],
+  REVEALED: [],
   SETTLED: [],
 };
 
-export type QuizAction = 'OPEN' | 'CLOSE' | 'REVEAL' | 'SETTLE' | 'REOPEN';
+export type QuizAction = 'OPEN' | 'CLOSE' | 'REVEAL' | 'REOPEN';
 
 export const QUIZ_ACTION_TARGET: Record<QuizAction, QuizQuestionStatus> = {
   OPEN: 'OPEN',
   CLOSE: 'CLOSED',
   REVEAL: 'REVEALED',
-  SETTLE: 'SETTLED',
   REOPEN: 'OPEN',
 };
 
@@ -62,9 +69,16 @@ export function canTransitionQuestion(from: QuizQuestionStatus, to: QuizQuestion
   return QUIZ_TRANSITIONS[from]?.includes(to) ?? false;
 }
 
-/** Phases in which a question is still the host's problem — it is neither fresh nor finished. */
+/**
+ * Phases in which a question is still the host's problem — neither fresh nor finished.
+ *
+ * `REVEALED` is finished: the answer is on screen and the rewards are paid, both by the
+ * same transition. It was listed here while paying was a separate press, and leaving it
+ * here afterwards meant a round could never be completed — every question that had been
+ * answered looked unresolved.
+ */
 export function questionIsLive(status: string | null | undefined) {
-  return status === 'OPEN' || status === 'CLOSED' || status === 'REVEALED';
+  return status === 'OPEN' || status === 'CLOSED';
 }
 
 export type QuestionParticipation = {

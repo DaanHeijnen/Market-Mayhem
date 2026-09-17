@@ -81,3 +81,46 @@ describe('abandoned tabs', () => {
     expect(getLivePollDelay('admin', false, 'visible', true, 0)).toBe(LIVE_CONFIG.ADMIN_IDLE_POLL_MS);
   });
 });
+
+/**
+ * How long the room waits.
+ *
+ * The complaint these numbers answer: pressing VOLGENDE and watching the projector sit
+ * there for several seconds. Worst case is one interval plus the version cache, so the
+ * interval is the whole of it.
+ */
+describe('how quickly each surface notices a change', () => {
+  const live = (kind: 'screen' | 'admin' | 'mobile') => getLivePollDelay(kind, true, 'visible', false, 0);
+
+  it('keeps the projector inside a second and a half', () => {
+    expect(live('screen')).toBeLessThanOrEqual(1500);
+  });
+
+  // A slot spin is held at SPINNING for 3.2s so the reels can turn. The projector has to
+  // poll comfortably inside that window or it can miss the animation entirely.
+  it('polls the projector several times within a slot spin', () => {
+    const SLOT_SPIN_MS = 3200;
+    expect(live('screen')! * 2).toBeLessThan(SLOT_SPIN_MS);
+  });
+
+  it('keeps a phone in an active round inside a second and a half', () => {
+    expect(live('mobile')).toBeLessThanOrEqual(1500);
+  });
+
+  it('keeps the Admin inside two seconds', () => {
+    expect(live('admin')).toBeLessThanOrEqual(2000);
+  });
+
+  // The saving lives in the idle tiers, which are deliberately untouched: most of an
+  // evening is setup, breaks and discussion, and nothing can change on its own then.
+  it('still backs off hard when nothing can change', () => {
+    for (const kind of ['screen', 'admin', 'mobile'] as const) {
+      const idle = getLivePollDelay(kind, false, 'visible', true, 0);
+      expect(idle, kind).toBeGreaterThanOrEqual(12000);
+    }
+  });
+
+  it('still stops entirely for a hidden tab', () => {
+    expect(getLivePollDelay('screen', true, 'hidden', false, 0)).toBeNull();
+  });
+});

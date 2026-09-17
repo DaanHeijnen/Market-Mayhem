@@ -72,6 +72,9 @@ export default wrap(async request => {
     // The step may be "reveal what is already up". The preview renders it as it will be,
     // through the same DTO, rather than as it is.
     previewReveal: step.reveal === true,
+    // `false` rather than absent when stepping back off the photo: the preview has to show
+    // the answer without it, which is not the same as "leave the row alone".
+    previewContext: step.showContext === true ? true : (step.hideContext === true ? false : undefined),
   });
 
   return ok({ direction, capabilities, ...describe(step), directions, preview });
