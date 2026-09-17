@@ -963,12 +963,14 @@ export type ScreenOverride = {
   pubquizQuestionId: number | null;
   predictionId: number | null;
   /**
-   * Draw this as though the host had already revealed it.
+   * Draw this as though the host had already revealed it — or, when `false`, as though
+   * they had put the answer away again.
    *
    * The NEXT preview has to show "the answer to question 2" while question 2 is still
    * unanswered, and that state does not exist in the database yet. Rather than a second
    * renderer that knows how to fake it, the row is handed to the same DTO with its reveal
-   * stamped — so the preview is the real scene, one step early.
+   * stamped — so the preview is the real scene, one step early. Absent means the step
+   * changes nothing about the reveal, which is not the same as `false`.
    */
   previewReveal?: boolean;
   /** Draw this as though the host had already brought the context photo up. */
@@ -991,7 +993,19 @@ export async function getScreenState(gameId: number, override?: ScreenOverride) 
   // polling, the next version poll reconciles it and bumps the version, which pulls a
   // fresh snapshot — so this self-heals within one poll interval.
   const pool = database().pool;
-  const gameResult = await pool.query('SELECT g.*,s.mode,s.round_id AS screen_round_id,s.prediction_id,s.payload FROM game_nights g LEFT JOIN screen_state s ON s.game_night_id=g.id WHERE g.id=$1', [gameId]);
+  // Every pointer the scene needs comes from `screen_state`, which is the only row that
+  // has them. They used to be read off `game_nights`, which has no such columns — so
+  // `slide_id`, `quiz_question_id` and `pubquiz_question_id` were silently `undefined` on
+  // every live snapshot, every scene that needs an item came back empty, and the
+  // unrenderable-state fallback below quietly turned the projector back into the round's
+  // title card. The preview passed its pointers in by hand, so it kept working, and that
+  // is why the two disagreed.
+  const gameResult = await pool.query(
+    `SELECT g.*,s.mode,s.round_id AS screen_round_id,s.prediction_id,s.payload,
+            s.quiz_question_id,s.slide_id,s.pubquiz_question_id
+     FROM game_nights g LEFT JOIN screen_state s ON s.game_night_id=g.id WHERE g.id=$1`,
+    [gameId],
+  );
   const game = gameResult.rows[0];
   if (!game) throw new HttpError(404, 'Game not found');
   const screenMode = override ? override.mode : (game.mode || game.current_screen_mode || 'DASHBOARD');
@@ -1200,6 +1214,12 @@ export async function getScreenState(gameId: number, override?: ScreenOverride) 
     if (slideRow) slideRow = { ...slideRow, revealed_at: new Date() };
     if (pubPreviewRow) pubPreviewRow = { ...pubPreviewRow, status: 'REVEALED' };
     if (quizPreviewRow) quizPreviewRow = { ...quizPreviewRow, status: 'REVEALED' };
+  }
+  // Explicitly false rather than absent: VORIGE over a page's answer puts it away, and the
+  // preview has to draw the page without it — which is not the same as "leave it as it is".
+  // Pages only; a revealed question is paid for and is never put back.
+  if (override && override.previewReveal === false && slideRow) {
+    slideRow = { ...slideRow, revealed_at: null };
   }
   if (override?.previewContext && quizPreviewRow) {
     // The photo scene is a revealed question with its photo up, so the preview is that

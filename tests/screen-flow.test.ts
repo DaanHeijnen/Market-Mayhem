@@ -129,8 +129,11 @@ describe.skipIf(!available)('stepping the projector, against a migrated database
       expect(Number((await screen()).slide_id)).toBe(pages[1]);
     });
 
-    // 13 · VORIGE is presentation history, not an undo
-    it('steps back without un-revealing anything', async () => {
+    // 13 · VORIGE walks the same display states in reverse. A page's answer is one of
+    // them, so stepping back over it does take the answer down — that is the state being
+    // stepped back to. What VORIGE never undoes is what a round has *done*: a paid quiz
+    // reveal, a settled spin. Those tests live with their own round types.
+    it('steps back onto a page\'s answer, and then takes it down', async () => {
       const withAnswer = await addRound(db, gameId, 'PRESENTATIE');
       await activate(withAnswer);
       const one = await addPageWithAnswer(withAnswer, 0, 'Vraag 1', 'Lima');
@@ -140,11 +143,15 @@ describe.skipIf(!available)('stepping the projector, against a migrated database
       await advanceScreen(client(), gameId, 'NEXT', 'admin', null); // its answer
       await advanceScreen(client(), gameId, 'NEXT', 'admin', null); // page 2
 
+      // Back onto page 1 — which is standing on its answer, so that is what comes up.
       await advanceScreen(client(), gameId, 'PREVIOUS', 'admin', null);
-
       expect(Number((await screen()).slide_id)).toBe(one);
-      // Still revealed: going back shows the page as it now is, rather than undoing it.
       expect((await db.query('SELECT revealed_at FROM presentation_slide_state WHERE slide_id=$1', [one])).rows[0].revealed_at).not.toBeNull();
+
+      // And back again onto the page before it gave the answer away.
+      await advanceScreen(client(), gameId, 'PREVIOUS', 'admin', null);
+      expect(Number((await screen()).slide_id)).toBe(one);
+      expect((await db.query('SELECT revealed_at FROM presentation_slide_state WHERE slide_id=$1', [one])).rows[0].revealed_at).toBeNull();
       expect(two).toBeTruthy();
     });
 

@@ -262,6 +262,42 @@ that is not on the wire cannot be read off the wire.
 That is the whole state machine — revealed, or not — and it is reversible, because unlike a
 quiz reward nothing has been paid that un-revealing would have to undo.
 
+### The display-state sequence
+
+A presentation is walked as a list of **display states**, not a list of pages. A page that
+holds something back is two of them; a page that holds nothing back is one:
+
+```
+page 1            page 2            page 2 + answer   page 3
+├───────────────► ├───────────────► ├───────────────► │
+                ◄─┤               ◄─┤               ◄─┤
+```
+
+`presentationSequence` builds that list from what the host authored, `displayStateOf` says
+which entry a page is standing on right now, and `presentationStep` moves one entry in
+either direction — so VOLGENDE and VORIGE are the same function with the stride negated,
+rather than two sets of branches that can disagree. Held-back pages stay in the sequence
+and are stepped over, because the cursor can legitimately be standing on one: the host
+hides the page that is currently up.
+
+Stepping back over an answer takes it down, which is exactly the state being stepped back
+to. That is safe here and nowhere else: `PUBQUIZ` and `LIVE_QUIZ` reveals also pay, so
+their VORIGE leaves a revealed question revealed.
+
+### LIVE and VOLGENDE
+
+The Admin's two columns are the projector's own component fed the projector's own DTO. LIVE
+is `/api/screen-state`; VOLGENDE is `/api/next-screen-state`, which asks `planStep` for the
+step the button would take, resolves it exactly as taking it would, and renders it through
+`getScreenState` with the reveal stamped one step early. The composition lives in
+`netlify/lib/screen-preview.ts` rather than in the route, so a test can check the property
+that matters: the preview is what the next press publishes.
+
+Both read their pointers from `screen_state` — `mode` alone is not a scene. A snapshot that
+names a scene it cannot draw (`mode='SLIDE'` with no slide, after the page was deleted)
+degrades to the round's title card in the response, without writing; `RESET SCHERM` is the
+write that makes a valid target permanent.
+
 ## Roulette
 
 The canonical backend bet types are `NUMBER`, `COLOR`, `PARITY` and `RANGE`; visual table coordinates never define bets.
