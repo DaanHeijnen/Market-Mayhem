@@ -128,10 +128,11 @@ export type GameVersion = { version: number; idle: boolean };
 // interval, so it is also what keeps the database compute from suspending. A very
 // short per-container cache collapses the bursts that happen when the Admin, the
 // projector and several phones all land inside the same moment.
-// Short enough that it does not add meaningfully to a 1.2s poll interval, long enough
-// that the projector, the Admin and a room full of phones landing in the same moment still
-// collapse into one database read.
-const VERSION_CACHE_MS = 300;
+// The projector polls every half second, so a 300ms cache could hold back more than half
+// of its ticks — the cache would have become a bigger share of the delay than the interval.
+// At 150ms it still collapses the burst of a room full of clients landing together into one
+// database read, which is the whole reason it exists.
+const VERSION_CACHE_MS = 150;
 const versionCache = new Map<number, { value: GameVersion; at: number }>();
 
 export async function getGameVersion(gameId: number): Promise<GameVersion> {

@@ -92,8 +92,10 @@ describe('abandoned tabs', () => {
 describe('how quickly each surface notices a change', () => {
   const live = (kind: 'screen' | 'admin' | 'mobile') => getLivePollDelay(kind, true, 'visible', false, 0);
 
-  it('keeps the projector inside a second and a half', () => {
-    expect(live('screen')).toBeLessThanOrEqual(1500);
+  // The two surfaces somebody is watching when a player taps. One projector and two Admin
+  // screens between them, so this speed costs almost nothing.
+  it('keeps the projector inside half a second', () => {
+    expect(live('screen')).toBeLessThanOrEqual(500);
   });
 
   // A slot spin is held at SPINNING for 3.2s so the reels can turn. The projector has to
@@ -103,12 +105,33 @@ describe('how quickly each surface notices a change', () => {
     expect(live('screen')! * 2).toBeLessThan(SLOT_SPIN_MS);
   });
 
-  it('keeps a phone in an active round inside a second and a half', () => {
-    expect(live('mobile')).toBeLessThanOrEqual(1500);
+  it('keeps the Admin inside a second', () => {
+    expect(live('admin')).toBeLessThanOrEqual(1000);
   });
 
-  it('keeps the Admin inside two seconds', () => {
-    expect(live('admin')).toBeLessThanOrEqual(2000);
+  /*
+   * Phones are the expensive tier and the one that needs speed least: a player's own
+   * action refreshes their screen straight from the mutation's reply, so this interval
+   * only decides how fast they notice somebody else's move.
+   *
+   * Ten of them, so this number is what pays for the two fast tiers above — it must stay
+   * comfortably slower than the projector or the arithmetic stops working.
+   */
+  it('lets phones poll slower than the surfaces that are being watched', () => {
+    expect(live('mobile')).toBeGreaterThan(live('admin')!);
+    expect(live('mobile')).toBeGreaterThan(live('screen')!);
+    // Still quick enough that another player's chip appears while you are looking at it.
+    expect(live('mobile')).toBeLessThanOrEqual(3000);
+  });
+
+  // The whole point of the balance: ten phones must not cost more than the two surfaces
+  // that actually need to be fast.
+  it('spends less on ten phones than it would at the projector’s rate', () => {
+    const perHour = (ms: number, clients: number) => (3600_000 / ms) * clients;
+    const phones = perHour(live('mobile')!, 10);
+    const watched = perHour(live('screen')!, 1) + perHour(live('admin')!, 2);
+    expect(phones).toBeLessThan(perHour(live('screen')!, 10));
+    expect(phones).toBeLessThan(watched * 2);
   });
 
   // The saving lives in the idle tiers, which are deliberately untouched: most of an

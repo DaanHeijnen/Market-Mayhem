@@ -1,25 +1,31 @@
 export const LIVE_CONFIG = {
   /*
-   * The live tiers are what the room feels.
+   * The live tiers are what the room feels, and they are deliberately lopsided.
    *
-   * Every tick is a single cached `game-version` call, and the full snapshot is fetched
-   * only when that version actually moved — so shortening these buys responsiveness
-   * without multiplying the expensive request. The projector is the surface people watch
-   * while the host presses a button, so it is the fastest of the three; at five seconds a
-   * VOLGENDE could sit unseen for longer than it took to decide on it, and a slotmachine
-   * spin could finish its whole 3.2s animation window between two polls.
+   * Every tick is one cached `game-version` call; the full snapshot follows only when that
+   * version actually moved. So the cost of a tier is the number of clients on it, and the
+   * three tiers are nothing alike: one projector, two Admin screens, and ten phones.
    *
-   * The idle and dormant tiers below are untouched, and they are where the saving actually
-   * lives: most of an evening's wall clock is setup, breaks and discussion, and none of
-   * these numbers apply then.
+   * The projector and the Admin are what somebody is *watching* when a player taps SPIN or
+   * locks a roulette chip, so they are fast — half a second and just under a second. Two
+   * surfaces between them, so that speed is nearly free.
+   *
+   * The phones are the expensive tier and the one that needs speed least. A player's own
+   * action refreshes their own screen directly from the mutation's reply, without waiting
+   * for a tick at all; the interval only governs how quickly they notice *somebody else's*
+   * move, where a couple of seconds is imperceptible. Ten clients at 2.5s cost less than
+   * ten at 1.2s by a wide margin, and that saving is what pays for the two fast tiers.
+   *
+   * The idle and dormant tiers are untouched, and they are where the real saving lives:
+   * most of an evening's wall clock is setup, breaks and discussion.
    */
-  BIG_SCREEN_POLL_MS: 1200,
+  BIG_SCREEN_POLL_MS: 500,
   BIG_SCREEN_IDLE_POLL_MS: 15000,
   BIG_SCREEN_DORMANT_POLL_MS: 60000,
-  ADMIN_POLL_MS: 2000,
+  ADMIN_POLL_MS: 900,
   ADMIN_IDLE_POLL_MS: 15000,
   MOBILE_IDLE_POLL_MS: 12000,
-  MOBILE_ACTIVE_POLL_MS: 1200,
+  MOBILE_ACTIVE_POLL_MS: 2500,
   ERROR_RETRY_MS: 10000,
   /** No interaction for this long, with the game idle, means nobody is really there. */
   AWAY_AFTER_MS: 10 * 60 * 1000,
