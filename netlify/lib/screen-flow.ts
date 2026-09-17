@@ -3,7 +3,13 @@ import { HttpError } from './http';
 import { setScreen, type ScreenTarget } from './game-state';
 import { completeRound } from './round-lifecycle';
 import { visibleNeighbours } from './presentation';
-import { slideIsRevealed } from './presentation';
+import {
+  displayStateOf,
+  presentationStep,
+  slideIsRevealed,
+  type PresentationDisplayState,
+  type PresentationPageState,
+} from './presentation';
 import { isRevealed as quizIsRevealed } from './live-quiz';
 import { pubquizIsRevealed } from './pubquiz';
 import { revealPubquizQuestion, revealQuizQuestion } from './question-reveal';
@@ -32,7 +38,8 @@ import { SCENE_FOR_ROUND_TYPE, type RoundType } from './round-types';
  *   LIVE_QUIZ    INTRO → question (opens) → its reveal, which pays → next → … → COMPLETED
  *   game rounds  INTRO → the round's own scene, which its own controls drive
  *
- * VORIGE is not the inverse of any of that. See `planStep` for why.
+ * VORIGE walks the same sequences backwards — with one deliberate limit, which `planStep`
+ * explains: it moves what the room is looking at, never what the round has already paid.
  */
 
 export type ScreenStep =
@@ -44,7 +51,16 @@ export type ScreenStep =
    * photo that belongs after the answer. Both are sub-states of the same question, which
    * is why they travel with the target rather than being targets of their own.
    */
-  | { kind: 'target'; target: ScreenTarget; label: string; reveal?: boolean; showContext?: boolean; hideContext?: boolean }
+  | {
+    kind: 'target';
+    target: ScreenTarget;
+    label: string;
+    reveal?: boolean;
+    /** Put a presentation page's answer back out of sight — VORIGE over a reveal. */
+    unreveal?: boolean;
+    showContext?: boolean;
+    hideContext?: boolean;
+  }
   /** There is nothing after this, and stepping forward ends the round. */
   | { kind: 'completeRound'; roundId: number; label: string }
   /** Nothing to step to in that direction, and why. */
@@ -115,10 +131,19 @@ const introStep = (round: ActiveRound): ScreenStep => ({
 /**
  * PRESENTATIE.
  *
- * A page with something to reveal is two steps, not one: the page, then its answer. A page
- * with nothing to reveal is one step, and no empty answer card is invented for it —
- * whether it has an answer is read from what the host authored (`reveal_text`, or a title
- * that is itself the answer).
+ * The whole sequence lives in `presentation.ts` as a list of display states; this reads
+ * the round, asks it for one step in the given direction, and turns the answer into
+ * something the projector can be pointed at.
+ *
+ * Which is why forward and back are not written twice here. The step already knows whether
+ * the state it lands on shows the page's answer, so the only thing left to work out is
+ * what has to change to *make* that true — reveal it, put it back out of sight, or
+ * neither. A host who steps back over a reveal sees the answer disappear, because that is
+ * the state they stepped back to.
+ *
+ * Deliberately unlike PUBQUIZ and LIVE_QUIZ, where VORIGE leaves a revealed question
+ * revealed. Giving a page's answer is presentation and nothing else; giving a question's
+ * answer is also when it pays, and a navigation button must never unpay anybody.
  */
 async function planPresentation(
   client: PoolClient,
@@ -133,7 +158,7 @@ async function planPresentation(
      WHERE s.round_id=$1 ORDER BY s.sort_order,s.id`,
     [round.id],
   );
-  const pages = rows.map((r: any, index: number) => ({
+  const pages = rows.map((r: any, index: number): PresentationPageState & { label: string } => ({
     id: Number(r.id),
     hidden: Boolean(r.hidden),
     label: (r.title as string) || `Page ${index + 1}`,
@@ -141,46 +166,34 @@ async function planPresentation(
     revealed: slideIsRevealed(r.revealed_at),
   }));
 
-  if (!pages.length) {
-    return direction === 'NEXT'
-      ? { kind: 'completeRound', roundId: round.id, label: 'This presentation has no pages' }
-      : introStep(round);
-  }
-  const around = visibleNeighbours(pages, at.slideId);
-  if (!around.visibleCount) {
-    return direction === 'NEXT'
-      ? { kind: 'completeRound', roundId: round.id, label: 'Every page is hidden' }
-      : introStep(round);
-  }
+  const standing = pages.find(page => page.id === at.slideId) ?? null;
+  const from: PresentationDisplayState | null = standing ? displayStateOf(standing) : null;
+  const step = presentationStep(pages, from, direction);
 
-  if (direction === 'PREVIOUS') {
-    if (at.slideId == null) return { kind: 'none', reason: 'This is the start of the round' };
-    const back = around.previous;
-    if (back) return { kind: 'target', target: { kind: 'slide', roundId: round.id, slideId: back.id }, label: back.label };
+  if (step.kind === 'end') {
+    const nothingToShow = !pages.length
+      ? 'This presentation has no pages'
+      : (pages.every(page => page.hidden) ? 'Every page is held back' : 'End of the presentation');
+    return { kind: 'completeRound', roundId: round.id, label: nothingToShow };
+  }
+  if (step.kind === 'start') {
+    // Backing out of the first page lands on the round's title card; backing out of the
+    // title card itself is the start of the round and goes nowhere.
+    if (at.onIntro) return { kind: 'none', reason: 'This is the start of the round' };
     return introStep(round);
   }
 
-  // From the intro, or from anywhere that is not this round's pages, the first page.
-  if (at.slideId == null || around.at < 0) {
-    const first = around.first!;
-    return { kind: 'target', target: { kind: 'slide', roundId: round.id, slideId: first.id }, label: first.label };
-  }
-
-  // Standing on a page that still has its answer to give: the answer is the next step,
-  // on the same page.
-  const current = pages[around.at];
-  if (current.hasAnswer && !current.revealed) {
-    return {
-      kind: 'target',
-      target: { kind: 'slide', roundId: round.id, slideId: current.id },
-      label: `${current.label} — antwoord`,
-      reveal: true,
-    };
-  }
-
-  const next = around.next;
-  if (next) return { kind: 'target', target: { kind: 'slide', roundId: round.id, slideId: next.id }, label: next.label };
-  return { kind: 'completeRound', roundId: round.id, label: 'End of the presentation' };
+  const page = pages.find(p => p.id === step.state.slideId)!;
+  return {
+    kind: 'target',
+    target: { kind: 'slide', roundId: round.id, slideId: page.id },
+    label: step.state.revealed ? `${page.label} — antwoord` : page.label,
+    // What has to change for the page to be in the state stepped to. Both are no-ops when
+    // it already is, which is what makes going back to an answered page show the answer
+    // without touching it.
+    ...(step.state.revealed && !page.revealed ? { reveal: true } : {}),
+    ...(!step.state.revealed && page.revealed ? { unreveal: true } : {}),
+  };
 }
 
 /**
@@ -315,10 +328,14 @@ function planGameRound(round: ActiveRound, at: Position, direction: NavigationDi
  *
  * Reads only, so the Admin can ask for it on every poll to draw the NEXT preview.
  *
- * VORIGE deliberately moves the pointer and nothing else. It is presentation history, not
- * an undo: going back to a page shows it as it now is, revealed answer and all, and going
- * back past a roulette spin shows the table without unpaying anybody. Domain state is only
- * ever moved forward, by the round's own controls or by NEXT.
+ * VORIGE walks the same display states backwards. For a presentation that is exact: the
+ * page, its answer, the next page, and back again — stepping back over an answer takes it
+ * down, because that is the state being stepped back to, and nothing but a flag moves.
+ *
+ * Where it stops being exact is where a step did something. Revealing a quiz question is
+ * also when it pays, and a settled roulette run has moved coins, so going back there shows
+ * the earlier scene without unpaying anybody. Money and answers only ever move forward —
+ * by the round's own controls, or by NEXT.
  */
 export async function planStep(
   client: PoolClient,
@@ -387,6 +404,16 @@ export async function advanceScreen(
   // Reveal before showing, so the projector never renders the unrevealed version of a
   // state the host has already stepped past.
   if (step.reveal) await applyReveal(client, gameId, step.target, actor);
+  // Stepping back over a presentation page's reveal. Guarded on the state it expects, so a
+  // step that arrives twice takes the answer down once. Only pages: this is the same flag
+  // the REVEAL/HIDE button on the page itself writes, and no coins have ever moved on it.
+  if (step.unreveal && step.target.kind === 'slide') {
+    await client.query(
+      `UPDATE presentation_slide_state SET revealed_at=NULL,revision=revision+1,updated_at=NOW()
+       WHERE slide_id=$1 AND revealed_at IS NOT NULL`,
+      [step.target.slideId],
+    );
+  }
   if (step.showContext && step.target.kind === 'quizQuestion') {
     await client.query(
       `UPDATE live_quiz_question_state SET context_photo_shown=TRUE,revision=revision+1,updated_at=NOW()
