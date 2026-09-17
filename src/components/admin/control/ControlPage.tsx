@@ -300,12 +300,19 @@ export function ControlPage({ state: s, gameId, run }: { state: any; gameId: num
     if (activeRound.type === 'FOTORONDE') {
       const photo = s.photoRound;
       const status = photo?.status || 'DRAFT';
+      const open = status === 'OPEN' && !photo?.submissionExpired;
       return <>
-        {status === 'DRAFT' && <button className="btn btn-blue" onClick={() => photoAction('OPEN')}>OPEN INZENDEN</button>}
+        {status === 'DRAFT' && <button className="btn btn-blue" onClick={() => photoAction('OPEN')}>OPEN INZENDEN ({photo?.submissionDurationMinutes ?? 15} MIN)</button>}
         {status === 'OPEN' && <button className="btn btn-secondary" onClick={() => photoAction('CLOSE')}>SLUIT INZENDEN</button>}
         {status === 'CLOSED' && <button className="btn btn-success" onClick={() => photoAction('COMPLETE')}>MARKEER AFGEROND</button>}
+        {/* The window, in the host's own line of sight. The countdown runs off the
+            server's deadline, so it agrees with every phone in the room. */}
         <span className="muted live-meta">
-          {photo?.submissionCount ?? 0} foto&apos;s · {photo?.judgedCount ?? 0} beoordeeld · {photo?.totalCredits ?? 0} credits toegekend
+          Inzenden: <b>{open ? 'OPEN' : 'GESLOTEN'}</b>
+          {open && photo?.submissionClosesAt
+            ? <> · resterende tijd <b><Countdown closesAt={photo.submissionClosesAt} /></b></>
+            : ''}
+          {' · '}{photo?.submissionCount ?? 0} foto&apos;s · {photo?.judgedCount ?? 0} beoordeeld · {photo?.totalCredits ?? 0} credits toegekend
         </span>
       </>;
     }
@@ -680,6 +687,12 @@ function PhotoRoundPanel({ round, run, gameId, activeRound, players, nav }: {
       <div><span className="label muted">FOTO'S</span><b>{round?.submissionCount ?? 0}</b></div>
       <div><span className="label muted">BEOORDEELD</span><b>{round?.judgedCount ?? 0} / {round?.submissionCount ?? 0}</b></div>
       <div><span className="label muted">CREDITS</span><b><CoinIcon size={16} /> {round?.totalCredits ?? 0}</b></div>
+      <div>
+        <span className="label muted">INZENDEN</span>
+        <b>{status === 'OPEN' && !round?.submissionExpired
+          ? (round?.submissionClosesAt ? <Countdown closesAt={round.submissionClosesAt} /> : 'OPEN')
+          : 'GESLOTEN'}</b>
+      </div>
     </div>
 
     {/* Teams are the unit everything else is grouped by, and the host builds them here

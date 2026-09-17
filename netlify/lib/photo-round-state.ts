@@ -1,6 +1,8 @@
 import type { Pool, PoolClient } from 'pg';
 import { HttpError } from './http';
 import {
+  DEFAULT_SUBMISSION_MINUTES,
+  acceptsUploads,
   describeDistribution,
   distributeCredits,
   normalizeSubjects,
@@ -56,6 +58,13 @@ export type PhotoRound = {
   totalCredits: number;
   acceptsUploads: boolean;
   acceptsAwards: boolean;
+  /** When the host opened submissions, and when the window shuts. Null before either. */
+  submissionOpenedAt: string | null;
+  submissionClosesAt: string | null;
+  /** Milliseconds left on the window, or null when this round has no deadline. */
+  submissionMsRemaining: number | null;
+  /** The deadline has passed. Distinct from CLOSED, which is the host's own decision. */
+  submissionExpired: boolean;
 };
 
 /**
@@ -77,6 +86,20 @@ function describeActualSplit(amounts: number[] | undefined, credits: number | nu
 }
 
 
+
+/**
+ * How long this round gives teams to submit.
+ *
+ * Read from the round's own settings row, falling back to the default for a round created
+ * before the setting existed — so opening always has a duration and never has to guess.
+ */
+export async function submissionMinutesForRound(db: Queryable, gameId: number, roundId: number) {
+  const { rows } = await db.query(
+    'SELECT submission_duration_minutes FROM fotoronde_rounds WHERE round_id=$1 AND game_night_id=$2',
+    [roundId, gameId],
+  );
+  return Number(rows[0]?.submission_duration_minutes ?? DEFAULT_SUBMISSION_MINUTES);
+}
 
 /**
  * Which team a player is on for this round.
@@ -104,7 +127,12 @@ export async function loadPhotoRound(
   subjects: PhotoSubject[],
 ): Promise<PhotoRound | null> {
   const rounds = await db.query(
-    'SELECT id,round_id,status FROM photo_rounds WHERE game_night_id=$1 AND round_id=$2',
+    `SELECT id,round_id,status,opened_at,submission_closes_at,
+            -- The window is judged against the database's clock, not this container's, so
+            -- a skewed function host cannot hold a shut window open or close an open one.
+            (submission_closes_at IS NOT NULL AND submission_closes_at<=NOW()) AS expired,
+            GREATEST(0,EXTRACT(EPOCH FROM (submission_closes_at-NOW()))*1000)::bigint AS ms_remaining
+     FROM photo_rounds WHERE game_night_id=$1 AND round_id=$2`,
     [gameId, roundId],
   );
   const row = rounds.rows[0];
@@ -185,6 +213,13 @@ export async function loadPhotoRound(
   }));
 
   const status = row.status as PhotoRoundStatus;
+  // Two reasons a window can be shut, combined here once. The phase is the host's own
+  // decision; `expired` was answered by the database's clock in the query above, which is
+  // why it is used rather than re-deciding from a timestamp against this container's.
+  const uploadsOpen = acceptsUploads(status) && !row.expired;
+  const msRemaining = row.submission_closes_at == null
+    ? null
+    : (row.expired ? 0 : Number(row.ms_remaining ?? 0));
 
   const bySubject = subjects.map(subject => {
     const forSubject = submissionRows.filter(s => s.subjectKey === subject.key);
@@ -221,8 +256,12 @@ export async function loadPhotoRound(
     submissionCount: submissionRows.length,
     judgedCount: submissionRows.filter(s => s.creditsAwarded != null).length,
     totalCredits: submissionRows.reduce((sum, s) => sum + (s.creditsAwarded ?? 0), 0),
-    acceptsUploads: status === 'OPEN',
+    acceptsUploads: uploadsOpen,
     acceptsAwards: status === 'CLOSED' || status === 'COMPLETED',
+    submissionOpenedAt: row.opened_at ?? null,
+    submissionClosesAt: row.submission_closes_at ?? null,
+    submissionMsRemaining: msRemaining,
+    submissionExpired: Boolean(row.expired),
   };
 }
 

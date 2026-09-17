@@ -21,6 +21,10 @@ import { wrap } from './_wrap';
  * the client can ask for. Storing the file and recording the submission happen in one
  * request so a successful upload can never leave an orphaned blob with no row, or a row
  * pointing at a file that was never written.
+ *
+ * The window is checked twice against the database's clock — before the bytes are stored
+ * and again inside the writing transaction — because the upload of a photo takes time and
+ * the deadline does not wait for it.
  */
 export default wrap(async request => {
   let form: FormData;
@@ -59,16 +63,23 @@ export default wrap(async request => {
     const player = await client.query('SELECT active FROM players WHERE id=$1 AND game_night_id=$2', [session.playerId, gameId]);
     if (!player.rows[0]?.active) throw new HttpError(403, 'Player is no longer active');
 
+    // The phase and the deadline, both answered by the database's own clock. A player
+    // whose phone is a minute slow must not be able to file a photo the window has
+    // already closed on, and a disabled button on the phone is not a check.
     const photoRound = await client.query(
-      'SELECT id,status FROM photo_rounds WHERE game_night_id=$1 AND round_id=$2',
+      `SELECT id,status,
+              (submission_closes_at IS NOT NULL AND submission_closes_at<=NOW()) AS expired
+       FROM photo_rounds WHERE game_night_id=$1 AND round_id=$2`,
       [gameId, roundId],
     );
     if (!photoRound.rows[0]) throw new HttpError(409, 'The Fotoronde has not opened yet');
     const status = photoRound.rows[0].status as PhotoRoundStatus;
-    if (!acceptsUploads(status)) {
+    if (!acceptsUploads(status) || photoRound.rows[0].expired) {
       throw new HttpError(409, status === 'DRAFT'
         ? 'The Fotoronde has not opened yet'
-        : 'Submissions are closed');
+        : photoRound.rows[0].expired
+          ? 'De inzendtijd is voorbij'
+          : 'Submissions are closed');
     }
 
     // The subject has to be one this round actually asks for, read from the round's own
@@ -103,11 +114,14 @@ export default wrap(async request => {
     // submissions while the bytes were in flight, and a stale client must not slip a
     // photo in afterwards.
     const stillOpen = await client.query(
-      'SELECT status FROM photo_rounds WHERE id=$1 FOR UPDATE',
+      `SELECT status,(submission_closes_at IS NOT NULL AND submission_closes_at<=NOW()) AS expired
+       FROM photo_rounds WHERE id=$1 FOR UPDATE`,
       [context.photoRoundId],
     );
-    if (!acceptsUploads(stillOpen.rows[0]?.status as PhotoRoundStatus)) {
-      throw new HttpError(409, 'Submissions closed before this photo arrived');
+    if (!acceptsUploads(stillOpen.rows[0]?.status as PhotoRoundStatus) || stillOpen.rows[0]?.expired) {
+      throw new HttpError(409, stillOpen.rows[0]?.expired
+        ? 'De inzendtijd liep af voordat deze foto binnenkwam'
+        : 'Submissions closed before this photo arrived');
     }
 
     // Replacing rather than adding: one active photo per team per subject, so a second

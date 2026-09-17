@@ -24,6 +24,7 @@ export function FotorondeEditor({ round, gameId, run, readOnly }: { round: any; 
   const [form, setForm] = useState({ label: '', points: String(round.defaultPoints), referenceMediaKey: '' });
   const [editingId, setEditingId] = useState<number | null>(null);
   const subjects: any[] = round.subjects || [];
+  const [minutes, setMinutes] = useState(String(round.fotoronde?.submissionDurationMinutes ?? 15));
 
   const reset = () => { setEditingId(null); setForm({ label: '', points: String(round.defaultPoints), referenceMediaKey: '' }); };
 
@@ -53,6 +54,34 @@ export function FotorondeEditor({ round, gameId, run, readOnly }: { round: any; 
   };
 
   return <>
+    {/* The round's own setting. It decides the length of the *next* window the host opens
+        and never moves one that is already running — teams are photographing against that
+        clock. */}
+    <Card>
+      <div className="label muted">FOTORONDE — THIS ROUND</div>
+      <div className="form-grid compact">
+        <label>Inzendtijd (minuten)
+          <input
+            className="field" type="number" min="1" max="240" disabled={readOnly}
+            value={minutes} onChange={e => setMinutes(e.target.value)}
+          />
+        </label>
+      </div>
+      <p className="muted type-note">
+        De klok begint pas wanneer je tijdens de ronde op OPEN INZENDEN klikt, en loopt daarna door
+        op de servertijd — ook als niemand naar een scherm kijkt. Je kunt altijd eerder sluiten.
+      </p>
+      {!readOnly && <div className="actions">
+        <button
+          className="btn btn-primary btn-compact"
+          onClick={() => run('/api/update-fotoronde-round', {
+            roundId: round.id,
+            submissionDurationMinutes: Number(minutes) || 15,
+          })}
+        >SAVE INZENDTIJD</button>
+      </div>}
+    </Card>
+
     {!readOnly && <Card>
       <div className="label muted">{editingId ? 'EDIT SUBJECT' : 'ADD A SUBJECT'}</div>
       <p className="muted type-note">

@@ -3,6 +3,7 @@ import { withTransaction } from '../lib/db';
 import { body, ok, intValue, HttpError } from '../lib/http';
 import { incrementGameVersion } from '../lib/game-state';
 import { canTransition, type PhotoRoundStatus } from '../lib/photo-round';
+import { submissionMinutesForRound } from '../lib/photo-round-state';
 import { wrap } from './_wrap';
 
 const ACTIONS = {
@@ -22,6 +23,9 @@ type Action = keyof typeof ACTIONS;
  *
  * COMPLETE is a marker rather than a lock: awarding stays possible afterwards, so a host
  * who marks it done and then spots a photo they skipped is not stuck.
+ *
+ * OPEN also starts the submission clock. CLOSE stays available throughout, so a host who
+ * wants to stop early never has to wait for a timer they set too generously.
  */
 export default wrap(async request => {
   const admin = await requireAdmin(request);
@@ -77,15 +81,33 @@ export default wrap(async request => {
       if (Number(groups.rows[0].n) === 0) throw new HttpError(409, 'Create at least one team for this round before opening the Fotoronde');
     }
 
-    const column = target === 'OPEN' ? 'opened_at' : target === 'CLOSED' ? 'closed_at' : 'completed_at';
-    await client.query(
-      `UPDATE photo_rounds SET status=$2,${column}=NOW(),updated_at=NOW() WHERE id=$1`,
-      [photoRoundId, target],
-    );
+    // Opening is what starts the clock. The deadline is computed from the database's own
+    // NOW() rather than from this container's, so every surface counts down to the same
+    // instant no matter whose clock is off — and it is stamped exactly once, because the
+    // phase machine has no route back to OPEN.
+    let closesAt: string | null = null;
+    if (target === 'OPEN') {
+      const minutes = await submissionMinutesForRound(client, gameId, roundId);
+      const opened = await client.query(
+        `UPDATE photo_rounds
+         SET status='OPEN',opened_at=NOW(),
+             submission_closes_at=NOW()+($2::text||' minutes')::interval,
+             updated_at=NOW()
+         WHERE id=$1 RETURNING submission_closes_at`,
+        [photoRoundId, minutes],
+      );
+      closesAt = opened.rows[0]?.submission_closes_at ?? null;
+    } else {
+      const column = target === 'CLOSED' ? 'closed_at' : 'completed_at';
+      await client.query(
+        `UPDATE photo_rounds SET status=$2,${column}=NOW(),updated_at=NOW() WHERE id=$1`,
+        [photoRoundId, target],
+      );
+    }
 
     await audit(client, gameId, admin.username, `fotoronde ${action.toLowerCase()}`, 'round', roundId, {
-      photoRoundId, from: status, to: target,
+      photoRoundId, from: status, to: target, closesAt,
     });
-    return { status: target, version: await incrementGameVersion(client, gameId) };
+    return { status: target, submissionClosesAt: closesAt, version: await incrementGameVersion(client, gameId) };
   }));
 });

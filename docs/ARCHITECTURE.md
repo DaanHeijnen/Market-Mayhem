@@ -20,11 +20,18 @@ Server reads also synchronize timed state:
 
 - expired `OPEN` predictions become `LOCKED`;
 - a stored roulette `SPINNING` result becomes `RESULT` after the presentation interval;
-- a slot spin becomes `RESULT` after `SLOT_SPIN_MS`, ending the reel-animation window.
+- a slot spin becomes `RESULT` after `SLOT_SPIN_MS`, ending the reel-animation window;
+- a Fotoronde submission window past its deadline becomes `CLOSED`.
 
 A live Pak een Zes also keeps clients on the fast poll tier, so every surface updates within one interval of each card.
 
-Bet endpoints independently re-check market state/deadline inside their transaction, so a stale client cannot place a late wager.
+Bet endpoints independently re-check market state/deadline inside their transaction, so a stale client cannot place a late wager. The same holds for a photo upload: the window is checked against the database's clock before the bytes are stored and again inside the writing transaction, so nothing depends on a browser making a request at exactly `00:00`.
+
+### What counts as idle
+
+The version response carries an `idle` flag and clients pick their poll interval from it. It used to mean only "nothing is running" — no active round, no open market — which is true and was the wrong question. The gap between two rounds is exactly when it holds, so the projector had backed off to its slow tier at the moment the host pressed START, and the first thing a round showed took seconds to appear while every later VOLGENDE landed in half a second.
+
+Idleness now also asks whether anything has happened lately: a game whose `updated_at` moved within the last minute is awake, however little is running in it. A host working in the Admin bumps the version with every change, so the room stays warm through the pause between rounds and settles only once they have genuinely stopped. The projector's own slow tiers bound the case that rule does not cover — a start into a quiet room — and they are short (four seconds idle, fifteen dormant) because nobody ever touches a projector to wake it, and because it is one client.
 
 ## Settings
 
@@ -192,6 +199,20 @@ paid, which is what makes it safe. Every transition is checked against this mach
 REVEAL arriving after somebody already settled is refused rather than rolling the question
 backwards. The write additionally carries the revision the caller read, so two admin tabs
 pressing the same button produce one change and one 409.
+
+### Asking and answering are two steps
+
+A question is two display states, and VOLGENDE moves between them: arriving at it asks it (status `READY` → `OPEN`, answers open on the phones), and the next press reveals it — which is also when it pays.
+
+These were one flag on the step, and the preview could not tell them apart. So the Admin's VOLGENDE column drew every arrival as a reveal: the preview of "go to question 2" was question 2 *with its correct answer*, a press early. Two names now (`open` and `reveal`), because they are two states and the preview has to draw the one the next press produces.
+
+Arriving never re-opens a question that has already been through — one the host stepped back past is shown as it now stands. Stepping back never un-asks or un-pays anything: unlike a presentation page's answer line, a question's reveal has moved coins.
+
+### Authored text on the projector
+
+Text the host types into an Admin field is plain text, and it arrives with the shape they gave it: paragraphs separated by blank lines, list items on their own lines, the odd indent. HTML collapses all of that, so a set of instructions reached the projector as one block.
+
+`AuthoredText` preserves the shape without interpreting the content. Paragraphs become real `<p>` elements, which is where the vertical rhythm comes from; `white-space: pre-wrap` keeps the line breaks and indentation inside one. It is still rendered as React children and never as markup — there is no `dangerouslySetInnerHTML` and none is needed — so nothing typed into an Admin field can become an element. `normalizeAuthoredText` is the pure half: one line ending, tabs as two spaces, indentation capped so a line cannot push off the side of a screen nobody can scroll, and any run of blank lines read as one break.
 
 ### Explicit payloads, not stripped rows
 
@@ -466,11 +487,21 @@ stateDiagram-v2
 
 Forward-only. Uploads are accepted in `OPEN` alone; awards in `CLOSED` and `COMPLETED`. There is no route back to `OPEN` because a team must not be able to swap a photo the Admin has already judged, and `COMPLETED` still accepts awards so marking it done is not a trap.
 
+### The submission window
+
+How long teams get is authored per round (`fotoronde_rounds.submission_duration_minutes`); when that runs out is runtime (`photo_rounds.submission_closes_at`). Two places on purpose — editing the duration decides the length of the *next* window and must never move one teams are already photographing against.
+
+The clock starts when the host presses OPEN INZENDEN, not when the round starts, and the deadline is computed from the database's own `NOW()` so every phone, the Admin and the projector count down to the same instant whatever their own clocks say. Clients tick locally for a smooth second hand but count towards that timestamp, which is why a reload does not restart the timer.
+
+A window can be shut for two different reasons — the host closed it, or the clock ran out — and `uploadsAccepted(status, closesAt)` is the single answer to "may a photo be filed right now", so no endpoint can check one and forget the other. Enforcement does not depend on the sweep: an upload arriving after the deadline is refused by the endpoint directly, and the sweep exists so the round also *looks* closed and judging can start. Closing early is always available; the host is never held to a timer they set too generously.
+
 ### Uploads
 
 `upload-photo-submission` is player-authenticated but reuses the round-media blob store and `lib/media`'s size and type limits — a photo round is round media like any other, and its bytes must not reach the database. Validation happens before a byte is stored, so a refused submission leaves no orphaned file, and the phase is re-checked inside the writing transaction so a photo cannot land after the Admin closed submissions.
 
-One photo per team per subject is a database guarantee: `UNIQUE (photo_round_id, subject_key, group_id)` plus an upsert, so a second upload from any team-mate replaces the team's photo rather than adding one.
+One photo per team per subject is a database guarantee: `UNIQUE (photo_round_id, subject_key, group_id)` plus an upsert, so a second upload from any team-mate replaces the team's photo rather than adding one — including two team-mates uploading at the same moment, which produces one row whichever order they arrive in.
+
+`uploaded_by` travels with the photo and is shown on every team-mate's phone ("Ingezonden door Jordi"), which is what stops a second member re-shooting something that is already done and tells them whose photo they are about to replace.
 
 ### Credits
 

@@ -4,6 +4,7 @@ import { body, created, intValue, textValue, HttpError } from '../lib/http';
 import { incrementGameVersion } from '../lib/game-state';
 import { roundTypeValue } from '../lib/rounds';
 import { wrap } from './_wrap';
+import { DEFAULT_SUBMISSION_MINUTES, MIN_SUBMISSION_MINUTES, MAX_SUBMISSION_MINUTES } from '../lib/photo-round';
 
 /**
  * Create a round.
@@ -52,6 +53,18 @@ export default wrap(async (request) => {
       await client.query(
         'INSERT INTO slotmachine_rounds(round_id,game_night_id,max_spins) VALUES($1,$2,$3)',
         [roundId, gameId, maxSpins],
+      );
+    }
+
+    if (type === 'FOTORONDE') {
+      const minutes = payload.submissionDurationMinutes == null
+        ? DEFAULT_SUBMISSION_MINUTES
+        : intValue(payload.submissionDurationMinutes, 'submissionDurationMinutes', {
+          min: MIN_SUBMISSION_MINUTES, max: MAX_SUBMISSION_MINUTES,
+        });
+      await client.query(
+        'INSERT INTO fotoronde_rounds(round_id,game_night_id,submission_duration_minutes) VALUES($1,$2,$3)',
+        [roundId, gameId, minutes],
       );
     }
 

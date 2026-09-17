@@ -55,7 +55,20 @@ export type ScreenStep =
     kind: 'target';
     target: ScreenTarget;
     label: string;
+    /**
+     * Give away what this state holds back: a page's answer line, or a question's correct
+     * option — which for a question is also when it pays.
+     */
     reveal?: boolean;
+    /**
+     * Ask a question: open it for answers. Deliberately not the same flag as `reveal`.
+     *
+     * These were one boolean, and the preview could not tell them apart — so arriving at
+     * question 2 was drawn as question 2 *with its answer*, a step early and with the
+     * answer on the Admin's screen before the room had been asked. Two names, because they
+     * are two states of the same question and the preview has to draw the right one.
+     */
+    open?: boolean;
     /** Put a presentation page's answer back out of sight — VORIGE over a reveal. */
     unreveal?: boolean;
     showContext?: boolean;
@@ -274,12 +287,23 @@ async function planQuestions(
     return introStep(round);
   }
 
-  if (currentId == null || around.at < 0) {
-    const first = around.first!;
-    return { kind: 'target', target: targetFor(first.id), label: first.label, reveal: true };
-  }
+  // Arriving at a question asks it. A question the host has already been through — one
+  // they stepped back past, say — is shown as it now stands and nothing is re-opened.
+  const arriveAt = (question: typeof questions[number]): ScreenStep => ({
+    kind: 'target',
+    target: targetFor(question.id),
+    label: question.label,
+    ...(question.status === 'READY' ? { open: true } : {}),
+  });
+
+  if (currentId == null || around.at < 0) return arriveAt(around.first!);
 
   const current = questions[around.at];
+
+  // Up, but never asked — the host put it on the screen themselves rather than stepping
+  // to it. The next press asks it, exactly as arriving at it would have.
+  if (current.status === 'READY') return arriveAt(current);
+
   // Asked but not answered yet: revealing is the next step, and it is what pays.
   if (!current.revealed) {
     return { kind: 'target', target: targetFor(current.id), label: `${current.label} — antwoord`, reveal: true };
@@ -298,7 +322,7 @@ async function planQuestions(
   }
 
   const next = around.next;
-  if (next) return { kind: 'target', target: targetFor(next.id), label: next.label, reveal: true };
+  if (next) return arriveAt(next);
   return { kind: 'completeRound', roundId: round.id, label: 'End of the round' };
 }
 
@@ -401,8 +425,9 @@ export async function advanceScreen(
     return { kind: 'completeRound' as const, roundId: round.id, completed, revision };
   }
 
-  // Reveal before showing, so the projector never renders the unrevealed version of a
+  // Ask or answer before showing, so the projector never renders the earlier version of a
   // state the host has already stepped past.
+  if (step.open) await applyOpen(client, step.target);
   if (step.reveal) await applyReveal(client, gameId, step.target, actor);
   // Stepping back over a presentation page's reveal. Guarded on the state it expects, so a
   // step that arrives twice takes the answer down once. Only pages: this is the same flag
@@ -444,14 +469,34 @@ export async function advanceScreen(
 }
 
 /**
- * Open or reveal whatever the step points at.
+ * Ask the question the step points at: open it for answers.
  *
- * Which of the two depends on where the question already is, and that is the whole of the
- * pubquiz and quiz chronology: arriving on a fresh question asks it, and stepping again
- * from an asked question answers it. Two presses, two meanings, one button.
+ * Guarded on READY, so a step that arrives twice opens it once and a question the host
+ * already opened by hand is left exactly where it is. Nothing is paid here — asking is
+ * free; it is the reveal that moves coins.
+ */
+async function applyOpen(client: PoolClient, target: ScreenTarget) {
+  if (target.kind === 'pubquizQuestion') {
+    await client.query(
+      `UPDATE pubquiz_question_state SET status='OPEN',opened_at=NOW(),revision=revision+1,updated_at=NOW()
+       WHERE question_id=$1 AND status='READY'`,
+      [target.questionId],
+    );
+  }
+  if (target.kind === 'quizQuestion') {
+    await client.query(
+      `UPDATE live_quiz_question_state SET status='OPEN',opened_at=NOW(),revision=revision+1,updated_at=NOW()
+       WHERE question_id=$1 AND status='READY'`,
+      [target.questionId],
+    );
+  }
+}
+
+/**
+ * Give away what the step's target holds back.
  *
- * Revealing is where the coins move, so it goes through the same `question-reveal`
- * operation the reveal button uses rather than writing a status here — one rule, two
+ * For a question that is also when it pays, so it goes through the same `question-reveal`
+ * operation the REVEAL button uses rather than writing a status here — one rule, two
  * callers. Every write is guarded on the state it expects, so a step that arrives twice
  * changes nothing the second time.
  */
@@ -467,24 +512,11 @@ async function applyReveal(client: PoolClient, gameId: number, target: ScreenTar
   }
 
   if (target.kind === 'pubquizQuestion') {
-    const opened = await client.query(
-      `UPDATE pubquiz_question_state SET status='OPEN',opened_at=NOW(),revision=revision+1,updated_at=NOW()
-       WHERE question_id=$1 AND status='READY' RETURNING question_id`,
-      [target.questionId],
-    );
-    // It was fresh, so this step asked it. Answering it is the next press.
-    if (opened.rows[0]) return;
     await revealPubquizQuestion(client, gameId, target.questionId, actor);
     return;
   }
 
   if (target.kind === 'quizQuestion') {
-    const opened = await client.query(
-      `UPDATE live_quiz_question_state SET status='OPEN',opened_at=NOW(),revision=revision+1,updated_at=NOW()
-       WHERE question_id=$1 AND status='READY' RETURNING question_id`,
-      [target.questionId],
-    );
-    if (opened.rows[0]) return;
     await revealQuizQuestion(client, gameId, target.questionId, actor);
   }
 }

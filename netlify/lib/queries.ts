@@ -6,6 +6,7 @@ import { cooldownMinutesLeft, describeRequestStatus, requestsRemaining } from '.
 import { loadSlotConfig, loadSlotTurn, slotRoundIsFinished } from './slot-state';
 import { loadPakEenZesGame } from './pak-een-zes-state';
 import { loadPhotoRound, playerTeamForRound } from './photo-round-state';
+import { DEFAULT_SUBMISSION_MINUTES } from './photo-round';
 import { countCorrectPredictions, playerAtTurn, predictionPoints } from './pak-een-zes';
 import { describeSlotConfig, maySpin, symbolLetter, SLOT_MAX_SPINS_LIMIT, SLOT_OUTCOME_LABELS, SLOT_SPIN_MS, type SlotOutcomeType } from './slotmachine';
 import { isRevealed, mayShowContextPhoto, questionParticipation } from './live-quiz';
@@ -26,10 +27,11 @@ export async function syncTimedState(gameId: number, knownDue = false) {
       `SELECT
         EXISTS(SELECT 1 FROM predictions WHERE game_night_id=$1 AND status='OPEN' AND closes_at IS NOT NULL AND closes_at<=NOW()) AS prediction_due,
         EXISTS(SELECT 1 FROM roulette_games WHERE game_night_id=$1 AND status='SPINNING' AND spun_at IS NOT NULL AND spun_at<=NOW()-($2::text||' milliseconds')::interval) AS roulette_due,
-        EXISTS(SELECT 1 FROM slot_spins WHERE game_night_id=$1 AND status='SPINNING' AND spun_at<=NOW()-($3::text||' milliseconds')::interval) AS slot_due`,
+        EXISTS(SELECT 1 FROM slot_spins WHERE game_night_id=$1 AND status='SPINNING' AND spun_at<=NOW()-($3::text||' milliseconds')::interval) AS slot_due,
+        EXISTS(SELECT 1 FROM photo_rounds WHERE game_night_id=$1 AND status='OPEN' AND submission_closes_at IS NOT NULL AND submission_closes_at<=NOW()) AS photo_due`,
       [gameId, ROULETTE_SPIN_MS, SLOT_SPIN_MS],
     );
-    if (!due.rows[0]?.prediction_due && !due.rows[0]?.roulette_due && !due.rows[0]?.slot_due) return false;
+    if (!due.rows[0]?.prediction_due && !due.rows[0]?.roulette_due && !due.rows[0]?.slot_due && !due.rows[0]?.photo_due) return false;
   }
 
   return withTransaction(async client => {
@@ -115,6 +117,22 @@ export async function syncTimedState(gameId: number, knownDue = false) {
       }
     }
 
+    // A submission window that has run out shuts itself.
+    //
+    // Server-side and on the database's own clock, so it does not depend on a browser
+    // being awake at 00:00 — and the upload endpoint refuses on the deadline directly
+    // anyway, so a photo cannot slip through the gap between the deadline and this sweep.
+    // Deliberately CLOSED rather than a separate expired phase: to everyone downstream a
+    // window that ran out and one the host shut are the same thing, and judging starts.
+    const windowsClosed = await client.query(
+      `UPDATE photo_rounds SET status='CLOSED',closed_at=COALESCE(closed_at,NOW()),updated_at=NOW()
+       WHERE game_night_id=$1 AND status='OPEN'
+         AND submission_closes_at IS NOT NULL AND submission_closes_at<=NOW()
+       RETURNING id`,
+      [gameId],
+    );
+    if (windowsClosed.rowCount) changed = true;
+
     if (changed) await incrementGameVersion(client, gameId);
     return changed;
   });
@@ -123,6 +141,22 @@ export async function syncTimedState(gameId: number, knownDue = false) {
 export const syncExpiredPredictions = syncTimedState;
 
 export type GameVersion = { version: number; idle: boolean };
+
+/**
+ * How long after a change the evening still counts as awake.
+ *
+ * `idle` used to mean only "nothing is running" — no active round, no open market. True
+ * enough, and it made the projector back off to fifteen seconds (sixty, once the away rule
+ * fired, because nobody ever touches a projector). The trouble is that the gap between two
+ * rounds is exactly when that is true, so pressing START was invisible for up to a minute
+ * while every later VOLGENDE landed in half a second. That is the whole reason starting a
+ * presentation felt broken and navigating it did not.
+ *
+ * So idleness now also asks whether anything has happened lately. A host working in the
+ * Admin bumps the game version with every change, which keeps the room awake through the
+ * pause between rounds and lets it settle only once they have genuinely stopped.
+ */
+const AWAKE_AFTER_CHANGE_SECONDS = 60;
 
 // This is the single hottest query in the product: every client polls it on an
 // interval, so it is also what keeps the database compute from suspending. A very
@@ -144,23 +178,26 @@ export async function getGameVersion(gameId: number): Promise<GameVersion> {
   const result = await database().pool.query(
     `SELECT g.game_state_version,
       g.current_round_id,
+      (g.updated_at > NOW() - ($4::text||' seconds')::interval) AS recently_changed,
       EXISTS(SELECT 1 FROM predictions p WHERE p.game_night_id=g.id AND p.status='OPEN' AND p.closes_at IS NOT NULL AND p.closes_at<=NOW()) AS prediction_due,
       EXISTS(SELECT 1 FROM roulette_games rg WHERE rg.game_night_id=g.id AND rg.status='SPINNING' AND rg.spun_at IS NOT NULL AND rg.spun_at<=NOW()-($2::text||' milliseconds')::interval) AS roulette_due,
       EXISTS(SELECT 1 FROM predictions p WHERE p.game_night_id=g.id AND p.status IN ('OPEN','LOCKED','RESULT')) AS market_live,
       EXISTS(SELECT 1 FROM roulette_games rg WHERE rg.game_night_id=g.id AND rg.status IN ('OPEN','LOCKED','SPINNING','RESULT')) AS roulette_live,
       EXISTS(SELECT 1 FROM slot_spins ss WHERE ss.game_night_id=g.id AND ss.status='SPINNING' AND ss.spun_at<=NOW()-($3::text||' milliseconds')::interval) AS slot_due,
+      EXISTS(SELECT 1 FROM photo_rounds fr WHERE fr.game_night_id=g.id AND fr.status='OPEN' AND fr.submission_closes_at IS NOT NULL AND fr.submission_closes_at<=NOW()) AS photo_due,
       EXISTS(SELECT 1 FROM slot_series sr WHERE sr.game_night_id=g.id AND sr.status='ACTIVE') AS slot_live,
       EXISTS(SELECT 1 FROM pak_een_zes_games pz WHERE pz.game_night_id=g.id AND pz.status IN ('PREDICTING','LOCKED','DRAWING')) AS pak_live,
       EXISTS(SELECT 1 FROM photo_rounds fr WHERE fr.game_night_id=g.id AND fr.status IN ('DRAFT','OPEN','CLOSED')) AS photo_live
      FROM game_nights g WHERE g.id=$1`,
-    [gameId, ROULETTE_SPIN_MS, SLOT_SPIN_MS],
+    [gameId, ROULETTE_SPIN_MS, SLOT_SPIN_MS, AWAKE_AFTER_CHANGE_SECONDS],
   );
   const row = result.rows[0];
   if (!row) throw new HttpError(404, 'Game not found');
 
-  const idle = !row.current_round_id && !row.market_live && !row.roulette_live && !row.slot_live && !row.pak_live && !row.photo_live;
+  const idle = !row.recently_changed
+    && !row.current_round_id && !row.market_live && !row.roulette_live && !row.slot_live && !row.pak_live && !row.photo_live;
   let version = Number(row.game_state_version);
-  if (row.prediction_due || row.roulette_due || row.slot_due) {
+  if (row.prediction_due || row.roulette_due || row.slot_due || row.photo_due) {
     await syncTimedState(gameId, true);
     const refreshed = await database().pool.query('SELECT game_state_version FROM game_nights WHERE id=$1', [gameId]);
     version = Number(refreshed.rows[0].game_state_version);
@@ -299,7 +336,13 @@ export async function getAdminState(gameId: number) {
       };
     }
     if (round.type === 'FOTORONDE') {
-      return { ...base, subjects: (content.subjectsByRound.get(id) || []).map(adminSubject) };
+      return {
+        ...base,
+        subjects: (content.subjectsByRound.get(id) || []).map(adminSubject),
+        // The round's own settings, defaulted for a round created before the window
+        // existed — so the editor always has a number to show.
+        fotoronde: content.fotorondeByRound.get(id) || { submissionDurationMinutes: DEFAULT_SUBMISSION_MINUTES },
+      };
     }
     if (round.type === 'SLOTMACHINE') {
       return { ...base, slotmachine: content.slotByRound.get(id) || { maxSpins: SLOT_MAX_SPINS_LIMIT, allowedPlayerIds: [] } };
@@ -448,10 +491,17 @@ export async function getAdminState(gameId: number) {
           totalCredits: 0,
           acceptsUploads: false,
           acceptsAwards: false,
+          submissionOpenedAt: null,
+          submissionClosesAt: null,
+          submissionMsRemaining: null,
+          submissionExpired: false,
         }),
         roundId: activeRound.id,
         subjects: (activeRound as any).subjects,
         instructions: activeRound.instructions,
+        // What the host configured, beside what is actually running — so "Inzendtijd: 15
+        // minuten" is visible before the window is opened and afterwards.
+        submissionDurationMinutes: (activeRound as any).fotoronde?.submissionDurationMinutes ?? DEFAULT_SUBMISSION_MINUTES,
         shownSubmissionId: Number(screenRow?.payload?.photoSubmissionId || 0) || null,
       };
     })(),
@@ -677,7 +727,9 @@ export async function getPlayerState(gameId: number, playerId: number) {
     // Like the other games, a Fotoronde only reaches a phone while its block is live and
     // its round is active. The team comes from the round's groups, never from the phone.
     pool.query(
-      `SELECT r.id,r.id AS round_id,r.title,r.instructions,fr.id AS photo_round_id,fr.status
+      `SELECT r.id,r.id AS round_id,r.title,r.instructions,fr.id AS photo_round_id,fr.status,
+              fr.submission_closes_at,
+              (fr.submission_closes_at IS NOT NULL AND fr.submission_closes_at<=NOW()) AS submission_expired
        FROM game_nights g
        JOIN rounds r ON r.id=g.current_round_id AND r.status='ACTIVE' AND r.type='FOTORONDE'
        LEFT JOIN photo_rounds fr ON fr.round_id=r.id AND fr.game_night_id=g.id
@@ -876,6 +928,10 @@ export async function getPlayerState(gameId: number, playerId: number) {
     );
     const subjects = subjectRows.rows.map(publicSubject);
     const status = photoRow.status || 'DRAFT';
+    // The deadline as the database sees it. The phone counts down locally for a smooth
+    // second hand, but what it counts down *to* is this, so a refresh never restarts the
+    // timer and two phones with different clocks still stop together.
+    const expired = Boolean(photoRow.submission_expired);
     const team = await playerTeamForRound(pool, Number(photoRow.round_id), playerId);
     const own = team && photoRow.photo_round_id
       ? await pool.query(
@@ -893,7 +949,9 @@ export async function getPlayerState(gameId: number, playerId: number) {
       title: photoRow.title || 'Fotoronde',
       instructions: photoRow.instructions || '',
       status,
-      open: status === 'OPEN',
+      open: status === 'OPEN' && !expired,
+      submissionClosesAt: photoRow.submission_closes_at ?? null,
+      submissionExpired: expired,
       // Null when this player is in no team: they are told so rather than shown an
       // upload button that the server would refuse.
       team: team ? { groupId: team.groupId, name: team.name } : null,
@@ -973,6 +1031,13 @@ export type ScreenOverride = {
    * changes nothing about the reveal, which is not the same as `false`.
    */
   previewReveal?: boolean;
+  /**
+   * Draw this as though the question had already been asked.
+   *
+   * Separate from `previewReveal`, because asking and answering are two different states
+   * of the same question and the preview has to show the one the next press produces.
+   */
+  previewOpen?: boolean;
   /** Draw this as though the host had already brought the context photo up. */
   previewContext?: boolean;
 };
@@ -1221,6 +1286,12 @@ export async function getScreenState(gameId: number, override?: ScreenOverride) 
   if (override && override.previewReveal === false && slideRow) {
     slideRow = { ...slideRow, revealed_at: null };
   }
+  // Asked, not answered. The preview of "go to question 2" is question 2 open for answers
+  // — not question 2 with its answer on the wall, which is the press after that.
+  if (override?.previewOpen) {
+    if (pubPreviewRow) pubPreviewRow = { ...pubPreviewRow, status: 'OPEN' };
+    if (quizPreviewRow) quizPreviewRow = { ...quizPreviewRow, status: 'OPEN' };
+  }
   if (override?.previewContext && quizPreviewRow) {
     // The photo scene is a revealed question with its photo up, so the preview is that
     // same pair — drawn by the same DTO, one step early.
@@ -1409,6 +1480,11 @@ export async function getScreenState(gameId: number, override?: ScreenOverride) 
       return {
         roundId: gameRoundId,
         status: screenPhotoRound.status,
+        // The same deadline the phones count down to, so the room and the teams are
+        // watching one clock. A timestamp, not a number of seconds: a snapshot can be a
+        // moment old by the time it is drawn.
+        submissionClosesAt: screenPhotoRound.submissionClosesAt,
+        submissionOpen: screenPhotoRound.acceptsUploads,
         teamCount: screenPhotoRound.teams.length,
         subjects: screenPhotoRound.bySubject.map(entry => ({
           key: entry.subject.key,

@@ -24,6 +24,7 @@ erDiagram
   rounds ||--o{ presentation_slides : "PRESENTATIE authors"
   presentation_slides ||--|| presentation_slide_state : "runs as"
 
+  rounds ||--|| fotoronde_rounds : "FOTORONDE configures"
   rounds ||--o{ fotoronde_subjects : "FOTORONDE authors"
   rounds ||--o{ photo_rounds : "FOTORONDE runs"
   photo_rounds ||--o{ photo_submissions : collects
@@ -134,6 +135,10 @@ the type lives on the parent row where a `CHECK` cannot see it.
   `reference_media_key`. Unique on `(round_id, subject_key)`: the key is the identity a
   photo is filed under, so it is derived once and never edited, which is what keeps a
   renamed subject attached to its photos.
+- `fotoronde_rounds` — `round_id` PK, `submission_duration_minutes` (1–240, default 15).
+  How long teams get, authored before the round is played. Deliberately separate from the
+  runtime deadline on `photo_rounds`: changing this decides the length of the *next* window
+  the host opens and never moves one that is already running.
 
 ### `SLOTMACHINE`
 
@@ -211,6 +216,7 @@ Correct predictions are a multiset match, so a name picked twice can score twice
 Migration 0015 adds two tables. "Team" means a **round group**: `round_group_members` is unique by `(round_id, player_id)`, so a player's team is derivable from their session rather than sent by their phone. The legacy `teams` table is untouched and unread.
 
 - `photo_rounds` — one per round, with `status` (`DRAFT`/`OPEN`/`CLOSED`/`COMPLETED`) and its phase timestamps. A unique index on `round_id` allows exactly one for the life of the round: unlike the other games there is no "start over", because the photos and the credits awarded for them are history.
+  `submission_closes_at` is the deadline, stamped once by the OPEN action from the database's own `NOW()` — the clock starts when the host opens submissions, not when the round starts, and the phase machine has no route back to OPEN so it is never re-stamped. Nullable, and a null means *no* deadline rather than one already past, so a round opened before this existed stays open-ended. A partial index on the still-running windows carries the auto-close sweep.
 - `photo_submissions` — one photo per team per subject, keyed `(photo_round_id, subject_key, group_id)` by a unique constraint. That constraint *is* the "one active submission per team per subject" rule; replacing upserts the row rather than inserting a second. `group_id` cascades with the group (a photo for a team that no longer exists has nobody to pay), while `uploaded_by` is `ON DELETE SET NULL` so removing a player never erases their team's photo or the credits it earned. Only the Netlify Blobs `media_key` is stored, never the bytes. A partial index on `credits_awarded IS NULL` carries the Admin's unjudged working list.
 
 `ledger_entries.photo_submission_id` attributes the `PHOTO_ROUND_REWARD` rows, with a partial unique index on `(photo_submission_id, player_id)` that makes a double payout impossible rather than unlikely. Credits are real coins in wallets — there is no second currency.
@@ -409,7 +415,7 @@ Coins are adjusted afterwards through `adjust-coins`, which accepts either `amou
 Full Reset splits every table in this schema into two groups, listed explicitly as `RUNTIME_TABLES` and `PRESERVED_TABLES` in `netlify/lib/full-reset.ts`:
 
 - **Runtime** — what playing the evening produced: `ledger_entries`, `bets`, `roulette_games`/`roulette_bets`, `slot_series`/`slot_spins`, the four `pak_een_zes_*` tables, `photo_rounds`/`photo_submissions`, `quiz_answers`, `prediction_requests`, and the legacy `player_timers`/`player_codewords`. Deleted, children before parents.
-- **Configuration** — what the Admin prepared: `rounds`, the six per-type content tables (`live_quiz_questions`, `live_quiz_question_options`, `presentation_slides`, `fotoronde_subjects`, `slotmachine_rounds`, `slotmachine_round_participants`), `round_groups`/`round_group_members`, `predictions`, `slot_configs`/`slot_reel_symbols`/`slot_outcome_types`, `players`, `wallets`, `player_join_tokens`, `player_sessions`, `game_nights`, `screen_state`, `admin_sessions`, `admin_audit_log`, and the two archives `round_blocks_archive`/`migration_notes`. Kept, with any runtime columns reset in place.
+- **Configuration** — what the Admin prepared: `rounds`, the six per-type content tables (`live_quiz_questions`, `live_quiz_question_options`, `presentation_slides`, `fotoronde_subjects`, `fotoronde_rounds`, `slotmachine_rounds`, `slotmachine_round_participants`), `round_groups`/`round_group_members`, `predictions`, `slot_configs`/`slot_reel_symbols`/`slot_outcome_types`, `players`, `wallets`, `player_join_tokens`, `player_sessions`, `game_nights`, `screen_state`, `admin_sessions`, `admin_audit_log`, and the two archives `round_blocks_archive`/`migration_notes`. Kept, with any runtime columns reset in place.
 - **Players are preserved but reconciled** — `players` and `wallets` stay in the configuration list because the standard ten keep their rows, and with them their join links and sessions. A reset does delete the players added by hand during the run, and sets every surviving wallet back to 100. See **The standard players** above.
 - **Runtime that lives beside configuration** — `live_quiz_question_state`, `presentation_slide_state` and `round_runtime` are listed as preserved because their rows are 1:1 with authored content and must not disappear; their *columns* are reset in place instead.
 
@@ -440,5 +446,6 @@ Unrelated legacy schema (`teams`, `players.team_id`, avatar/admin-note fields, c
 - `0020_pubquiz.sql`: adds the `PUBQUIZ` round type and its four tables, the `PUBQUIZ_QUESTION` screen mode with its `screen_state`/`round_runtime` pointers, `ledger_entries.pubquiz_question_id` with a one-reward-per-player-per-question index, a partial unique index enforcing exactly one correct option, and an `assert_round_type('PUBQUIZ')` trigger. Changes no existing round.
 - `0021_round_intro_and_screen_revision.sql`: adds the `ROUND_INTRO` screen mode to the four mode constraints, and `screen_state.revision` as the optimistic-locking token for the central VOLGENDE/VORIGE. No table is added — the intro is drawn from the round row.
 - `0022_slot_eight_spins.sql`: caps `slotmachine_rounds.max_spins` at 8 and clamps rounds authored higher. Series already sold keep their length — their spins are paid for, and shrinking one would either steal spins or strand coins.
+- `0023_fotoronde_submission_window.sql`: adds `fotoronde_rounds` (the authored submission duration, defaulted onto every existing FOTORONDE round) and `photo_rounds.submission_closes_at` (the runtime deadline). Rounds already opened keep a null deadline, which reads as open-ended rather than expired — no window that was running is retroactively closed.
 
   **A round that mixed content types becomes several rounds.** A round cannot hold a roulette block and a quiz block at once and still have one type, so the migration splits it: the first segment keeps the original round row — and therefore its id, its ledger attribution and its groups — and each further segment becomes a new round placed directly after it, starting as `UPCOMING` because only one round may be `ACTIVE`. Nothing is deleted: `round_blocks_archive` holds every block and payload verbatim, and `migration_notes` records each split, each re-attributed ledger row and each allowlist entry naming a player who no longer exists.

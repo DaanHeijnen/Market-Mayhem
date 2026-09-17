@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from 'react';
  */
 export const ROULETTE_CHIPS = [1, 5, 10, 25] as const;
 import { mutation } from '../../lib/api';
+import { AuthoredText } from '../shared/AuthoredText';
 import { prepareImageForUpload, readJsonResponse } from '../../lib/upload';
 import { CoinIcon } from '../shared/CoinIcon';
 import { RouletteTable, type RouletteMarker, type RoulettePosition } from '../shared/RouletteTable';
@@ -591,9 +592,18 @@ function PhotoRoundView({ state: s, round, busy, gameId }: { state: any; round: 
     {round.team
       ? <div className="photo-team-chip">Team: <b>{round.team.name}</b></div>
       : <Card><b>Je zit niet in een team voor deze ronde.</b><span className="muted">Vraag de host om je aan een team toe te voegen.</span></Card>}
-    {round.instructions && <p className="muted photo-mobile-instructions">{round.instructions}</p>}
+    <AuthoredText className="muted photo-mobile-instructions" text={round.instructions} />
+
+    {/* The window, counted down to the server's own deadline. The seconds tick locally so
+        the number moves smoothly, but what they tick towards came from the server — so a
+        refresh never restarts the clock and every phone in the room stops together. */}
+    {round.open && round.submissionClosesAt && <div className="countdown-box">
+      <div className="label">NOG TE GAAN</div>
+      <div className="display countdown-large"><LiveCountdown closesAt={round.submissionClosesAt} /></div>
+    </div>}
 
     {round.status === 'DRAFT' && <Card><b>Nog even wachten.</b><span className="muted">De host opent zo het inzenden.</span></Card>}
+    {round.submissionExpired && round.status === 'OPEN' && <Card><b>De inzendtijd is voorbij.</b><span className="muted">De host sluit de ronde zo af.</span></Card>}
     {round.status === 'CLOSED' && <Card><b>Inzenden is gesloten.</b><span className="muted">De host beoordeelt de foto’s nu.</span></Card>}
     {round.status === 'COMPLETED' && <Card><b>De Fotoronde is afgerond.</b><span className="muted">Credits staan in je wallet.</span></Card>}
 
@@ -604,9 +614,12 @@ function PhotoRoundView({ state: s, round, busy, gameId }: { state: any; round: 
           <b className="photo-subject-label">{subject.label}</b>
         </div>
 
+        {/* Any team-mate's photo is the team's photo. Naming who sent it is what stops a
+            second member re-shooting something that is already done — and what tells them
+            whose photo they are about to replace. */}
         {subject.submitted && <div className="photo-subject-done">
-          <span className="photo-done-mark">✓ Foto ingestuurd</span>
-          {subject.uploaderName && <span className="muted">door {subject.uploaderName}</span>}
+          <span className="photo-done-mark">✓ Ingezonden{subject.uploaderName ? ` door ${subject.uploaderName}` : ''}</span>
+          {round.open && <span className="muted">Je kunt de foto vervangen zolang de tijd loopt.</span>}
         </div>}
 
         {/* A small preview, so a team-mate can see what was sent before replacing it. */}

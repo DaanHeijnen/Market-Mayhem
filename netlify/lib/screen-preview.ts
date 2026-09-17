@@ -80,6 +80,7 @@ export async function previewNavigation(
     // through the same DTO, rather than as it is. `undefined` when the step changes
     // neither, which leaves the stored reveal alone.
     previewReveal: step.reveal === true ? true : (step.unreveal === true ? false : undefined),
+    previewOpen: step.open === true,
     // `false` rather than absent when stepping back off the photo: the preview has to show
     // the answer without it, which is not the same as "leave the row alone".
     previewContext: step.showContext === true ? true : (step.hideContext === true ? false : undefined),

@@ -105,6 +105,74 @@ export function acceptsUploads(status: PhotoRoundStatus) {
   return status === 'OPEN';
 }
 
+// ---------------------------------------------------------------------------
+// The submission window
+// ---------------------------------------------------------------------------
+
+/**
+ * How long teams get, and when that runs out.
+ *
+ * The duration is authored before the round is played; the deadline is stamped once, when
+ * the host opens submissions, from the database's own clock. Keeping those apart is what
+ * makes the window stable: editing the duration afterwards cannot move a deadline teams
+ * are already photographing against.
+ *
+ * The phase and the deadline are two separate reasons a window can be shut, and both have
+ * to be checked everywhere. A round is CLOSED because the host closed it; a round is
+ * expired because the clock ran out while nobody was looking. `uploadsAccepted` is the one
+ * answer to "may a photo be filed right now", so no endpoint can check one and forget the
+ * other.
+ */
+export const DEFAULT_SUBMISSION_MINUTES = 15;
+export const MIN_SUBMISSION_MINUTES = 1;
+export const MAX_SUBMISSION_MINUTES = 240;
+
+export function clampSubmissionMinutes(value: number) {
+  if (!Number.isFinite(value)) return DEFAULT_SUBMISSION_MINUTES;
+  return Math.min(MAX_SUBMISSION_MINUTES, Math.max(MIN_SUBMISSION_MINUTES, Math.round(value)));
+}
+
+export type SubmissionWindow = {
+  /** Uploads are being accepted right now. */
+  open: boolean;
+  /** There was a deadline and it has passed. */
+  expired: boolean;
+  /** Milliseconds left, or null when this round runs without a deadline. */
+  msRemaining: number | null;
+};
+
+/**
+ * Where a round's submission window stands.
+ *
+ * `closesAt` is null for a round opened before the window existed, and for one that was
+ * never opened. A null deadline means "no deadline", never "already past": a host who set
+ * no timer must not find submissions shut.
+ */
+export function submissionWindow(
+  status: PhotoRoundStatus,
+  closesAt: Date | string | null | undefined,
+  now: Date | number = Date.now(),
+): SubmissionWindow {
+  const nowMs = typeof now === 'number' ? now : now.getTime();
+  const deadline = closesAt == null ? null : new Date(closesAt).getTime();
+  const hasDeadline = deadline != null && Number.isFinite(deadline);
+  const expired = hasDeadline ? nowMs >= deadline! : false;
+  return {
+    open: acceptsUploads(status) && !expired,
+    expired,
+    msRemaining: hasDeadline ? Math.max(0, deadline! - nowMs) : null,
+  };
+}
+
+/** The one answer to "may a photo be filed right now". */
+export function uploadsAccepted(
+  status: PhotoRoundStatus,
+  closesAt: Date | string | null | undefined,
+  now: Date | number = Date.now(),
+) {
+  return submissionWindow(status, closesAt, now).open;
+}
+
 /** Judging is allowed once uploads have stopped, and stays allowed afterwards. */
 export function acceptsAwards(status: PhotoRoundStatus) {
   return status === 'CLOSED' || status === 'COMPLETED';

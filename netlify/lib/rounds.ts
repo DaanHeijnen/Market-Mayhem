@@ -228,7 +228,7 @@ export async function reorderRoundContent(
  * are, grouped in memory.
  */
 export async function loadAllRoundContent(db: Queryable, gameId: number) {
-  const [questions, options, slides, subjects, slotConfigs, slotParticipants, pubQuestions, pubOptions, pubAnswers] = await Promise.all([
+  const [questions, options, slides, subjects, slotConfigs, fotorondeConfigs, slotParticipants, pubQuestions, pubOptions, pubAnswers] = await Promise.all([
     db.query(
       `SELECT q.id,q.round_id,q.sort_order,q.prompt,q.body,q.points,q.time_limit_seconds,q.context_media_key,
               st.status,st.opened_at,st.closed_at,st.revealed_at,st.settled_at,st.context_photo_shown,st.revision,
@@ -263,6 +263,7 @@ export async function loadAllRoundContent(db: Queryable, gameId: number) {
       [gameId],
     ),
     db.query('SELECT round_id,max_spins FROM slotmachine_rounds WHERE game_night_id=$1', [gameId]),
+    db.query('SELECT round_id,submission_duration_minutes FROM fotoronde_rounds WHERE game_night_id=$1', [gameId]),
     db.query('SELECT round_id,player_id FROM slotmachine_round_participants WHERE game_night_id=$1 ORDER BY player_id', [gameId]),
     db.query(
       `SELECT q.id,q.round_id,q.sort_order,q.question,q.body,q.points,q.media_key,q.media_name,
@@ -321,6 +322,12 @@ export async function loadAllRoundContent(db: Queryable, gameId: number) {
       entry => Number(entry.row.round_id),
     ),
     subjectsByRound: group(subjects.rows, (s: any) => Number(s.round_id)),
+    fotorondeByRound: new Map<number, { submissionDurationMinutes: number }>(
+      fotorondeConfigs.rows.map((row: any) => [
+        Number(row.round_id),
+        { submissionDurationMinutes: Number(row.submission_duration_minutes) },
+      ]),
+    ),
     slotByRound: new Map<number, { maxSpins: number; allowedPlayerIds: number[] }>(
       slotConfigs.rows.map((row: any) => [
         Number(row.round_id),
