@@ -395,9 +395,36 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 /* The round title card. Deliberately sparse: a name, what it is, and how much is coming. */
 .round-intro-scene { text-align: center; gap: 24px; }
 .round-intro-title { font-size: clamp(44px, 8vw, 132px); line-height: 1.02; margin: 0; }
-.round-intro-description { font-size: clamp(18px, 2.4vw, 34px); max-width: 24ch; margin: 0 auto; opacity: .85; }
+.round-intro-description { font-size: clamp(18px, 2.4vw, 34px); max-width: min(46ch, 78vw); margin: 0 auto; opacity: .85; }
 .round-intro-count { font-family: var(--mono); font-size: clamp(14px, 1.6vw, 22px); letter-spacing: .12em; opacity: .7; }
-.round-intro-instructions { font-size: clamp(15px, 1.8vw, 26px); max-width: 32ch; margin: 0 auto; opacity: .75; }
+/* Instructions are read by a room, not skimmed by one person: wide enough to hold a real
+   sentence, left-aligned so a list of bullets lines up, and with the paragraph rhythm the
+   host typed. The measure is capped in `ch` so the line length stays readable however
+   large the projector is. */
+.round-intro-instructions {
+  max-width: min(58ch, 82vw);
+  margin: 0 auto;
+  font-size: clamp(16px, 1.9vw, 30px);
+  text-align: left;
+  opacity: .8;
+}
+
+/*
+ * Text the host typed, shown with the shape they gave it.
+ *
+ * `pre-wrap` keeps the line breaks and the indentation inside a paragraph; the paragraphs
+ * themselves are real elements, which is where the vertical rhythm comes from. Long words
+ * and pasted URLs break rather than pushing the block off the side of a screen nobody can
+ * scroll.
+ */
+.authored-text { display: block; min-width: 0; }
+.authored-text > p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+.authored-text > p + p { margin-top: .85em; }
 /* A scene that could not be built says so rather than impersonating the dashboard. */
 .screen-unavailable { text-align: center; gap: 16px; }
 .pubquiz-admin-tally { display: inline-block; margin-right: 10px; }
@@ -748,7 +775,20 @@ textarea.field { min-height: 110px; resize: vertical; line-height: 1.5; }
 .scene-eyebrow { color: var(--muted); font-size: 1.1vw; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
 .scene-kicker { margin-top: 2vh; color: var(--violet); font-size: 1.5vw; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
 .screen-scene h1 { max-width: 86vw; margin: 1.8vh 0 0; color: var(--ink); font-family: var(--display); font-size: 5.4vw; line-height: 1.04; }
-.scene-body { max-width: 74vw; margin: 2.2vh 0 0; color: var(--secondary); font-size: 2vw; line-height: 1.45; white-space: pre-wrap; }
+/* The measure is capped in `ch` as well as `vw`: 74vw of a 1920px projector is 80-odd
+   characters of body text, which is past the point where the eye loses the next line. */
+.scene-body {
+  max-width: min(60ch, 74vw);
+  margin: 2.2vh 0 0;
+  color: var(--secondary);
+  font-size: clamp(16px, 1.9vw, 40px);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.screen-scene .authored-text { text-align: left; }
+/* A long page of text should fill the screen it is given rather than sitting in the middle
+   of it — but never grow past it, because there is no scrolling a projector. */
+.text-scene .authored-text, .question-scene .authored-text { width: min(60ch, 74vw); }
 
 .prediction-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 6vh 8vw; background: var(--paper); color: var(--ink); text-align: center; }
 .prediction-screen.prediction-open { background: var(--lime); }

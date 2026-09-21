@@ -82,3 +82,104 @@ export function visibleNeighbours<T extends PresentationPage>(pages: T[], curren
     visibleIndex: currentPage && !currentPage.hidden ? visible.findIndex(page => page.id === currentPage.id) : -1,
   };
 }
+
+/**
+ * The display-state machine of a presentation.
+ *
+ * A presentation is not a list of pages the host walks; it is a list of *display states*.
+ * A page with something held back is two of them — the page, then the page with its answer
+ * — and a page with nothing held back is one. Laid end to end that is a single linear
+ * sequence, and VOLGENDE and VORIGE are one step along it in either direction:
+ *
+ *     page 1            page 2            page 2 + answer   page 3
+ *     ├───────────────► ├───────────────► ├───────────────► │
+ *                     ◄─┤               ◄─┤               ◄─┤
+ *
+ * Writing it out this way is the point. The alternative — asking "does this page have an
+ * answer, has it been given yet, is there a page after this one" at each call site — is
+ * the same rule scattered over branches that can disagree, and forward and back written
+ * twice. Here there is one sequence and one index, so the two directions are the same
+ * function with the step in opposite signs, and an edge case is a missing neighbour rather
+ * than a combination nobody thought of.
+ *
+ * Hidden pages stay *in* the sequence and are stepped over. The cursor can legitimately be
+ * standing on one — the host hides the page that is currently up — and from there the next
+ * step still has to mean "the nearest visible state that way" rather than nothing at all.
+ */
+
+/** One position in the walk: a page, and whether what it holds back is being shown. */
+export type PresentationDisplayState = { slideId: number; revealed: boolean };
+
+/** What the sequence is built from: the page as authored, plus where its reveal stands. */
+export type PresentationPageState = PresentationPage & {
+  /** Does this page hold anything back — an answer line, or a title that is the answer. */
+  hasAnswer: boolean;
+  /** Has the host given it, right now. */
+  revealed: boolean;
+};
+
+export type PresentationSequenceEntry = PresentationDisplayState & { hidden: boolean; index: number };
+
+/**
+ * Every display state of a round, in order.
+ *
+ * Built from what the host authored (`hasAnswer`) and not from what has happened so far
+ * (`revealed`), so the sequence is the same whichever direction it is walked and whatever
+ * the host has already given away. Where the round *is* in it is `displayStateOf`.
+ */
+export function presentationSequence(pages: PresentationPageState[]): PresentationSequenceEntry[] {
+  const states: PresentationSequenceEntry[] = [];
+  for (const page of pages) {
+    states.push({ slideId: page.id, revealed: false, hidden: page.hidden, index: states.length });
+    if (page.hasAnswer) states.push({ slideId: page.id, revealed: true, hidden: page.hidden, index: states.length });
+  }
+  return states;
+}
+
+/**
+ * Which display state a page is in right now.
+ *
+ * A page is standing on its answer only if it has one and has given it, so a reveal flag
+ * left over from an answer line the host has since deleted cannot put the walk on a state
+ * that is no longer in the sequence.
+ */
+export function displayStateOf(page: PresentationPageState): PresentationDisplayState {
+  return { slideId: page.id, revealed: page.hasAnswer && page.revealed };
+}
+
+/**
+ * One step along the sequence.
+ *
+ * `from` is where the projector is standing, or null when it is not on a page at all —
+ * the round's title card, or a page that has since been deleted. Both ends are named
+ * rather than returning null: 'start' is the intro, 'end' is the end of the round, and
+ * they mean different things to the caller.
+ */
+export function presentationStep(
+  pages: PresentationPageState[],
+  from: PresentationDisplayState | null,
+  direction: 'NEXT' | 'PREVIOUS',
+): { kind: 'state'; state: PresentationDisplayState } | { kind: 'start' } | { kind: 'end' } {
+  const sequence = presentationSequence(pages);
+  const visible = (entry: PresentationSequenceEntry) => !entry.hidden;
+
+  if (!sequence.some(visible)) return direction === 'NEXT' ? { kind: 'end' } : { kind: 'start' };
+
+  // Not on a page: forward is the first visible state, back is the intro. Entering a round
+  // and stepping into it is the same movement as stepping from one page to the next.
+  const at = from
+    ? sequence.findIndex(entry => entry.slideId === from.slideId && entry.revealed === from.revealed)
+    : -1;
+  if (at < 0) {
+    if (direction === 'PREVIOUS') return { kind: 'start' };
+    const first = sequence.find(visible)!;
+    return { kind: 'state', state: { slideId: first.slideId, revealed: first.revealed } };
+  }
+
+  const stride = direction === 'NEXT' ? 1 : -1;
+  for (let i = at + stride; i >= 0 && i < sequence.length; i += stride) {
+    if (!visible(sequence[i])) continue;
+    return { kind: 'state', state: { slideId: sequence[i].slideId, revealed: sequence[i].revealed } };
+  }
+  return direction === 'NEXT' ? { kind: 'end' } : { kind: 'start' };
+}

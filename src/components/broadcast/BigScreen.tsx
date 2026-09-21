@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { useGamePolling } from '../../hooks/useGamePolling';
 import { RouletteTable, type RouletteMarker } from '../shared/RouletteTable';
 import { RouletteWheel } from '../shared/RouletteWheel';
@@ -6,6 +7,7 @@ import { PlayerValueGraph } from '../shared/PlayerValueGraph';
 import { SlotReels } from '../shared/SlotReels';
 import { CardDeck, PlayingCard } from '../shared/PlayingCard';
 import { useHeldReveal } from '../shared/useHeldReveal';
+import { AuthoredText } from '../shared/AuthoredText';
 
 const QUESTION_EMOJIS = ['🍆', '🌽', '🍑', '😳'] as const;
 const money = (n: number) => new Intl.NumberFormat().format(n);
@@ -73,10 +75,11 @@ function RoundIntroScene({ intro }: { intro: any }) {
   return <Scene className={`round-intro-scene accent-${String(intro.type).toLowerCase()}`}>
     <div className="scene-eyebrow">ROUND {String(intro.sortOrder).padStart(2, '0')} · {meta[intro.type] || intro.type}</div>
     <h1 className="round-intro-title">{intro.title}</h1>
-    {intro.description && <p className="round-intro-description">{intro.description}</p>}
+    <AuthoredText className="round-intro-description" text={intro.description} />
     {intro.itemCount > 0 && <div className="round-intro-count">{intro.itemCount} {intro.itemCount === 1 ? 'onderdeel' : 'onderdelen'}</div>}
-    {/* Written for the players, so it belongs on the wall they are all looking at. */}
-    {intro.instructions && <p className="round-intro-instructions">{intro.instructions}</p>}
+    {/* Written for the players, so it belongs on the wall they are all looking at — with
+        the paragraphs, blank lines and list items the host actually typed. */}
+    <AuthoredText className="round-intro-instructions" text={intro.instructions} />
   </Scene>;
 }
 
@@ -148,7 +151,7 @@ function SlideScene({ slide, round }: { slide: any; round: any }) {
           a photo plus its answer options, and dropping the body here lost the options on
           exactly the questions that have an image. `white-space: pre-wrap` keeps
           "A. …\nB. …\nC. …" on three lines. */}
-      {slide.body && <p className="scene-body picture-scene-body">{slide.body}</p>}
+      <AuthoredText className="scene-body picture-scene-body" text={slide.body} />
       {slide.title && <div className="scene-reveal">{slide.title}</div>}
       {slide.revealText && <div className="scene-reveal">{slide.revealText}</div>}
     </Scene>;
@@ -158,7 +161,7 @@ function SlideScene({ slide, round }: { slide: any; round: any }) {
     return <Scene className="music-scene">
       <div className="scene-eyebrow">{eyebrow}</div>
       <div className="scene-kicker">MUSIC</div>
-      {slide.body && <p className="scene-body">{slide.body}</p>}
+      <AuthoredText className="scene-body" text={slide.body} />
       {/* Controls are shown rather than autoplaying: browsers block unprompted audio, so
           an autoplay attempt would silently do nothing on the projector. */}
       <audio className="music-scene-player" controls preload="auto" src={mediaUrl(slide.mediaKey)} />
@@ -171,7 +174,7 @@ function SlideScene({ slide, round }: { slide: any; round: any }) {
     <div className="scene-eyebrow">{eyebrow}</div>
     {slide.titleHidden && <div className="scene-kicker">HIDDEN UNTIL REVEALED</div>}
     {slide.title && <h1>{slide.title}</h1>}
-    {slide.body && <p className="scene-body">{slide.body}</p>}
+    <AuthoredText className="scene-body" text={slide.body} />
     {slide.revealText && <div className="scene-reveal">{slide.revealText}</div>}
   </Scene>;
 }
@@ -208,7 +211,7 @@ function PubquizScene({ question, round }: { question: any; round: any }) {
       <span className="pill">{question.status} · {part ? `${part.answered}/${part.eligible}` : 0} ANSWERS</span>
     </div>
     <h1>{question.question}</h1>
-    {question.body && <p className="duo-support">{question.body}</p>}
+    <AuthoredText className="duo-support" text={question.body} />
     {question.mediaKey && <img className="pubquiz-image" src={mediaUrl(question.mediaKey)} alt="" />}
 
     <div className="duo-answer-grid">{question.options.map((option: any, index: number) => <div
@@ -262,7 +265,7 @@ function QuizScene({ question, round }: { question: any; round: any }) {
       <span className="pill">{question.status || 'READY'} · {part ? `${part.answered}/${part.eligible}` : 0} ANSWERS</span>
     </div>
     <h1>{question.prompt}</h1>
-    {question.body && <p className="duo-support">{question.body}</p>}
+    <AuthoredText className="duo-support" text={question.body} />
     <div className="duo-answer-grid">{question.options.map((option: any, index: number) => <div
       className={`duo-answer-card ${revealed && option.isCorrect ? 'correct' : revealed ? 'dimmed' : ''}`}
       key={option.id}
@@ -598,6 +601,23 @@ function PakEenZesScene({ game, round }: { game: any; round: any }) {
 }
 
 /**
+ * A deadline, counted down.
+ *
+ * The seconds tick from the browser's own clock for smoothness, but what they tick towards
+ * is the server's timestamp — so this cannot drift away from what the phones are showing,
+ * and a projector reload does not restart it.
+ */
+function ScreenCountdown({ closesAt }: { closesAt: string }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(id);
+  }, [closesAt]);
+  const seconds = Math.max(0, Math.ceil((new Date(closesAt).getTime() - now) / 1000));
+  return <>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, '0')}</>;
+}
+
+/**
  * Fotoronde, on the projector.
  *
  * Two faces. While submissions are open it shows progress per subject, which is the one
@@ -617,6 +637,11 @@ function PhotoRoundScene({ photo, round }: { photo: any; round: any }) {
       </div>
       <div className="photo-screen-status">
         <span>{PHOTO_STATUS_LABELS[status] || status}</span>
+        {/* The same deadline the phones count down to, so the room and the teams watch one
+            clock. */}
+        {photo?.submissionOpen && photo?.submissionClosesAt
+          ? <b className="photo-screen-clock"><ScreenCountdown closesAt={photo.submissionClosesAt} /></b>
+          : null}
         <b>{photo?.submissionCount ?? 0} FOTO&apos;S · {photo?.teamCount ?? 0} TEAMS</b>
       </div>
     </div>

@@ -73,6 +73,7 @@ export const PRESERVED_TABLES = [
   'presentation_slides',       // authored slides
   'presentation_slide_state',  // 1:1 with a slide; reset in place
   'fotoronde_subjects',        // the subject list and its points
+  'fotoronde_rounds',          // how long teams get to submit
   'slotmachine_rounds',        // per-round spin limit
   'slotmachine_round_participants', // the allowlist
   'round_runtime',             // the per-round cursor; reset in place

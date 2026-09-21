@@ -134,13 +134,29 @@ describe('how quickly each surface notices a change', () => {
     expect(phones).toBeLessThan(watched * 2);
   });
 
-  // The saving lives in the idle tiers, which are deliberately untouched: most of an
-  // evening is setup, breaks and discussion, and nothing can change on its own then.
-  it('still backs off hard when nothing can change', () => {
-    for (const kind of ['screen', 'admin', 'mobile'] as const) {
+  // The saving lives in the idle tiers: most of an evening is setup, breaks and
+  // discussion, and nothing can change on its own then.
+  it('still backs off when nothing can change', () => {
+    for (const kind of ['admin', 'mobile'] as const) {
       const idle = getLivePollDelay(kind, false, 'visible', true, 0);
       expect(idle, kind).toBeGreaterThanOrEqual(12000);
     }
+    // The projector is the exception, and deliberately so. Its idle tier is what the host
+    // waits through when they press START into a quiet room — nobody ever touches a
+    // projector, so it cannot be woken by a click the way the Admin can. One client, so a
+    // few seconds costs almost nothing and buys a round that starts when it is started.
+    const screen = getLivePollDelay('screen', false, 'visible', true, 0)!;
+    expect(screen).toBeGreaterThan(getLivePollDelay('screen', false, 'visible', false, 0)!);
+    expect(screen).toBeLessThanOrEqual(5000);
+  });
+
+  // A round that starts in a quiet room is the case this bounds. The server keeps the
+  // evening "awake" for a minute after any change, which covers a host working in the
+  // Admin; this is the worst case when it has genuinely gone quiet.
+  it('notices a round starting within a few seconds even from the dormant tier', () => {
+    const dormant = getLivePollDelay('screen', false, 'visible', true, 60 * 60 * 1000)!;
+    expect(dormant).toBeLessThanOrEqual(15000);
+    expect(dormant).toBeGreaterThan(getLivePollDelay('screen', false, 'visible', true, 0)!);
   });
 
   it('still stops entirely for a hidden tab', () => {

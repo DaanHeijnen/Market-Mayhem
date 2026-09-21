@@ -20,8 +20,20 @@ export const LIVE_CONFIG = {
    * most of an evening's wall clock is setup, breaks and discussion.
    */
   BIG_SCREEN_POLL_MS: 500,
-  BIG_SCREEN_IDLE_POLL_MS: 15000,
-  BIG_SCREEN_DORMANT_POLL_MS: 60000,
+  /*
+   * The projector's two slow tiers used to be fifteen and sixty seconds, and that is what
+   * made starting a round feel broken: between two rounds nothing is live, so the game
+   * reads idle, so the projector is asleep at exactly the moment the host presses START.
+   * Every later VOLGENDE landed in half a second because by then the round was running.
+   *
+   * Two changes fixed it together. The server now counts a recent change as "awake", which
+   * covers the usual case where the host is working in the Admin; these tiers bound the
+   * case it does not — a genuinely quiet room. One client, so four seconds of idle costs
+   * about nine hundred cheap version polls an hour, which is worth not having a round
+   * start into a dead screen.
+   */
+  BIG_SCREEN_IDLE_POLL_MS: 4000,
+  BIG_SCREEN_DORMANT_POLL_MS: 15000,
   ADMIN_POLL_MS: 900,
   ADMIN_IDLE_POLL_MS: 15000,
   MOBILE_IDLE_POLL_MS: 12000,

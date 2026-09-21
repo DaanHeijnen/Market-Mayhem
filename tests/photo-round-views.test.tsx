@@ -96,7 +96,7 @@ describe('Fotoronde on the phone', () => {
         ],
       }),
     }));
-    expect(html).toContain('Foto ingestuurd');
+    expect(html).toContain('Ingezonden');
     expect(html).toContain('door Emma');
     expect(html).toContain('photo-subject-preview');
     expect(html).toContain('abc.png');
@@ -123,7 +123,7 @@ describe('Fotoronde on the phone', () => {
     expect(html).not.toContain('FOTO UPLOADEN');
     expect(html).not.toContain('FOTO VERVANGEN');
     // The photo it already sent stays visible.
-    expect(html).toContain('Foto ingestuurd');
+    expect(html).toContain('Ingezonden');
   });
 
   it('says so once the round is finished', () => {
